@@ -1,0 +1,26 @@
+{
+  "id" : "prefill-batch.tinyllama",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "prefill t/s, --prefill-batch 1",
+    "unit" : "t/s",
+    "values" : [ 4.6844423590882975, 4.781473839308267, 4.805434983782604 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "prefill t/s, --prefill-batch 32",
+    "unit" : "t/s",
+    "values" : [ 25.485976159960643, 26.496308697601687, 26.355499131086702 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  } ],
+  "facts" : {
+    "prefillBatch1.promptTokens" : 274,
+    "prefillBatch32.promptTokens" : 274,
+    "prefillBatch32.prefillCalls" : 9,
+    "prefillBatch1.prefillCalls" : 273,
+    "backend" : "cpu"
+  }
+}

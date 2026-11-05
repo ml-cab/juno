@@ -1,0 +1,1 @@
+| [`20261104T173942Z-kit-reference`](20261104T173942Z-kit-reference/) | Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM; JVM vectors: integer 128-bit, float 128-bit; GPU: NVIDIA GeForce GTX 1080; Juno `80ec949e`, suite all: 72 PASS or DONE |

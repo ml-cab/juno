@@ -1,0 +1,51 @@
+{
+  "os" : "Linux",
+  "osVersion" : "7.0.0-42-generic",
+  "arch" : "amd64",
+  "cpuModel" : "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+  "cores" : 6,
+  "threads" : 12,
+  "ramBytes" : 67363004416,
+  "freeDiskBytes" : 99010424832,
+  "cpuFlags" : [ "pbe", "bts", "ept", "ss", "ds_cpl", "pse36", "ibrs", "sse4_2", "sse4_1", "pcid", "pat", "ssse3", "epb", "x2apic", "pse", "tsc_deadline_timer", "pge", "lahf_lm", "pae", "lm", "ida", "tsc", "pln", "fsgsbase", "xsaveopt", "xsave", "nonstop_tsc", "pclmulqdq", "smx", "flush_l1d", "tpr_shadow", "mtrr", "cx8", "ibpb", "sse", "vnmi", "acpi", "xtopology", "mce", "est", "cmov", "mca", "dca", "tm2", "dts", "stibp", "cpuid", "md_clear", "arat", "clflush", "de", "rep_good", "cpuid_fault", "rdtscp", "arch_perfmon", "rdrand", "sse2", "vmx", "fxsr", "mmx", "vpid", "pebs", "smep", "msr", "sep", "aes", "xtpr", "pdpe1gb", "fpu", "apic", "pdcm", "vme", "nx", "tm", "cx16", "aperfmperf", "ht", "avx", "monitor", "f16c", "popcnt", "pts", "flexpriority", "constant_tsc", "dtherm", "pti", "dtes64", "erms", "pni", "ssbd", "nopl", "syscall" ],
+  "intVectorBits" : 128,
+  "floatVectorBits" : 128,
+  "useAvx" : "1",
+  "cuda" : true,
+  "rocm" : false,
+  "gpus" : [ {
+    "vendor" : "NVIDIA",
+    "name" : "NVIDIA GeForce GTX 1080",
+    "memoryBytes" : 8589934592,
+    "driver" : "580.178.04"
+  } ],
+  "power" : {
+    "hasBattery" : false,
+    "onBattery" : false,
+    "percent" : -1
+  },
+  "metered" : "no",
+  "clockSource" : "hpet",
+  "backend" : {
+    "java.vm.name" : "OpenJDK 64-Bit Server VM",
+    "clockSource" : "hpet",
+    "maxHeapBytes" : 536870912,
+    "os.version" : "7.0.0-42-generic",
+    "os.name" : "Linux",
+    "floatVectorBits" : 128,
+    "cpuThreads" : 12,
+    "useAvx" : "1",
+    "os.arch" : "amd64",
+    "cudaDevices" : [ {
+      "memoryBytes" : 8497594368,
+      "name" : "NVIDIA GeForce GTX 1080"
+    } ],
+    "availableProcessors" : 12,
+    "intVectorBits" : 128,
+    "cuda" : true,
+    "rocm" : false,
+    "rocmDevices" : [ ],
+    "java.version" : "<ip>",
+    "java.vendor" : "Ubuntu"
+  }
+}

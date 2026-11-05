@@ -1,0 +1,106 @@
+{
+  "id" : "gpu.throughput.mistral-7b.2048",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "prefill t/s",
+    "unit" : "t/s",
+    "values" : [ 440.3163599861105, 441.00023851523736, 439.65724728886494 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "generation t/s",
+    "unit" : "t/s",
+    "values" : [ 38.18079154480549, 38.26628984583485, 38.28480081993792 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "generation allocation per token in recording",
+    "unit" : "B/token",
+    "values" : [ 973009.375, 722156.375, 781746.375 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill GC pause in token span",
+    "unit" : "ms",
+    "values" : [ 0.0, 0.0, 0.0 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "generation GC pause in token span",
+    "unit" : "ms",
+    "values" : [ 0.0, 0.0, 0.0 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "prefillReps" : [ {
+      "promptTokens" : 2048,
+      "generatedTokens" : 1,
+      "latencyMs" : 4943.186036,
+      "prefillMs" : 4651.201241,
+      "decodeMs" : 31.822627,
+      "encodeMs" : 245.556757,
+      "allocBytes" : 1.276979072E9,
+      "gcPauseMs" : 0.0
+    }, {
+      "promptTokens" : 2048,
+      "generatedTokens" : 1,
+      "latencyMs" : 4905.094792,
+      "prefillMs" : 4643.988418,
+      "decodeMs" : 31.351492,
+      "encodeMs" : 217.210514,
+      "allocBytes" : 1.39198476E9,
+      "gcPauseMs" : 0.0
+    }, {
+      "promptTokens" : 2048,
+      "generatedTokens" : 1,
+      "latencyMs" : 4949.153554,
+      "prefillMs" : 4658.174095,
+      "decodeMs" : 31.095602,
+      "encodeMs" : 247.03282,
+      "allocBytes" : 1.300553896E9,
+      "gcPauseMs" : 0.0
+    } ],
+    "threads" : 12,
+    "generateReps" : [ {
+      "promptTokens" : 9,
+      "generatedTokens" : 64,
+      "latencyMs" : 2143.930181,
+      "prefillMs" : 432.00153,
+      "decodeMs" : 1676.235547,
+      "encodeMs" : 0.111255,
+      "allocBytes" : 6.22726E7,
+      "gcPauseMs" : 0.0
+    }, {
+      "promptTokens" : 9,
+      "generatedTokens" : 64,
+      "latencyMs" : 2042.058051,
+      "prefillMs" : 334.821223,
+      "decodeMs" : 1672.490337,
+      "encodeMs" : 0.089325,
+      "allocBytes" : 4.6218008E7,
+      "gcPauseMs" : 0.0
+    }, {
+      "promptTokens" : 9,
+      "generatedTokens" : 64,
+      "latencyMs" : 2038.649833,
+      "prefillMs" : 332.839951,
+      "decodeMs" : 1671.681676,
+      "encodeMs" : 0.089256,
+      "allocBytes" : 5.0031768E7,
+      "gcPauseMs" : 0.0
+    } ],
+    "prefillPromptTokens" : 2048,
+    "promptParity" : true,
+    "backend" : "gpu",
+    "nPrompt" : 2048,
+    "model" : "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+    "generatedTokens" : 64,
+    "generateRepsWithheld" : 0,
+    "prefillRepsWithheld" : 0,
+    "jfrClock" : "os",
+    "generatePromptTokens" : 9
+  }
+}

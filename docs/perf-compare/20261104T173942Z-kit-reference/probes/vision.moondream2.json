@@ -1,0 +1,67 @@
+{
+  "id" : "vision.moondream2",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "threads 4: a caption for the benchmark prompt",
+    "passed" : true,
+    "detail" : "HTTP 200:  The image features a collection of squares, each with different colors and patterns. These squares are arranged in various positions to create an interesting visual display. There is also"
+  }, {
+    "name" : "threads 4: prompt tokens between 700 and 800",
+    "passed" : true,
+    "detail" : "741 prompt tokens"
+  }, {
+    "name" : "threads 4: a one-sentence caption within 600 s",
+    "passed" : true,
+    "detail" : "HTTP 200:  A black and white image features a grid of squares, with the top row alternating between red and blue squares. (311 s)"
+  }, {
+    "name" : "threads 12: a caption for the benchmark prompt",
+    "passed" : true,
+    "detail" : "HTTP 200:  The image features a collection of squares, each with different colors and patterns. These squares are arranged in various positions to create an interesting visual display. There is also"
+  }, {
+    "name" : "threads 12: prompt tokens between 700 and 800",
+    "passed" : true,
+    "detail" : "741 prompt tokens"
+  }, {
+    "name" : "threads 12: a one-sentence caption within 600 s",
+    "passed" : true,
+    "detail" : "HTTP 200:  A black and white image features a grid of squares, with the top row alternating between red and blue squares. (202 s)"
+  }, {
+    "name" : "captions identical at 4 and 12 threads",
+    "passed" : true,
+    "detail" : "identical"
+  } ],
+  "readings" : [ {
+    "name" : "threads 4: latency",
+    "unit" : "ms",
+    "values" : [ 315411.945674 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "threads 4: decode t/s",
+    "unit" : "t/s",
+    "values" : [ 3.939582564844812 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  }, {
+    "name" : "threads 12: latency",
+    "unit" : "ms",
+    "values" : [ 204027.136022 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "threads 12: decode t/s",
+    "unit" : "t/s",
+    "values" : [ 5.519590274617303 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "threads12.sentence" : " A black and white image features a grid of squares, with the top row alternating between red and blue squares.",
+    "image" : "vision-bench.jpg",
+    "threads4.sentence" : " A black and white image features a grid of squares, with the top row alternating between red and blue squares.",
+    "threads4.caption" : " The image features a collection of squares, each with different colors and patterns. These squares are arranged in various positions to create an interesting visual display. There is also",
+    "threads12.caption" : " The image features a collection of squares, each with different colors and patterns. These squares are arranged in various positions to create an interesting visual display. There is also",
+    "backend" : "cpu"
+  }
+}

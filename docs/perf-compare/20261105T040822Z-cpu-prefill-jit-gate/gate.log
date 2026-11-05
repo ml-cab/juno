@@ -1,0 +1,84 @@
+baseline jar sha256: 15083b9c320c1c36
+candidate jar sha256: ea700f227c83b911
+
+=== CPU same-hour A/B, pinned (22:08:22)
+=== cpu512: baseline 1 (22:08:22)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu512-baseline-1.log)
+=== cpu512: candidate 1 (22:34:39)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu512-candidate-1.log)
+=== cpu512: baseline 2 (23:01:05)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu512-baseline-2.log)
+=== cpu512: candidate 2 (23:25:29)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu512-candidate-2.log)
+=== cpu512: baseline 3 (23:49:47)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu512-baseline-3.log)
+=== cpu512: candidate 3 (00:14:01)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu512-candidate-3.log)
+
+cpu512: clock_pinned across the runs: true (must be only: true)
+model             pp_A      pp_B     B/A       tg_A     tg_B     B/A    inrec/tok_A  inrec/tok_B    B/A      gc_A    gc_B
+tinyllama       33.307    32.131   0.965     12.020   11.733   0.976         304337       301536  0.991       0.0     0.0
+    runs: pp A 31.324704807531344 33.427234727251644 33.307173731630876 | B 31.828695751350466 32.13062366676091 33.59332913380633 
+qwen2.5         11.086    11.433   1.031      4.218    4.204   0.997        1270441      1274646  1.003       0.0     0.0
+    runs: pp A 11.048742244883664 11.085614201574941 11.284968978386093 | B 11.042254618931969 11.433144586621266 11.735530379553836 
+Phi              9.567     9.555   0.999      3.018    3.035   1.006         380329       352652  0.927       0.0     0.0
+    runs: pp A 8.257478288844133 9.566657258961037 9.580589203831531 | B 8.627876506190889 9.685479507940386 9.554536052628524 
+mistral          4.885     5.082   1.040      2.114    2.087   0.987         347662       343338  0.988       0.0     0.0
+    runs: pp A 4.674825572220722 4.884635843951878 5.128786411007584 | B 5.081637423677646 4.990261953360191 5.167505640892027 
+
+cpu512: greedy output (temperature 0), candidate against baseline per run
+  tinyllama: equal in 3 of 3 runs
+  qwen2.5: equal in 3 of 3 runs
+  Phi: equal in 3 of 3 runs
+  mistral: equal in 3 of 3 runs
+=== cpu128: baseline 1 (00:38:03)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu128-baseline-1.log)
+=== cpu128: candidate 1 (00:48:54)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu128-candidate-1.log)
+=== cpu128: baseline 2 (00:59:51)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu128-baseline-2.log)
+=== cpu128: candidate 2 (01:10:48)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu128-candidate-2.log)
+=== cpu128: baseline 3 (01:21:42)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu128-baseline-3.log)
+=== cpu128: candidate 3 (01:32:39)
+    exit=0  (log: dist/cpu-prefill-jit-gate/runs/cpu128-candidate-3.log)
+
+cpu128: clock_pinned across the runs: true (must be only: true)
+model             pp_A      pp_B     B/A       tg_A     tg_B     B/A    inrec/tok_A  inrec/tok_B    B/A      gc_A    gc_B
+tinyllama       34.426    34.600   1.005     11.879   12.063   1.015         304875       303321  0.995       0.0     0.0
+    runs: pp A 33.25309506111412 34.42597294122615 34.45795363760891 | B 34.74467276246243 34.600266345065265 33.96651885898043 
+    runs: tg A 11.914411294717892 11.6089100710931 11.879311178824356 | B 12.062969045226442 12.122248086696906 11.949598608072217 
+qwen2.5         11.873    11.921   1.004      4.235    4.264   1.007        1288832      1268112  0.984       0.0     0.0
+    runs: pp A 11.872728886909087 12.278647935777 11.699213753654185 | B 11.903474538233704 11.948510186849989 11.920802386556261 
+    runs: tg A 4.234898441058966 4.233822011414088 4.24714218285187 | B 4.267895033151844 4.180296215213713 4.264410404080092 
+Phi              9.663     9.821   1.016      3.040    3.050   1.003         351111       348252  0.992       0.0     0.0
+    runs: pp A 9.95062884641626 9.662754604692967 9.580326581173622 | B 9.821370047956151 10.11195753909145 9.690201047491655 
+    runs: tg A 3.0397478420494033 3.0403616932540367 3.027747104685052 | B 3.049700679924234 3.0510649023038976 3.0152477552083274 
+mistral          5.067     5.255   1.037      2.113    2.130   1.008         347831       342567  0.985       0.0     0.0
+    runs: pp A 5.3414498292631185 5.066993721635141 5.064849799483681 | B 5.255317609350868 5.308657639960227 4.960890106808253 
+    runs: tg A 2.112673003888188 2.102690338021661 2.13448195976241 | B na 2.1305411961028393 2.129993018641695 
+
+cpu128: greedy output (temperature 0), candidate against baseline per run
+  tinyllama: equal in 3 of 3 runs
+  qwen2.5: equal in 3 of 3 runs
+  Phi: equal in 3 of 3 runs
+  mistral: equal in 3 of 3 runs
+
+=== LoRA, pinned by hand (01:43:37)
+--- lora gpu: baseline 1 (01:43:37)
+--- lora gpu: candidate 1 (01:44:35)
+--- lora gpu: baseline 2 (01:45:32)
+--- lora gpu: candidate 2 (01:46:30)
+--- lora gpu: baseline 3 (01:47:28)
+--- lora gpu: candidate 3 (01:48:27)
+lora gpu: train ms/pass A 2800.000000 B 2800.000000 B/A 1.000; playback t/s A 12.727273 B 12.433393 B/A 0.977
+--- lora cpu: baseline 1 (01:49:25)
+--- lora cpu: candidate 1 (02:03:08)
+--- lora cpu: baseline 2 (02:17:00)
+--- lora cpu: candidate 2 (02:30:41)
+--- lora cpu: baseline 3 (02:44:24)
+--- lora cpu: candidate 3 (02:58:05)
+lora cpu: train ms/pass A 51466.666667 B 51533.333333 B/A 1.001; playback t/s A 0.841650 B 0.846945 B/A 1.006
+
+GATE: PASS

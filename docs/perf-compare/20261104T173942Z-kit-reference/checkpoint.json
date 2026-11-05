@@ -1,0 +1,656 @@
+{
+  "schemaVersion" : 1,
+  "suite" : "all",
+  "selected" : [ "env", "calibration", "cpu.live.tinyllama", "cpu.throughput.tinyllama.128", "cpu.throughput.tinyllama.512", "gpu.live.tinyllama", "gpu.throughput.tinyllama.512", "gpu.throughput.tinyllama.2048", "gpu.residency.tinyllama", "gpu.packed-kquant.tinyllama.static", "gpu.packed-kquant.tinyllama.continuous", "cpu.live.qwen2.5-3b", "cpu.live.phi-3.5-mini", "cpu.live.mistral-7b", "cpu.live.qwen3-1.7b", "gpu.live.qwen2.5-3b", "gpu.live.phi-3.5-mini", "gpu.live.mistral-7b", "gpu.live.qwen3-1.7b", "consistency.tinyllama", "gpu.consistency.tinyllama", "grammar.tinyllama", "tools.qwen2.5-3b", "context-policy.phi-3.5-mini", "gpu.context-policy.phi-3.5-mini", "long-prompt.tinyllama", "long-prompt.mistral-7b", "gpu.long-prompt.tinyllama", "gpu.long-prompt.mistral-7b", "cpu.hot-path.tinyllama-1.1b", "cpu.hot-path.qwen2.5-3b", "cpu.hot-path.phi-3.5-mini", "cpu.hot-path.mistral-7b", "quality.tinyllama-1.1b", "quality.qwen2.5-3b", "quality.phi-3.5-mini", "quality.mistral-7b", "cpu.throughput.tinyllama-1.1b.2048", "gpu.throughput.tinyllama-1.1b.128", "cpu.throughput.qwen2.5-3b.128", "cpu.throughput.qwen2.5-3b.512", "cpu.throughput.qwen2.5-3b.2048", "cpu.throughput.phi-3.5-mini.128", "cpu.throughput.phi-3.5-mini.512", "cpu.throughput.phi-3.5-mini.2048", "cpu.throughput.mistral-7b.128", "cpu.throughput.mistral-7b.512", "cpu.throughput.mistral-7b.2048", "gpu.throughput.qwen2.5-3b.128", "gpu.throughput.qwen2.5-3b.512", "gpu.throughput.qwen2.5-3b.2048", "gpu.throughput.phi-3.5-mini.128", "gpu.throughput.phi-3.5-mini.512", "gpu.throughput.phi-3.5-mini.2048", "gpu.throughput.mistral-7b.128", "gpu.throughput.mistral-7b.512", "gpu.throughput.mistral-7b.2048", "parallel.tinyllama", "gpu.parallel.tinyllama", "schedule.tinyllama", "gpu.schedule.tinyllama", "mixed-prefill.tinyllama", "gpu.mixed-prefill.tinyllama", "prefill-batch.tinyllama", "gpu.prefill-batch.tinyllama", "lora.tinyllama", "gpu.lora.tinyllama", "vision.moondream2", "gpu.vision.moondream2", "launcher.tinyllama", "cpu.unit-tests", "gpu.unit-tests" ],
+  "done" : [ {
+    "id" : "calibration",
+    "status" : "DONE",
+    "wallMillis" : 16889,
+    "attempts" : 2,
+    "note" : "attempt 1 re-run: other processes used 6% of the CPU;.",
+    "otherCpuShare" : 0.03312418489718822,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "env",
+    "status" : "DONE",
+    "wallMillis" : 712,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.0,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.live.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 294035,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.05262385944183167,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.tinyllama.128",
+    "status" : "DONE",
+    "wallMillis" : 58786,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.03130717150725347,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.tinyllama.512",
+    "status" : "DONE",
+    "wallMillis" : 127738,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020917915253611186,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.live.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 97810,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.018221399094394863,
+    "ownGpuPeakMiB" : 2748,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.tinyllama.512",
+    "status" : "DONE",
+    "wallMillis" : 10555,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.024348387255279432,
+    "ownGpuPeakMiB" : 1134,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.tinyllama.2048",
+    "status" : "DONE",
+    "wallMillis" : 16304,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.01660146094378984,
+    "ownGpuPeakMiB" : 1666,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.residency.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 46248,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.024142344443229585,
+    "ownGpuPeakMiB" : 2742,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.packed-kquant.tinyllama.static",
+    "status" : "PASS",
+    "wallMillis" : 14780,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.013688335007764736,
+    "ownGpuPeakMiB" : 1154,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.packed-kquant.tinyllama.continuous",
+    "status" : "PASS",
+    "wallMillis" : 74377,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.02284772567119325,
+    "ownGpuPeakMiB" : 960,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.live.qwen2.5-3b",
+    "status" : "PASS",
+    "wallMillis" : 505906,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021277330350203936,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.live.phi-3.5-mini",
+    "status" : "PASS",
+    "wallMillis" : 867492,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020931116512142682,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.live.mistral-7b",
+    "status" : "PASS",
+    "wallMillis" : 1187165,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021288899434789326,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.live.qwen3-1.7b",
+    "status" : "PASS",
+    "wallMillis" : 338938,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.024655976740980523,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.live.qwen2.5-3b",
+    "status" : "PASS",
+    "wallMillis" : 149033,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.017675439023407173,
+    "ownGpuPeakMiB" : 6960,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.live.phi-3.5-mini",
+    "status" : "PASS",
+    "wallMillis" : 204769,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.017034820960773456,
+    "ownGpuPeakMiB" : 7720,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.live.mistral-7b",
+    "status" : "PASS",
+    "wallMillis" : 302062,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021541013481255283,
+    "ownGpuPeakMiB" : 7306,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.live.qwen3-1.7b",
+    "status" : "PASS",
+    "wallMillis" : 128735,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.017695983532829904,
+    "ownGpuPeakMiB" : 5328,
+    "gpuBusy" : false
+  }, {
+    "id" : "consistency.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 96907,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.03163294224761479,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.consistency.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 13007,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.015064827304745634,
+    "ownGpuPeakMiB" : 934,
+    "gpuBusy" : false
+  }, {
+    "id" : "grammar.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 97084,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.01777662347166415,
+    "ownGpuPeakMiB" : 4066,
+    "gpuBusy" : false
+  }, {
+    "id" : "tools.qwen2.5-3b",
+    "status" : "PASS",
+    "wallMillis" : 189154,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.017801127375934006,
+    "ownGpuPeakMiB" : 3814,
+    "gpuBusy" : false
+  }, {
+    "id" : "context-policy.phi-3.5-mini",
+    "status" : "PASS",
+    "wallMillis" : 11097904,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020314181120598743,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.context-policy.phi-3.5-mini",
+    "status" : "PASS",
+    "wallMillis" : 253986,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.01779776498235693,
+    "ownGpuPeakMiB" : 5036,
+    "gpuBusy" : false
+  }, {
+    "id" : "long-prompt.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 626469,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020971412496041897,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "long-prompt.mistral-7b",
+    "status" : "PASS",
+    "wallMillis" : 3863615,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020442824800257005,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.long-prompt.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 44276,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.017136176065743868,
+    "ownGpuPeakMiB" : 1144,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.long-prompt.mistral-7b",
+    "status" : "PASS",
+    "wallMillis" : 92874,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.018149513782772058,
+    "ownGpuPeakMiB" : 5520,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.hot-path.tinyllama-1.1b",
+    "status" : "PASS",
+    "wallMillis" : 99122,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.019783870138127452,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.hot-path.qwen2.5-3b",
+    "status" : "PASS",
+    "wallMillis" : 247222,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.016587083002023648,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.hot-path.phi-3.5-mini",
+    "status" : "PASS",
+    "wallMillis" : 328553,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.01737477052591104,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.hot-path.mistral-7b",
+    "status" : "PASS",
+    "wallMillis" : 546448,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.018578629037119005,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "quality.tinyllama-1.1b",
+    "status" : "PASS",
+    "wallMillis" : 457368,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020007432435705387,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "quality.qwen2.5-3b",
+    "status" : "PASS",
+    "wallMillis" : 1427297,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021592117121189507,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "quality.phi-3.5-mini",
+    "status" : "PASS",
+    "wallMillis" : 4188176,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021069420596236624,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "quality.mistral-7b",
+    "status" : "PASS",
+    "wallMillis" : 2826073,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.019114915210460093,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.tinyllama-1.1b.2048",
+    "status" : "DONE",
+    "wallMillis" : 457759,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021474845624771536,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.tinyllama-1.1b.128",
+    "status" : "DONE",
+    "wallMillis" : 9838,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.014570051428399608,
+    "ownGpuPeakMiB" : 992,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.qwen2.5-3b.128",
+    "status" : "DONE",
+    "wallMillis" : 152811,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020714845733454532,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.qwen2.5-3b.512",
+    "status" : "DONE",
+    "wallMillis" : 343989,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.019357069066505948,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.qwen2.5-3b.2048",
+    "status" : "DONE",
+    "wallMillis" : 1171299,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020916022202444547,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.phi-3.5-mini.128",
+    "status" : "DONE",
+    "wallMillis" : 195015,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.02196241114529587,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.phi-3.5-mini.512",
+    "status" : "DONE",
+    "wallMillis" : 433628,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.024141653846100886,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.phi-3.5-mini.2048",
+    "status" : "DONE",
+    "wallMillis" : 1770895,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.025488699954183562,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.mistral-7b.128",
+    "status" : "DONE",
+    "wallMillis" : 310995,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021560123264237487,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.mistral-7b.512",
+    "status" : "DONE",
+    "wallMillis" : 754045,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.019554445249161317,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.mistral-7b.2048",
+    "status" : "DONE",
+    "wallMillis" : 2702424,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.02185494460903139,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.qwen2.5-3b.128",
+    "status" : "DONE",
+    "wallMillis" : 20889,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.03127254145108212,
+    "ownGpuPeakMiB" : 2424,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.qwen2.5-3b.512",
+    "status" : "DONE",
+    "wallMillis" : 22531,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020206956129528535,
+    "ownGpuPeakMiB" : 2638,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.qwen2.5-3b.2048",
+    "status" : "DONE",
+    "wallMillis" : 32676,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.04039065082393364,
+    "ownGpuPeakMiB" : 3416,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.phi-3.5-mini.128",
+    "status" : "DONE",
+    "wallMillis" : 15789,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.012456339660828493,
+    "ownGpuPeakMiB" : 2806,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.phi-3.5-mini.512",
+    "status" : "DONE",
+    "wallMillis" : 18729,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.014854582637381765,
+    "ownGpuPeakMiB" : 3242,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.phi-3.5-mini.2048",
+    "status" : "DONE",
+    "wallMillis" : 36404,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.020082076925821018,
+    "ownGpuPeakMiB" : 4726,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.mistral-7b.128",
+    "status" : "DONE",
+    "wallMillis" : 23083,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.017745806696433573,
+    "ownGpuPeakMiB" : 4660,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.mistral-7b.512",
+    "status" : "DONE",
+    "wallMillis" : 27128,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.018864259923764476,
+    "ownGpuPeakMiB" : 4990,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.throughput.mistral-7b.2048",
+    "status" : "DONE",
+    "wallMillis" : 51453,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.018388674830263827,
+    "ownGpuPeakMiB" : 6294,
+    "gpuBusy" : false
+  }, {
+    "id" : "parallel.tinyllama",
+    "status" : "DONE",
+    "wallMillis" : 851240,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.02553148536342786,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.parallel.tinyllama",
+    "status" : "DONE",
+    "wallMillis" : 138390,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.018631699999866715,
+    "ownGpuPeakMiB" : 1002,
+    "gpuBusy" : false
+  }, {
+    "id" : "schedule.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 307262,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021731186231027065,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.schedule.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 62921,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.016430069247697212,
+    "ownGpuPeakMiB" : 1002,
+    "gpuBusy" : false
+  }, {
+    "id" : "mixed-prefill.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 53002,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.02368846688839277,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.mixed-prefill.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 24442,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.016645157236895306,
+    "ownGpuPeakMiB" : 936,
+    "gpuBusy" : false
+  }, {
+    "id" : "prefill-batch.tinyllama",
+    "status" : "DONE",
+    "wallMillis" : 260072,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.02261189720937133,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.prefill-batch.tinyllama",
+    "status" : "DONE",
+    "wallMillis" : 70791,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.030798625931147978,
+    "ownGpuPeakMiB" : 924,
+    "gpuBusy" : false
+  }, {
+    "id" : "lora.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 770719,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.02703011978802436,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.lora.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 68847,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021290267599239247,
+    "ownGpuPeakMiB" : 4066,
+    "gpuBusy" : false
+  }, {
+    "id" : "vision.moondream2",
+    "status" : "PASS",
+    "wallMillis" : 1069375,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.01905734761927625,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.vision.moondream2",
+    "status" : "PASS",
+    "wallMillis" : 430324,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.02132906214222392,
+    "ownGpuPeakMiB" : 118,
+    "gpuBusy" : false
+  }, {
+    "id" : "launcher.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 12555,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.04005347772819429,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.unit-tests",
+    "status" : "PASS",
+    "wallMillis" : 2157273,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.021170910053029734,
+    "ownGpuPeakMiB" : 108,
+    "gpuBusy" : false
+  }, {
+    "id" : "gpu.unit-tests",
+    "status" : "PASS",
+    "wallMillis" : 1421602,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.01783743230777609,
+    "ownGpuPeakMiB" : 4148,
+    "gpuBusy" : false
+  } ],
+  "args" : [ "--suite", "all", "--yes", "--models-dir", "<home>/Repo/juno/models" ],
+  "startedUtc" : "20261104T043255Z"
+}

@@ -1,0 +1,36 @@
+{
+  "id" : "quality.qwen2.5-3b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "integer-kernel NLL at most 1.01x the float-activation NLL",
+    "passed" : true,
+    "detail" : "ratio 0.99935 (1.69656 over 1.69766)"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, integer kernels",
+    "unit" : "nats",
+    "values" : [ 1.6965610981146322 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, float-activation kernels",
+    "unit" : "nats",
+    "values" : [ 1.6976589711440344 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 100.0 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "integerSeconds" : 231.226935963,
+    "tokens" : 2048,
+    "floatRunKernels" : "float-activation",
+    "floatSeconds" : 1182.811444359,
+    "integerRunKernels" : "integer where the Vector API is present"
+  }
+}

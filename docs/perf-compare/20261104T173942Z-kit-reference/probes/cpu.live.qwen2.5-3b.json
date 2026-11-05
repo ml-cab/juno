@@ -1,0 +1,52 @@
+{
+  "id" : "cpu.live.qwen2.5-3b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "1. hello greeting",
+    "passed" : true,
+    "detail" : "\"Hello! How can I assist you today?\""
+  }, {
+    "name" : "2. no raw SentencePiece markers",
+    "passed" : true,
+    "detail" : "9 pieces"
+  }, {
+    "name" : "3. question response",
+    "passed" : true,
+    "detail" : "\"2 plus 2 is equal to 4.\""
+  }, {
+    "name" : "4. greedy determinism",
+    "passed" : true,
+    "detail" : "\"Hello! How can I assist you today\" twice"
+  }, {
+    "name" : "5. multi-turn context",
+    "passed" : true,
+    "detail" : "32 prompt tokens"
+  }, {
+    "name" : "6. FLOAT16 pipeline",
+    "passed" : true,
+    "detail" : "5 tokens"
+  }, {
+    "name" : "7. tensor-parallel generation",
+    "passed" : true,
+    "detail" : "\"Hello! How can I assist you today?\""
+  }, {
+    "name" : "8. tensor-parallel greedy determinism",
+    "passed" : true,
+    "detail" : "\"Hello! How can I assist you today\" twice"
+  }, {
+    "name" : "9. long-prompt prefill, both schedules",
+    "passed" : true,
+    "detail" : "backend=cpu prompt_tokens=560 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend"
+  }, {
+    "name" : "10. context shift past the context limit, both schedules",
+    "passed" : true,
+    "detail" : "backend=cpu limit=192 prompt_tokens=150 generated static=200 continuous=200 shifts static=2 continuous=2 max_position static=191 continuous=191"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "architecture" : "qwen2",
+    "suites" : "[PIPELINE, TENSOR, PREFILL, CONTEXT_SHIFT]",
+    "backend" : "CPU"
+  }
+}

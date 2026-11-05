@@ -1,0 +1,81 @@
+JFR, profile settings, 30 s from the opening of check 9's 573-token window, in two kit runs of cpu.live.tinyllama
+at Juno 80ec949e (kit jar bba50dfb33c23ca5). slow: 20261104T191116Z, window 90.8 s. fast: 20261104T191844Z, window 17.1 s.
+Started with jcmd JFR.start; that start is the cause of the 'Jvmti state change' compile failures in both runs.
+
+=== slow run
+-- event counts (over 500)
+  jdk.GCPhaseParallel                    294097
+  jdk.ExecutionSample                      9754
+  jdk.ObjectAllocationSample               8471
+  jdk.PromoteObjectOutsidePLAB             7376
+  jdk.TenuringDistribution                 4395
+  jdk.PromoteObjectInNewPLAB               3652
+  jdk.MetaspaceChunkFreeListSummary        1172
+  jdk.GCReferenceStatistics                1172
+-- allocation, sampled weight 506.0 GB in 30 s; by class:
+     303.4 GB  [F
+     178.2 GB  jdk.incubator.vector.Float128Vector
+      10.2 GB  [S
+       4.6 GB  jdk.incubator.vector.Short128Vector
+-- allocation by first Juno frame:
+      62.5 GB  CpuIntegerGemm.fourRows32:423 [JIT compiled]
+      61.8 GB  CpuIntegerGemm.fourRows32:415 [JIT compiled]
+      60.8 GB  CpuIntegerGemm.fourRows32:431 [JIT compiled]
+      57.9 GB  CpuIntegerGemm.fourRows32:407 [JIT compiled]
+-- execution samples: 9754; by top frame:
+   90.4%  FloatVector.lanewiseTemplate [Inlined]
+    1.1%  CpuIntegerGemm.tile [JIT compiled]
+    1.1%  CpuWorkerPool.forEach [JIT compiled]
+    1.0%  CpuIntegerGemm.fourRows16 [Interpreted]
+-- by first Juno frame:
+   72.0%  CpuIntegerGemm.fourRows32:407 [JIT compiled]
+   18.2%  CpuIntegerGemm.fourRows16:336 [JIT compiled]
+    1.0%  CpuIntegerGemm.tile:300 [JIT compiled]
+-- C2 compiles of the batched-matmul kernels recorded (compiles over 100 ms):
+  CpuIntegerGemm.fourRows32 level 4 osr=False succeeded=False code 0 B, inlined 0 B
+  CpuIntegerGemm.fourRows32 level 4 osr=False succeeded=True code 17512 B, inlined 6584 B
+  CpuIntegerGemm.fourRows16 level 4 osr=True succeeded=True code 22608 B, inlined 4891 B
+  CpuIntegerGemm.fourRows16 level 4 osr=True succeeded=True code 32768 B, inlined 4897 B
+  CpuIntegerGemm.fourRows16 level 4 osr=False succeeded=True code 17912 B, inlined 4897 B
+-- deoptimizations in Vector API and integer-kernel methods:
+   22  ByteVector.lanewiseShiftTemplate line 1039: class_check
+   12  CpuIntegerGemm.tile line 288: predicate
+   10  ByteVector.uOpTemplate line 163: predicate
+    3  CpuIntegerGemm.unpack line 461: unstable_if
+    1  ByteVector.uOpTemplate line 163: profile_predicate
+
+=== fast run
+-- event counts (over 500)
+  jdk.ExecutionSample                      7764
+  jdk.GCPhaseParallel                      4171
+  juno.MatVec                              2490
+  juno.WindowStep                          1860
+  juno.RmsNorm                             1164
+  juno.ResidualAdd                         1164
+  jdk.ThreadPark                            964
+  jdk.ObjectAllocationSample                770
+-- allocation, sampled weight 13.6 GB in 30 s; by class:
+       6.0 GB  [S
+       2.2 GB  [F
+       1.9 GB  [I
+       1.4 GB  [B
+-- allocation by first Juno frame:
+       3.6 GB  CpuIntegerGemm.fourRows16:352 [Interpreted]
+       0.8 GB  CpuIntegerGemm.fourRows16:349 [Interpreted]
+       0.8 GB  CpuIntegerGemm.fourRows16:339 [Interpreted]
+       0.7 GB  GgufReader.readBytes:1050 [JIT compiled]
+-- execution samples: 7764; by top frame:
+   55.8%  CpuIntegerGemm.fourRows32 [JIT compiled]
+   13.2%  CpuIntegerGemm.fourRows16 [JIT compiled]
+    5.8%  CpuWorkerPool$Worker.run [JIT compiled]
+    4.3%  CpuWorkerPool.forEach [JIT compiled]
+-- by first Juno frame:
+   55.6%  CpuIntegerGemm.fourRows32:389 [JIT compiled]
+   13.2%  CpuIntegerGemm.fourRows16:322 [JIT compiled]
+    5.6%  CpuWorkerPool$Worker.run:157 [JIT compiled]
+-- C2 compiles of the batched-matmul kernels recorded (compiles over 100 ms):
+  CpuIntegerGemm.fourRows16 level 4 osr=True succeeded=True code 7024 B, inlined 4900 B
+  CpuIntegerGemm.fourRows16 level 4 osr=True succeeded=True code 31304 B, inlined 4900 B
+  CpuIntegerGemm.fourRows16 level 4 osr=False succeeded=True code 6640 B, inlined 4900 B
+-- deoptimizations in Vector API and integer-kernel methods:
+    1  CpuIntegerKernels$Q8Activation.quantizeFrom line 161: unstable_if

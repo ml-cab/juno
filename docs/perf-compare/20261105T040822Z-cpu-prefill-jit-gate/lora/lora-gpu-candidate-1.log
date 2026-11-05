@@ -1,0 +1,3 @@
+[lora-perf] benchmark ref=HEAD commit=80ec949e backend=gpu jfr=10m
+[juno] Set CUDA_PATH or CUDA_HOME to your NVIDIA CUDA install, e.g. /usr/local/cuda
+[lora-perf] done: <repo>/dist/cpu-prefill-jit-gate/runs/lora-gpu-candidate-1

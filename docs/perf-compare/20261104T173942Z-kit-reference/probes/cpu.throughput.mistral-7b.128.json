@@ -1,0 +1,106 @@
+{
+  "id" : "cpu.throughput.mistral-7b.128",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "prefill t/s",
+    "unit" : "t/s",
+    "values" : [ 5.412208684284094, 5.389104482675524, 5.382437838069191 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "generation t/s",
+    "unit" : "t/s",
+    "values" : [ 2.2115025398794295, 2.1877049973692304, 2.1764947504657375 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "generation allocation per token in recording",
+    "unit" : "B/token",
+    "values" : [ 540989.125, 493837.125, 495600.625 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill GC pause in token span",
+    "unit" : "ms",
+    "values" : [ 0.0, 0.0, 0.0 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "generation GC pause in token span",
+    "unit" : "ms",
+    "values" : [ 0.0, 0.0, 0.0 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "generatePromptTokens" : 9,
+    "jfrClock" : "os",
+    "prefillRepsWithheld" : 0,
+    "generateRepsWithheld" : 0,
+    "generatedTokens" : 64,
+    "model" : "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+    "nPrompt" : 128,
+    "backend" : "cpu",
+    "promptParity" : true,
+    "prefillPromptTokens" : 128,
+    "generateReps" : [ {
+      "promptTokens" : 9,
+      "generatedTokens" : 64,
+      "latencyMs" : 30976.42071,
+      "prefillMs" : 1994.175142,
+      "decodeMs" : 28939.600496,
+      "encodeMs" : 0.061322,
+      "allocBytes" : 3.4623304E7,
+      "gcPauseMs" : 0.0
+    }, {
+      "promptTokens" : 9,
+      "generatedTokens" : 64,
+      "latencyMs" : 31275.403389,
+      "prefillMs" : 1977.401607,
+      "decodeMs" : 29254.401337,
+      "encodeMs" : 0.081087,
+      "allocBytes" : 3.1605576E7,
+      "gcPauseMs" : 0.0
+    }, {
+      "promptTokens" : 9,
+      "generatedTokens" : 64,
+      "latencyMs" : 31388.523186,
+      "prefillMs" : 1941.713406,
+      "decodeMs" : 29405.078963,
+      "encodeMs" : 0.078572,
+      "allocBytes" : 3.171844E7,
+      "gcPauseMs" : 0.0
+    } ],
+    "threads" : 12,
+    "prefillReps" : [ {
+      "promptTokens" : 128,
+      "generatedTokens" : 1,
+      "latencyMs" : 24233.832035,
+      "prefillMs" : 23650.23366,
+      "decodeMs" : 577.086886,
+      "encodeMs" : 4.07671,
+      "allocBytes" : 1.1215372E8,
+      "gcPauseMs" : 0.0
+    }, {
+      "promptTokens" : 128,
+      "generatedTokens" : 1,
+      "latencyMs" : 24234.741468,
+      "prefillMs" : 23751.627086,
+      "decodeMs" : 478.801888,
+      "encodeMs" : 2.246973,
+      "allocBytes" : 1.12153504E8,
+      "gcPauseMs" : 0.0
+    }, {
+      "promptTokens" : 128,
+      "generatedTokens" : 1,
+      "latencyMs" : 24271.246668,
+      "prefillMs" : 23781.045662,
+      "decodeMs" : 487.477359,
+      "encodeMs" : 0.90481,
+      "allocBytes" : 1.13532464E8,
+      "gcPauseMs" : 0.0
+    } ]
+  }
+}

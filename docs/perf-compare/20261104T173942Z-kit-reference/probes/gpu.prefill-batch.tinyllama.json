@@ -1,0 +1,26 @@
+{
+  "id" : "gpu.prefill-batch.tinyllama",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "prefill t/s, --prefill-batch 1",
+    "unit" : "t/s",
+    "values" : [ 58.10786502459023, 58.99221687069447, 58.22306076160406 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "prefill t/s, --prefill-batch 32",
+    "unit" : "t/s",
+    "values" : [ 978.5943311737577, 1003.8892243999848, 1019.2298732556035 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  } ],
+  "facts" : {
+    "prefillBatch1.prefillCalls" : 273,
+    "backend" : "gpu",
+    "prefillBatch1.promptTokens" : 274,
+    "prefillBatch32.promptTokens" : 274,
+    "prefillBatch32.prefillCalls" : 9
+  }
+}

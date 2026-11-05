@@ -1,0 +1,63 @@
+{
+  "schemaVersion" : 1,
+  "kind" : "run",
+  "kitVersion" : "0.1.2",
+  "junoCommit" : "80ec949ebc9796be4c45feda2865396f44d511a3",
+  "junoTreeDirty" : false,
+  "kitJarSha256" : "bba50dfb33c23ca591423b0573c4bf532ea00c9534c77a796fe17ad52b073393",
+  "suite" : "all",
+  "probes" : [ "env", "calibration", "cpu.live.tinyllama", "cpu.throughput.tinyllama.128", "cpu.throughput.tinyllama.512", "gpu.live.tinyllama", "gpu.throughput.tinyllama.512", "gpu.throughput.tinyllama.2048", "gpu.residency.tinyllama", "gpu.packed-kquant.tinyllama.static", "gpu.packed-kquant.tinyllama.continuous", "cpu.live.qwen2.5-3b", "cpu.live.phi-3.5-mini", "cpu.live.mistral-7b", "cpu.live.qwen3-1.7b", "gpu.live.qwen2.5-3b", "gpu.live.phi-3.5-mini", "gpu.live.mistral-7b", "gpu.live.qwen3-1.7b", "consistency.tinyllama", "gpu.consistency.tinyllama", "grammar.tinyllama", "tools.qwen2.5-3b", "context-policy.phi-3.5-mini", "gpu.context-policy.phi-3.5-mini", "long-prompt.tinyllama", "long-prompt.mistral-7b", "gpu.long-prompt.tinyllama", "gpu.long-prompt.mistral-7b", "cpu.hot-path.tinyllama-1.1b", "cpu.hot-path.qwen2.5-3b", "cpu.hot-path.phi-3.5-mini", "cpu.hot-path.mistral-7b", "quality.tinyllama-1.1b", "quality.qwen2.5-3b", "quality.phi-3.5-mini", "quality.mistral-7b", "cpu.throughput.tinyllama-1.1b.2048", "gpu.throughput.tinyllama-1.1b.128", "cpu.throughput.qwen2.5-3b.128", "cpu.throughput.qwen2.5-3b.512", "cpu.throughput.qwen2.5-3b.2048", "cpu.throughput.phi-3.5-mini.128", "cpu.throughput.phi-3.5-mini.512", "cpu.throughput.phi-3.5-mini.2048", "cpu.throughput.mistral-7b.128", "cpu.throughput.mistral-7b.512", "cpu.throughput.mistral-7b.2048", "gpu.throughput.qwen2.5-3b.128", "gpu.throughput.qwen2.5-3b.512", "gpu.throughput.qwen2.5-3b.2048", "gpu.throughput.phi-3.5-mini.128", "gpu.throughput.phi-3.5-mini.512", "gpu.throughput.phi-3.5-mini.2048", "gpu.throughput.mistral-7b.128", "gpu.throughput.mistral-7b.512", "gpu.throughput.mistral-7b.2048", "parallel.tinyllama", "gpu.parallel.tinyllama", "schedule.tinyllama", "gpu.schedule.tinyllama", "mixed-prefill.tinyllama", "gpu.mixed-prefill.tinyllama", "prefill-batch.tinyllama", "gpu.prefill-batch.tinyllama", "lora.tinyllama", "gpu.lora.tinyllama", "vision.moondream2", "gpu.vision.moondream2", "launcher.tinyllama", "cpu.unit-tests", "gpu.unit-tests" ],
+  "startedUtc" : "20261104T043255Z",
+  "finishedUtc" : "20261104T173924Z",
+  "host" : {
+    "os" : "Linux",
+    "osVersion" : "7.0.0-42-generic",
+    "arch" : "amd64",
+    "cpuModel" : "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+    "cores" : 6,
+    "threads" : 12,
+    "ramBytes" : 67363004416,
+    "freeDiskBytes" : 99010424832,
+    "cpuFlags" : [ "pbe", "bts", "ept", "ss", "ds_cpl", "pse36", "ibrs", "sse4_2", "sse4_1", "pcid", "pat", "ssse3", "epb", "x2apic", "pse", "tsc_deadline_timer", "pge", "lahf_lm", "pae", "lm", "ida", "tsc", "pln", "fsgsbase", "xsaveopt", "xsave", "nonstop_tsc", "pclmulqdq", "smx", "flush_l1d", "tpr_shadow", "mtrr", "cx8", "ibpb", "sse", "vnmi", "acpi", "xtopology", "mce", "est", "cmov", "mca", "dca", "tm2", "dts", "stibp", "cpuid", "md_clear", "arat", "clflush", "de", "rep_good", "cpuid_fault", "rdtscp", "arch_perfmon", "rdrand", "sse2", "vmx", "fxsr", "mmx", "vpid", "pebs", "smep", "msr", "sep", "aes", "xtpr", "pdpe1gb", "fpu", "apic", "pdcm", "vme", "nx", "tm", "cx16", "aperfmperf", "ht", "avx", "monitor", "f16c", "popcnt", "pts", "flexpriority", "constant_tsc", "dtherm", "pti", "dtes64", "erms", "pni", "ssbd", "nopl", "syscall" ],
+    "intVectorBits" : 128,
+    "floatVectorBits" : 128,
+    "useAvx" : "1",
+    "cuda" : true,
+    "rocm" : false,
+    "gpus" : [ {
+      "vendor" : "NVIDIA",
+      "name" : "NVIDIA GeForce GTX 1080",
+      "memoryBytes" : 8589934592,
+      "driver" : "580.178.04"
+    } ],
+    "power" : {
+      "hasBattery" : false,
+      "onBattery" : false,
+      "percent" : -1
+    },
+    "metered" : "no",
+    "clockSource" : "hpet",
+    "backend" : {
+      "java.vm.name" : "OpenJDK 64-Bit Server VM",
+      "clockSource" : "hpet",
+      "maxHeapBytes" : 536870912,
+      "os.version" : "7.0.0-42-generic",
+      "os.name" : "Linux",
+      "floatVectorBits" : 128,
+      "cpuThreads" : 12,
+      "useAvx" : "1",
+      "os.arch" : "amd64",
+      "cudaDevices" : [ {
+        "memoryBytes" : 8497594368,
+        "name" : "NVIDIA GeForce GTX 1080"
+      } ],
+      "availableProcessors" : 12,
+      "intVectorBits" : 128,
+      "cuda" : true,
+      "rocm" : false,
+      "rocmDevices" : [ ],
+      "java.version" : "<ip>",
+      "java.vendor" : "Ubuntu"
+    }
+  }
+}

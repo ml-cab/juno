@@ -1,0 +1,98 @@
+{
+  "id" : "gpu.schedule.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "static: the server runs the static schedule",
+    "passed" : true,
+    "detail" : "the health endpoint reports 'static'"
+  }, {
+    "name" : "static: every request answered",
+    "passed" : true,
+    "detail" : "blocking all; streams 8/8; turns 8/8"
+  }, {
+    "name" : "continuous: the server runs the continuous schedule",
+    "passed" : true,
+    "detail" : "the health endpoint reports 'continuous'"
+  }, {
+    "name" : "continuous: every request answered",
+    "passed" : true,
+    "detail" : "blocking all; streams 8/8; turns 8/8"
+  }, {
+    "name" : "continuous: concurrent requests shared decode steps",
+    "passed" : true,
+    "detail" : "largest decode batch 8, shared steps 192"
+  } ],
+  "readings" : [ {
+    "name" : "static: aggregate t/s",
+    "unit" : "t/s",
+    "values" : [ 79.00733845482037 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "static: mean TTFT",
+    "unit" : "ms",
+    "values" : [ 255.348744375 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "static: mean TPOT",
+    "unit" : "ms",
+    "values" : [ 67.95535315476191 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "static: first turn latency",
+    "unit" : "ms",
+    "values" : [ 137.931297 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "static: mean later turn latency",
+    "unit" : "ms",
+    "values" : [ 123.92624771428572 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "continuous: aggregate t/s",
+    "unit" : "t/s",
+    "values" : [ 77.98498677144934 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "continuous: mean TTFT",
+    "unit" : "ms",
+    "values" : [ 277.93781525 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "continuous: mean TPOT",
+    "unit" : "ms",
+    "values" : [ 99.52888846428571 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "continuous: first turn latency",
+    "unit" : "ms",
+    "values" : [ 338.174013 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "continuous: mean later turn latency",
+    "unit" : "ms",
+    "values" : [ 331.3667508571429 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "sessions" : 8,
+    "continuous.prefixHits" : 7,
+    "static.prefixHitRate" : 0.875,
+    "static.prefixHits" : 7,
+    "parallel" : 8,
+    "static.prefixLookups" : 8,
+    "continuous.prefixHitRate" : 0.875,
+    "backend" : "gpu",
+    "continuous.prefixLookups" : 8
+  }
+}

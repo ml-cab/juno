@@ -1,0 +1,19 @@
+Unpinned same-hour A/B on the server path: compare-llama-cpp.sh --cpu --threads 12 --n-prompt 512 --juno-warmup 2
+--juno-reps 1 --reps 1 --no-tuned-lane --no-publish --juno-jar <side>, A B A B. Juno CPU prompt t/s per run.
+baseline = 80ec949e (jar 15083b9c320c1c36).
+
+candidate = first form (jar 4713925ad8ed6067)
+  tinyllama baseline: 31.73 31.77
+  tinyllama candidate: 30.67 29.98
+  tinyllama greedy reply: 1 distinct text(s) across the four runs
+  qwen2.5 baseline: 10.3 11.26
+  qwen2.5 candidate: 10.8 10.87
+  qwen2.5 greedy reply: 1 distinct text(s) across the four runs
+
+candidate = final form (jar ea700f227c83b911)
+  tinyllama baseline: 32.68 29.71
+  tinyllama candidate: 31.73 32.67
+  tinyllama greedy reply: 1 distinct text(s) across the four runs
+  qwen2.5 baseline: 11.25 10.68
+  qwen2.5 candidate: 10.51 12
+  qwen2.5 greedy reply: 1 distinct text(s) across the four runs

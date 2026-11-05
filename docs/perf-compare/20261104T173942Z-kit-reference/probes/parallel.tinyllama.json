@@ -1,0 +1,40 @@
+{
+  "id" : "parallel.tinyllama",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "aggregate t/s, --parallel 1",
+    "unit" : "t/s",
+    "values" : [ 10.848521204415606, 10.843834780949667, 10.775335840847523 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "mean request latency, --parallel 1",
+    "unit" : "ms",
+    "values" : [ 47074.20301225, 47148.37357425, 47410.334313125 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "aggregate t/s, --parallel 8",
+    "unit" : "t/s",
+    "values" : [ 12.397576366211407, 12.143805648621752, 12.40175946812601 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "mean request latency, --parallel 8",
+    "unit" : "ms",
+    "values" : [ 41297.6561085, 42161.208625375, 41283.651648625 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "maxTokens" : 64,
+    "parallel8.distinctReplies" : 1,
+    "parallel1.distinctReplies" : 1,
+    "warmupRounds" : 2,
+    "parallel8OverParallel1" : 1.1432834063454504,
+    "sessions" : 8,
+    "backend" : "cpu"
+  }
+}

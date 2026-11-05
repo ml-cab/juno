@@ -1,0 +1,7 @@
+[ {
+  "id" : "cpu.kernel-width",
+  "reason" : "256-bit integer vectors: this JVM prefers 128-bit"
+}, {
+  "id" : "rocm.unit-tests",
+  "reason" : "ROCm: Juno found no usable AMD GPU"
+} ]

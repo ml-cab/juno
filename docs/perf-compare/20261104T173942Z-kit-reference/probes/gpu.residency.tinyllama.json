@@ -1,0 +1,53 @@
+{
+  "id" : "gpu.residency.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "region off: every request answers, the last equals the first, shorter ones are its opening",
+    "passed" : true,
+    "detail" : "4 requests"
+  }, {
+    "name" : "region on: every request answers, the last equals the first, shorter ones are its opening",
+    "passed" : true,
+    "detail" : "4 requests"
+  }, {
+    "name" : "region on: activation or decline reported",
+    "passed" : true,
+    "detail" : "GPU-resident decode region active (gpu-residency=on) on 20 of 20 layers: the whole layer (norm, Q/K/V projection, RoPE, the KV append, attention, output projection, residual adds, FFN norm and SwiGLU FFN) on 20 of them, the residual row staying on the device between such layers and k, v and the layer output downloaded in one copy per layer. Single-sequence decode only; prefill windows and batched decode (--parallel above 1, continuous schedule) keep the existing path."
+  }, {
+    "name" : "greedy output identical with the region on and off",
+    "passed" : true,
+    "detail" : "identical over 32 tokens"
+  }, {
+    "name" : "device memory does not grow per request",
+    "passed" : true,
+    "detail" : "growth over requests 2..4: on 0 MiB, off 0 MiB (limit 16 MiB); MiB after each request: off [938, 938, 938, 938], on [938, 938, 938, 938]"
+  }, {
+    "name" : "pipeline cluster, region on: the forked nodes answer",
+    "passed" : true,
+    "detail" : "150 characters"
+  }, {
+    "name" : "pipeline cluster: no node JVM left",
+    "passed" : true,
+    "detail" : "0 node JVMs left"
+  }, {
+    "name" : "tensor cluster, region on: the forked nodes answer",
+    "passed" : true,
+    "detail" : "150 characters"
+  }, {
+    "name" : "tensor cluster: no node JVM left",
+    "passed" : true,
+    "detail" : "0 node JVMs left"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "offMemMiB" : [ 938, 938, 938, 938 ],
+    "onMemMiB" : [ 938, 938, 938, 938 ],
+    "tensor.equalsLocal" : false,
+    "tensor.firstDifferentWord" : 17,
+    "notice" : "GPU-resident decode region active (gpu-residency=on) on 20 of 20 layers: the whole layer (norm, Q/K/V projection, RoPE, the KV append, attention, output projection, residual adds, FFN norm and SwiGLU FFN) on 20 of them, the residual row staying on the device between such layers and k, v and the layer output downloaded in one copy per layer. Single-sequence decode only; prefill windows and batched decode (--parallel above 1, continuous schedule) keep the existing path.",
+    "reply" : "1. The printing press was invented in the 15th century by Johannes Gutenberg, who revolutionized the publishing industry.\n2. In",
+    "pipeline.firstDifferentWord" : 17,
+    "pipeline.equalsLocal" : false
+  }
+}

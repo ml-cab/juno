@@ -1,5 +1,28 @@
 ## Status 
 
+**Session 129** - CPU prefill no longer slows down 2x to 5.5x in some JVMs
+
+- **The CPU batched matmul (prefill at window width) kept its speed in every JVM.** Before, C2 compiled its four-row
+  kernels with boxed float accumulators in some JVMs and not others: every vector add and subtract then allocated, the
+  collector ran about ten times a second, and a 573-token TinyLlama prefill window took about 34 s or 91 s instead of
+  about 17 s. It happened in 6 of 10 runs of the hardware validation kit's CPU live probe on the reference host, never
+  in 7 runs of the same command outside it. The accumulators were loop-carried vectors that the kernels called
+  methods on; C2 types such a value inexactly while it parses the loop and binds those calls through the JDK's shared
+  type profile, which every caller shares; once another vector shape has been profiled there, C2 boxes them. The
+  kernels now pass an accumulator only as an argument (`f0 = term.add(f0)`), so every receiver is a freshly computed
+  vector C2 types exactly. Outputs are bit for bit the earlier kernels'; greedy replies are the same. On the fixed
+  build the probe's window read 17.8 to 21.6 s in 20 runs of 20. `CpuKernelVectorEscapeTest` checks the rule from the
+  bytecode; `CpuGemmProfilePollutionTest` runs the kernels' lane operations at 64 and 256 bits first and then measures
+  the matmul at prefill width: nothing allocated per call (the earlier kernels: about 8.5 GB per call).
+- **No cost on the fast path.** Pinned, same hour, three runs each against the earlier kernels on TinyLlama,
+  Qwen2.5-3B, Phi-3.5-mini and Mistral 7B: CPU prompt processing 0.965x to 1.040x at 512 prompt tokens and 1.004x to
+  1.037x at 128; generation 1.003x to 1.015x; allocation per token in the measured request 0.984x to 0.995x; greedy
+  output identical in every run; LoRA training and playback unchanged
+  (`docs/perf-compare/20261105T040822Z-cpu-prefill-jit-gate/`).
+- **Known, not changed:** the decode kernels, the attention head and the 256-bit forms carry vectors the same way. In
+  the reproducer the decode matvec also allocated, in some JVMs, after the same pollution; it has not been seen to slow
+  down in a real run.
+
 **Session 128** - Hardware validation kit; CPU batched decode equal to single-request decode; the static batch collector holds its window
 
 - **New `juno-kit` module and launchers, `./juno-kit.sh` and `juno-kit.bat`.** A tester with hardware the

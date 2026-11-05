@@ -1,0 +1,138 @@
+{
+  "suite": "quick",
+  "done": [
+    {
+      "id": "calibration",
+      "status": "NOISY",
+      "wallMillis": 27973,
+      "attempts": 3,
+      "otherCpuShare": 0.05408806171272085
+    },
+    {
+      "id": "env",
+      "status": "DONE",
+      "wallMillis": 731,
+      "attempts": 1,
+      "otherCpuShare": 0.0
+    },
+    {
+      "id": "cpu.live.tinyllama",
+      "status": "PASS",
+      "wallMillis": 248539,
+      "attempts": 1,
+      "otherCpuShare": 0.04574385426884834
+    },
+    {
+      "id": "cpu.throughput.tinyllama.128",
+      "status": "DONE",
+      "wallMillis": 60888,
+      "attempts": 1,
+      "otherCpuShare": 0.04874425058307838
+    },
+    {
+      "id": "cpu.throughput.tinyllama.512",
+      "status": "NOISY",
+      "wallMillis": 414662,
+      "attempts": 3,
+      "otherCpuShare": 0.08484587393816688
+    },
+    {
+      "id": "gpu.live.tinyllama",
+      "status": "PASS",
+      "wallMillis": 99104,
+      "attempts": 1,
+      "otherCpuShare": 0.08356930896486307
+    },
+    {
+      "id": "gpu.throughput.tinyllama.512",
+      "status": "DONE",
+      "wallMillis": 10597,
+      "attempts": 1,
+      "otherCpuShare": 0.02701232909939978
+    },
+    {
+      "id": "gpu.throughput.tinyllama.2048",
+      "status": "NOISY",
+      "wallMillis": 49642,
+      "attempts": 3,
+      "otherCpuShare": 0.05980225373417348
+    },
+    {
+      "id": "gpu.residency.tinyllama",
+      "status": "PASS",
+      "wallMillis": 47708,
+      "attempts": 1,
+      "otherCpuShare": 0.06751438425877364
+    },
+    {
+      "id": "gpu.packed-kquant.tinyllama.static",
+      "status": "PASS",
+      "wallMillis": 14999,
+      "attempts": 1,
+      "otherCpuShare": 0.0271235593550557
+    },
+    {
+      "id": "gpu.packed-kquant.tinyllama.continuous",
+      "status": "PASS",
+      "wallMillis": 74457,
+      "attempts": 1,
+      "otherCpuShare": 0.08785442492832661
+    },
+    {
+      "id": "consistency.tinyllama",
+      "status": "PASS",
+      "wallMillis": 105762,
+      "attempts": 1,
+      "otherCpuShare": 0.12471129225552552
+    },
+    {
+      "id": "gpu.consistency.tinyllama",
+      "status": "PASS",
+      "wallMillis": 12822,
+      "attempts": 1,
+      "otherCpuShare": 0.06401674954520274
+    },
+    {
+      "id": "grammar.tinyllama",
+      "status": "PASS",
+      "wallMillis": 100344,
+      "attempts": 1,
+      "otherCpuShare": 0.05816111206938921
+    },
+    {
+      "id": "long-prompt.tinyllama",
+      "status": "PASS",
+      "wallMillis": 656568,
+      "attempts": 1,
+      "otherCpuShare": 0.06298019969696879
+    },
+    {
+      "id": "gpu.long-prompt.tinyllama",
+      "status": "PASS",
+      "wallMillis": 43888,
+      "attempts": 1,
+      "otherCpuShare": 0.034542966331267036
+    },
+    {
+      "id": "cpu.hot-path.tinyllama-1.1b",
+      "status": "PASS",
+      "wallMillis": 99238,
+      "attempts": 1,
+      "otherCpuShare": 0.03482423174081494
+    },
+    {
+      "id": "quality.tinyllama-1.1b",
+      "status": "PASS",
+      "wallMillis": 464546,
+      "attempts": 1,
+      "otherCpuShare": 0.03895788884279803
+    },
+    {
+      "id": "launcher.tinyllama",
+      "status": "PASS",
+      "wallMillis": 12822,
+      "attempts": 1,
+      "otherCpuShare": 0.07623997079629588
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+cpu.live.tinyllama through the kit (./juno-kit.sh --probes cpu.live.tinyllama --yes --models-dir models --skip-build),
+check 9's 573-token batched window (chunk 4096) and check 10's chunk-64 window, from each run's probe log.
+
+Before the change (Juno 80ec949e), from 20261104T191116Z-cpu-prefill-jit/: slow in 6 of 10 kit runs (about 34 s or 91 s).
+
+First form of the change (accumulators only as arguments, offset negated per row; kit jar dfa50f93a60aebd0):
+run 1 20261104T211005Z window4096=18198ms chunk64=6021ms PASS 4:26
+run 2 20261104T211502Z window4096=18650ms chunk64=5543ms PASS 4:24
+run 3 20261104T211957Z window4096=18418ms chunk64=5483ms PASS 4:22
+run 4 20261104T212449Z window4096=19149ms chunk64=5518ms PASS 4:24
+run 5 20261104T212944Z window4096=18545ms chunk64=5563ms PASS 4:21
+run 6 20261104T213433Z window4096=19827ms chunk64=5573ms PASS 4:25
+run 7 20261104T213930Z window4096=17888ms chunk64=5828ms PASS 4:26
+run 8 20261104T214426Z window4096=19300ms chunk64=5666ms PASS 4:30
+run 9 20261104T214927Z window4096=18758ms chunk64=5212ms PASS 4:21
+run 10 20261104T215420Z window4096=19223ms chunk64=5541ms PASS 4:27
+
+Final form (offset negated once per sub-block; kit jar 448867f1d5a028c3):
+run 1 20261104T234612Z window4096=19555ms chunk64=5721ms PASS 4:27
+run 2 20261104T235111Z window4096=17869ms chunk64=5514ms PASS 4:23
+run 3 20261104T235606Z window4096=18811ms chunk64=5353ms PASS 4:26
+run 4 20261105T000045Z window4096=19127ms chunk64=5709ms PASS 4:29
+run 5 20261105T000544Z window4096=21620ms chunk64=5564ms PASS 4:27
+run 6 20261105T001042Z window4096=18480ms chunk64=5332ms PASS 4:36
+run 7 20261105T001548Z window4096=19116ms chunk64=5848ms PASS 4:27
+run 8 20261105T002046Z window4096=17818ms chunk64=5208ms PASS 4:26
+run 9 20261105T002543Z window4096=19288ms chunk64=5162ms PASS 4:26
+run 10 20261105T003037Z window4096=18290ms chunk64=5631ms PASS 4:24

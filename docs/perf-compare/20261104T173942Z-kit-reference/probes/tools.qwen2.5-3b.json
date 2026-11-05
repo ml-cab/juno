@@ -1,0 +1,52 @@
+{
+  "id" : "tools.qwen2.5-3b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "ChatML: tool_choice required returns a get_weather call with JSON arguments",
+    "passed" : true,
+    "detail" : "HTTP 200: ; call {\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Boston\\\"}\"}"
+  }, {
+    "name" : "ChatML: a named tool_choice returns a get_weather call",
+    "passed" : true,
+    "detail" : "HTTP 200: ; call {\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Boston\\\"}\"}"
+  }, {
+    "name" : "ChatML: tool_choice none returns no tool call",
+    "passed" : true,
+    "detail" : "HTTP 200: Hi"
+  }, {
+    "name" : "ChatML: a role=tool turn continues with text",
+    "passed" : true,
+    "detail" : "HTTP 200: The current temperature in Boston is 72 degrees Fahrenheit."
+  }, {
+    "name" : "ChatML: tools with response_format json_object is HTTP 400",
+    "passed" : true,
+    "detail" : "HTTP 400: {\"error\":{\"message\":\"tools cannot be combined with response_format.type=json_object\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request\",\"param\":\"tools\"}}"
+  }, {
+    "name" : "ChatML: tools with x_juno_grammar is HTTP 400",
+    "passed" : true,
+    "detail" : "HTTP 400: {\"error\":{\"message\":\"tools cannot be combined with x_juno_grammar\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request\",\"param\":\"tools\"}}"
+  }, {
+    "name" : "ChatML: streamed tool_choice required carries the tool call",
+    "passed" : true,
+    "detail" : "HTTP 200, 2 chunks, call streamed"
+  }, {
+    "name" : "JFR: at least 2 constrained requests, ChatML server",
+    "passed" : true,
+    "detail" : "3 events"
+  }, {
+    "name" : "TinyLlama template: tools are HTTP 400 naming the template",
+    "passed" : true,
+    "detail" : "HTTP 400: {\"error\":{\"message\":\"tools are not supported for chat template 'tinyllama' (supported: llama3, chatml, qwen3)\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request\",\"param\":\"tools\"}}"
+  }, {
+    "name" : "TinyLlama template with a LoRA overlay: tools are HTTP 400 naming the template",
+    "passed" : true,
+    "detail" : "HTTP 400: {\"error\":{\"message\":\"tools are not supported for chat template 'tinyllama' (supported: llama3, chatml, qwen3)\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request\",\"param\":\"tools\"}}"
+  }, {
+    "name" : "ChatML with 2 parallel: both required requests return a get_weather call",
+    "passed" : true,
+    "detail" : "HTTP 200: ; call {\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Boston\\\"}\"} / HTTP 200: ; call {\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Boston\\\"}\"}"
+  } ],
+  "readings" : [ ],
+  "facts" : { }
+}

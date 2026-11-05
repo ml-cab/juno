@@ -1,0 +1,24 @@
+{
+  "id" : "launcher.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "local mode with --api-port answers a chat request",
+    "passed" : true,
+    "detail" : "HTTP 200: 1. Red\n2. Blue\n"
+  }, {
+    "name" : "the launcher exits cleanly on exit",
+    "passed" : true,
+    "detail" : "exit code 0, 0 of its processes still running"
+  }, {
+    "name" : "lora with --grammar-file warns that constrained decoding is a no-op for LoRA training",
+    "passed" : true,
+    "detail" : "warned (exit code 0)"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "reply" : "1. Red\n2. Blue\n",
+    "launcher" : "juno",
+    "exitCode" : 0
+  }
+}

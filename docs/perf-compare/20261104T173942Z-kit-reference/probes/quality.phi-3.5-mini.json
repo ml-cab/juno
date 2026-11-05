@@ -1,0 +1,36 @@
+{
+  "id" : "quality.phi-3.5-mini",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "integer-kernel NLL at most 1.01x the float-activation NLL",
+    "passed" : true,
+    "detail" : "ratio 1.00209 (1.36110 over 1.35826)"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, integer kernels",
+    "unit" : "nats",
+    "values" : [ 1.3610975576621687 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, float-activation kernels",
+    "unit" : "nats",
+    "values" : [ 1.358257452855036 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 99.4140625 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "tokens" : 2048,
+    "floatRunKernels" : "float-activation",
+    "floatSeconds" : 2793.727093219,
+    "integerRunKernels" : "integer where the Vector API is present",
+    "integerSeconds" : 1377.466479113
+  }
+}

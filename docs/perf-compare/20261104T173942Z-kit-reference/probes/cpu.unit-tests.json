@@ -1,0 +1,19 @@
+{
+  "id" : "cpu.unit-tests",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "tests outside gpu,rocm on tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player",
+    "passed" : true,
+    "detail" : "2101 tests, 0 failures, 0 errors, 25 skipped; Maven exit 0"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "excludedGroups" : "gpu,rocm",
+    "tests" : 2101,
+    "modules" : "tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player",
+    "mavenExit" : 0,
+    "skipped" : 25,
+    "groups" : ""
+  }
+}

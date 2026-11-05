@@ -1,0 +1,19 @@
+{
+  "id" : "gpu.unit-tests",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "group gpu on node",
+    "passed" : true,
+    "detail" : "367 tests, 0 failures, 0 errors, 7 skipped; Maven exit 0"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "mavenExit" : 0,
+    "modules" : "node",
+    "tests" : 367,
+    "excludedGroups" : "",
+    "groups" : "gpu",
+    "skipped" : 7
+  }
+}

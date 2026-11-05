@@ -1,0 +1,52 @@
+{
+  "id" : "gpu.live.phi-3.5-mini",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "1. hello greeting",
+    "passed" : true,
+    "detail" : "\"Hello! I'm Phi, Microsoft's language model. How can I help you today\""
+  }, {
+    "name" : "2. no raw SentencePiece markers",
+    "passed" : true,
+    "detail" : "10 pieces"
+  }, {
+    "name" : "3. question response",
+    "passed" : true,
+    "detail" : "\"The sum of 2 plus 2 is a basic arithmetic\""
+  }, {
+    "name" : "4. greedy determinism",
+    "passed" : true,
+    "detail" : "\"Hello! I'm Phi,\" twice"
+  }, {
+    "name" : "5. multi-turn context",
+    "passed" : true,
+    "detail" : "76 prompt tokens"
+  }, {
+    "name" : "6. FLOAT16 pipeline",
+    "passed" : true,
+    "detail" : "5 tokens"
+  }, {
+    "name" : "7. tensor-parallel generation",
+    "passed" : true,
+    "detail" : "\"Hello! I'm Phi, Microsoft'\""
+  }, {
+    "name" : "8. tensor-parallel greedy determinism",
+    "passed" : true,
+    "detail" : "\"Hello! I'm Phi,\" twice"
+  }, {
+    "name" : "9. long-prompt prefill, both schedules",
+    "passed" : true,
+    "detail" : "backend=cuda prompt_tokens=583 first-divergence static=-1 continuous=-1; backend=cuda prompt_tokens=2101 first-divergence static=-1 continuous=-1"
+  }, {
+    "name" : "10. context shift past the context limit, both schedules",
+    "passed" : true,
+    "detail" : "backend=cuda limit=192 prompt_tokens=184 generated static=200 continuous=200 shifts static=3 continuous=3 max_position static=191 continuous=191"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "architecture" : "phi3",
+    "backend" : "CUDA",
+    "suites" : "[PIPELINE, TENSOR, PREFILL, CONTEXT_SHIFT]"
+  }
+}

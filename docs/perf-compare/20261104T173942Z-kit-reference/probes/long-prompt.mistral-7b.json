@@ -1,0 +1,103 @@
+{
+  "id" : "long-prompt.mistral-7b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "static 128: HTTP 200, non-empty answer",
+    "passed" : true,
+    "detail" : "HTTP 200:  According to note 1, the orchard in district 7 was painted"
+  }, {
+    "name" : "static 128: prompt tokens within 10% of 128",
+    "passed" : true,
+    "detail" : "128 prompt tokens"
+  }, {
+    "name" : "static 128: streamed text equals non-streamed",
+    "passed" : true,
+    "detail" : "59 characters"
+  }, {
+    "name" : "static 512: HTTP 200, non-empty answer",
+    "passed" : true,
+    "detail" : "HTTP 200:  According to note 1, the orchard in district 7 was painted"
+  }, {
+    "name" : "static 512: prompt tokens within 10% of 512",
+    "passed" : true,
+    "detail" : "512 prompt tokens"
+  }, {
+    "name" : "static 512: streamed text equals non-streamed",
+    "passed" : true,
+    "detail" : "59 characters"
+  }, {
+    "name" : "static 2048: HTTP 200, non-empty answer",
+    "passed" : true,
+    "detail" : "HTTP 200:  The orchard in district 7 was painted white in the year 1"
+  }, {
+    "name" : "static 2048: prompt tokens within 10% of 2048",
+    "passed" : true,
+    "detail" : "2044 prompt tokens"
+  }, {
+    "name" : "static 2048: streamed text equals non-streamed",
+    "passed" : true,
+    "detail" : "58 characters"
+  }, {
+    "name" : "continuous 128: HTTP 200, non-empty answer",
+    "passed" : true,
+    "detail" : "HTTP 200:  According to note 1, the orchard in district 7 was painted"
+  }, {
+    "name" : "continuous 128: prompt tokens within 10% of 128",
+    "passed" : true,
+    "detail" : "128 prompt tokens"
+  }, {
+    "name" : "continuous 128: streamed text equals non-streamed",
+    "passed" : true,
+    "detail" : "59 characters"
+  }, {
+    "name" : "continuous 512: HTTP 200, non-empty answer",
+    "passed" : true,
+    "detail" : "HTTP 200:  According to note 1, the orchard in district 7 was painted"
+  }, {
+    "name" : "continuous 512: prompt tokens within 10% of 512",
+    "passed" : true,
+    "detail" : "512 prompt tokens"
+  }, {
+    "name" : "continuous 512: streamed text equals non-streamed",
+    "passed" : true,
+    "detail" : "59 characters"
+  }, {
+    "name" : "continuous 2048: HTTP 200, non-empty answer",
+    "passed" : true,
+    "detail" : "HTTP 200:  The orchard in district 7 was painted white in the year 1"
+  }, {
+    "name" : "continuous 2048: prompt tokens within 10% of 2048",
+    "passed" : true,
+    "detail" : "2044 prompt tokens"
+  }, {
+    "name" : "continuous 2048: streamed text equals non-streamed",
+    "passed" : true,
+    "detail" : "58 characters"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "static.2048.answerNamesColour" : true,
+    "continuous.512.answerNamesColour" : false,
+    "continuous.512.text" : " According to note 1, the orchard in district 7 was painted",
+    "continuous.512.ttftMs" : 98499.100983,
+    "plan.512" : "18 notes + 14 filler words, target 512 tokens",
+    "continuous.128.ttftMs" : 24610.817388,
+    "continuous.128.text" : " According to note 1, the orchard in district 7 was painted",
+    "context" : 32768,
+    "static.512.ttftMs" : 94487.239814,
+    "continuous.2048.answerNamesColour" : true,
+    "static.2048.ttftMs" : 421728.330668,
+    "static.512.text" : " According to note 1, the orchard in district 7 was painted",
+    "plan.128" : "3 notes + 6 filler words, target 128 tokens",
+    "plan.2048" : "79 notes + 0 filler words, target 2048 tokens",
+    "static.128.ttftMs" : 23466.555376,
+    "continuous.2048.text" : " The orchard in district 7 was painted white in the year 1",
+    "continuous.2048.ttftMs" : 534073.311353,
+    "static.128.answerNamesColour" : false,
+    "static.2048.text" : " The orchard in district 7 was painted white in the year 1",
+    "static.512.answerNamesColour" : false,
+    "static.128.text" : " According to note 1, the orchard in district 7 was painted",
+    "continuous.128.answerNamesColour" : false
+  }
+}

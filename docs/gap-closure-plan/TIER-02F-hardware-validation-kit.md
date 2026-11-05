@@ -9,12 +9,19 @@ rule 10, check 10, the **Kit probes** sections, the "Borrowed hardware" table). 
 (`.github/workflows/kit.yml`, checked here); not committed (the owner's commit `a1fe7166` left `.github/` out), and its
 runs are deferred by owner decision 2026-11-03 ("for now skip github ci"). Step 10 done 2026-11-03, ahead of step 9,
 whose testers need its guide; the same day's `quick` run corrected three catalog costs and found the CPU live
-probe's wide prefill windows about 5.5x slower inside the kit than outside it (cause open; the engine is not slower).
+probe's wide prefill windows about 5.5x slower inside the kit than outside it. Step 6's reference run done 2026-11-04
+at `80ec949e` (owner's run, published `docs/perf-compare/20261104T173942Z-kit-reference/`; `ingest` compares against
+it). The slow windows were traced the same day to the JIT: in some JVMs C2 compiles `CpuIntegerGemm`'s prefill
+kernels with boxed vectors (`docs/perf-compare/20261104T191116Z-cpu-prefill-jit/`), an engine fragility the kit
+exposed. Fixed the same day as an out-of-tier change by owner decision (a) (reproducer test first; kernels without calls
+on loop-carried vectors; `docs/perf-compare/20261104T234612Z-cpu-prefill-jit-fix/`); its pinned gate is met (owner
+run 2026-11-05, `docs/perf-compare/20261105T040822Z-cpu-prefill-jit-gate/`).
 The CPU batch dependence found in part 1 is
 explained (not a KV leak; see "CPU batch dependence investigated") and fixed in the engine 2026-10-29 by owner
 go-ahead, an out-of-tier change (see "CPU decode batch made bit for bit the single-request decode"); its pinned
-throughput gate is met (owner run, 2026-10-29). Three exit criteria are ticked: the probe catalog (step 6), rule 10
-with check 10 (step 7) and the docs (step 10).
+throughput gate is met (owner run, 2026-10-29). Six exit criteria are ticked: the estimate (re-scored 2026-11-05),
+the probe catalog (step 6), `ingest` with the reference run (2026-11-04), rule 10 with check 10 (step 7), the unit
+suite with `mvn verify -pl juno-master` (2026-11-05) and the docs (step 10).
 Gap analysis refs: none — see "Why this tier, why now"
 
 **Added 2026-10-13 (owner decisions, recorded in the execution record below).** This host has one CPU
@@ -291,12 +298,19 @@ GPU, macOS.
       prerequisites before building, and a failed build still produces a results zip.
 - [ ] Detection, the suites, `--budget`, `--plan`, `--yes`, `--list`, `resume` and `pack` work as
       specified, each unit-tested.
-- [ ] The estimate is shown before the run and refined during it. On this host, the first estimate for the
+- [x] The estimate is shown before the run and refined during it. On this host, the first estimate for the
       `quick` suite is `>= 0.65x` and `<= 1.35x` the actual time.
       *(2026-11-03: read 0.741x, point 1738 s against 2345 s, on the `a1fe7166` catalog
       (`docs/perf-compare/20261103T205950Z-kit-quick-estimate/`). Not ticked: three catalog costs were corrected after
       that reading, and `cpu.live.tinyllama` ran about 200 s long for a reason inside the kit that is still open. Owed by
       the executor, no owner run: a fresh `quick` run on the corrected catalog once that finding is explained.)*
+      *(2026-11-04: explained (`docs/perf-compare/20261104T191116Z-cpu-prefill-jit/`): the JIT's compile of the prefill
+      kernels decides that probe's time, 242 s or about 290 s or about 440 s. The re-score waits for the owner's decision
+      on the kernel fix, since a fix changes that probe's time.)*
+      *(2026-11-05: met. Re-scored on the corrected catalog and the changed kernels: first estimate 2240 s (point;
+      range 1904 to 2688, shown as "32 min to 45 min") against 2518 s actual, **0.890x**; the estimate was refined
+      during the run ("about 41 min to 58 min left" after a re-run probe).
+      `docs/perf-compare/20261105T155413Z-kit-quick-rescore/`.)*
 - [ ] Stage warnings, keep-awake on each OS, and the noise rule's re-runs work as specified.
 - [ ] The model catalog is pinned by SHA-256, downloads resume, and hashes are verified.
 - [x] The probe catalog covers every row of the README's smoke matrix and the Juno-side checks and readings
@@ -306,15 +320,21 @@ GPU, macOS.
       `SurefireReportsTest`, its command and report parsing, since running Maven inside `mvn test` would recurse.)*
 - [ ] Results are scrubbed (fixture tests), the zip holds `SUMMARY.txt` and the HTML report, and nothing in
       the kit uploads.
-- [ ] `ingest` drafts the `docs/perf-compare/` entry and compares against the owner's reference run; the
+- [x] `ingest` drafts the `docs/perf-compare/` entry and compares against the owner's reference run; the
       reference run on this host is published.
+      *(2026-11-04: the owner's reference run at `80ec949e`, suite `all`, 72 of 72 runnable probes PASS or DONE, is
+      published as `docs/perf-compare/20261104T173942Z-kit-reference/`. A later zip at the same commit ingested against
+      it read "10 items compared: 10 equal or within the bound"; that test draft was not published.)*
 - [ ] The kit has completed at least once each on Windows, macOS and Linux (CI runner or tester), each zip
       ingested.
 - [x] Rule 10 and check 10 are in place (check 10 seen failing first); every open tier file has its **Kit
       probes** section; `INVENTORY.md` has the "Borrowed hardware" table.
       *(2026-10-31, step 7: check 10 failed on all 17 open tier files, then passed once the sections were
       written; see that day's step 7 record.)*
-- [ ] Every module's unit tests pass, `juno-kit` included, and `mvn verify -pl juno-master` passes.
+- [x] Every module's unit tests pass, `juno-kit` included, and `mvn verify -pl juno-master` passes.
+      *(2026-11-05, on `80ec949e` plus the CPU batched matmul change: 12 modules, 2,607 tests, 0 failures, 0 errors,
+      53 skipped; then `mvn install -DskipTests` and `mvn verify -pl juno-master`, 13 tests and 20 integration tests,
+      0 failures. Re-run at the close if step 9 changes code.)*
 - [ ] Cross-surface checklist fully resolved.
 - [x] Docs (`juno-kit/README.md`, `docs/howto.md`, `docs/agent-arch.txt`, `README.md`) updated, in
       Juno-native language only; `CHANGELOG.md` entry added.
@@ -1286,6 +1306,8 @@ unpinned; kit jar `8ef5098cf3034632`):
   - The engine's CPU prefill is unchanged elsewhere the same day: the server (`long-prompt.tinyllama`, 512 tokens
     15.2 s static and 16.1 s continuous, against 15.3 and 16.2 on 2026-10-29) and the throughput probe (33.6 t/s at
     512).
+  - *(Corrected 2026-11-04: not kit-side. The JIT sometimes compiles the engine's prefill kernels with boxed vectors;
+    the outside runs here happened to get the fast compile. See the 2026-11-04 record.)*
   - So this is a kit-side finding, not an engine regression, and not a measurement boundary. Its cause inside the
     kit's runner is not found. Ruled out: heap, GC, JVM flags, the `hpet` clock source, GPU polling, the probe's
     entry class and other load. It stays open for step 9, which owns kit defects. The probe's checks are unaffected.
@@ -1307,3 +1329,242 @@ changed. The full unit suite and `mvn verify -pl juno-master` are owed at the cl
 **Next for the executor:** find why the CPU live probe's wide windows run slow under the kit's runner, then
 re-score criterion 3 on a fresh `quick` run. Then step 9 as zips arrive, and the close: the full unit suite,
 `mvn verify -pl juno-master`, and the cross-surface table.
+
+### 2026-11-04: step 6's reference run published; the CPU live probe's slow windows traced to the JIT
+
+**The owner committed** `ac178abd` (step 10's docs and catalog fix) and `80ec949e` (the `.gitignore` line, which
+`ac178abd` had left out, so `run-reference.sh` refused the tree until it was committed). `.github/` stays untracked,
+as decided. The owner then ran `dist/kit-reference/run-reference.sh` at `80ec949e`.
+
+**The reference run** (`docs/perf-compare/20261104T173942Z-kit-reference/`, unpinned; kit jar `bba50dfb33c23ca5`):
+- suite `all`, 13:06 from start to finish; 72 of 72 runnable probes PASS (42) or DONE (30), each on its first attempt
+  except calibration (one re-run for other processes' load). Not runnable here: `cpu.kernel-width` (128-bit JVM),
+  `rocm.unit-tests` (no AMD GPU). Unit tests inside it: CPU 2101, 0 failures; CUDA group 367, 0 failures.
+- First estimate 692 to 978 min, point 1.04x the actual. The large probes ran within a few percent of their catalog
+  costs, so the catalog needs no further correction from this run.
+- Reviewed before publishing. The draft's paths and names are scrubbed (a grep for the home directory, the user and the
+  host name finds nothing). Review notes added to its INDEX: the coverage table's ROCm row counts backend-neutral GPU
+  probes that ran on CUDA here; the MoE row is synthetic unit tests only; three cosmetic kit defects (below).
+- The README row was written by hand in the table's four cells.
+- `ingest` compared a later zip from this host at the same commit (`cpu.live.tinyllama` alone) against it: "10 items
+  compared: 10 equal or within the bound". That test draft was removed, not published, because it is not a
+  tester's run.
+
+**The CPU live probe's slow windows** (`docs/perf-compare/20261104T191116Z-cpu-prefill-jit/`, unpinned; 2026-11-03's
+record called them kit-side, corrected there):
+- The reference run's `cpu.live.tinyllama` took 294 s; check 9's 573-token window read 34.1 s (16.5 s on 2026-10-28).
+  Eight more kit runs of the probe alone and two shell runs of its exact command line followed. Slow in 6 of 10 kit
+  runs, in two modes (about 34 s and about 91 s); fast (16.6 to 17.4 s) in all 7 runs outside the kit.
+- In the 34 s mode, exactly the ten layers whose `ffn_down` and `attn_v` are Q6_K take about 2.3 s instead of 0.7 s
+  (checked against the file's tensor table). In the 91 s mode every layer is slow. The one-token decode leg reads 59 to
+  60 s in every run, so the decode kernels are not affected.
+- Ruled out: forked nodes surviving check 8 (none), other processes (under 5%), anything attaching to the probe JVM
+  (none), a different command line, environment, class path, lane width or thread count (the shell runs use the same).
+- Thread dumps in a slow window: the main thread waits at the pool's barrier while most workers are parked, so the
+  matmul tasks themselves take longer.
+- JFR from the window's start, one slow run against one fast run:
+  - slow: about 506 GB allocated in 30 s, all but a few percent `float[]` and `Float128Vector`, about 290 collections;
+    90% of samples in `FloatVector.lanewiseTemplate`, inlined into the compiled `CpuIntegerGemm.fourRows32` at its
+    four float accumulator updates; `fourRows16`'s C2 code 17,912 bytes; `class_check` traps in
+    `ByteVector.lanewiseShiftTemplate`, and the Vector API's Java fallback `ByteVector.uOpTemplate` running;
+  - fast: 13.6 GB, `fourRows16`'s C2 code 6,640 bytes; no such traps.
+- **Conclusion.** In some JVMs C2 compiles the batched integer matmul's kernels so that the float vector accumulators
+  are boxed: every vector add, subtract and multiply allocates, and the matmul is 3x to 6x slower. This is the
+  engine's kernels under the JIT, not the kit's code; the kit's runs only get it more often, for a reason not found
+  (the remaining difference is timing). The checks are unaffected (the same results, slower). None of the reference
+  run's server-side CPU prefill readings shows it: their values match earlier runs and their spreads are small.
+- Not tried: a deterministic reproducer, or any kernel change. Both are engine work on the CPU prefill hot path,
+  and that needs a decision (below).
+
+**Cosmetic kit defects found in review** (step 9 owns kit defects; maintainer-side output only, so fixing them later
+does not change what a tester's run at `80ec949e` returns):
+- The calibration note ends in "`;.`".
+- `README-row.md` has two cells; the README's table has four.
+- The coverage table does not say which GPU backend its GPU rows ran on.
+
+**Tests and checks.** No code changed. `check-plan-thresholds.sh` passes after the edits.
+
+**Out-of-tier changes:** none.
+
+**Exit criteria after this step:** `ingest` and the reference run ticked. Four of thirteen are ticked. Criterion 3's
+note is updated: its re-score waits for the decision below, because a kernel fix changes `cpu.live.tinyllama`'s time.
+
+**Decision for the owner:** the prefill kernels' JIT fragility. Tier 02E, which owned CPU kernel work, is complete, and
+the plan says no later tier owns it.
+- (a) **Fix it now as an out-of-tier change recorded here** (as the CPU decode batch was on 2026-10-29). The work:
+  - test first: a reproducer that gets the slow compile on demand, plus an allocation guard on the kernel after warm-up;
+  - then the kernel change;
+  - then the CPU prefill gate on the hot path.
+  Testers' runs at `80ec949e` stay comparable with this reference, because a fix changes timings, not correctness
+  readings.
+- (b) Record it in `INVENTORY.md` as a known engine issue and leave the kernels alone for now.
+- **Recommendation: (a).** Any JVM running CPU prefill at window width can get the slow compile, up to 5.5x slower,
+  and nothing in production would show why.
+- **Owner decision 2026-11-04: (a).** Carried out in the next record.
+
+**Owed to the owner:** the decision above; the testers' runs at `80ec949e` (Windows, macOS, a 256-bit integer host),
+which need not wait for it.
+
+**Next for the executor:** on (a), the reproducer test first. Then criterion 3's `quick` re-score, step 9 as zips
+arrive, and the close (the full unit suite, `mvn verify -pl juno-master`, the cross-surface table).
+
+### 2026-11-04: CPU batched matmul without calls on loop-carried vectors (owner decision (a); out-of-tier change)
+
+**Owner decision 2026-11-04: (a)**, fix the prefill kernels' JIT fragility now, test first. Readings:
+`docs/perf-compare/20261104T234612Z-cpu-prefill-jit-fix/` (unpinned).
+
+**What the slow compile is.**
+- C2's inlining trees for the slow and the fast compile of `fourRows32` are the same. Every vector call is inlined,
+  and the type profiles are monomorphic on `Float128Vector` (`PrintInlining` in two kit runs, one slow and one fast).
+- The difference is binding. The four accumulators `f0` to `f3` are loop-carried, and while C2 parses a loop it types
+  them only as `FloatVector`. So `f0.add`, `f0.sub` and `f0.lane` are bound to `Float128Vector` through the JDK's
+  shared type profile, behind a guard, and in some JVMs the accumulators were boxed.
+- The profile is shared by every caller of the same JDK methods. In a fresh JVM the old kernels allocate about 8.5 GB
+  per call every time once the kernels' own lane operations have run hot at 128 bits and then a few thousand times at
+  64 and 256 bits. Without that they never did, under nine JIT regimes.
+- Juno itself runs other shapes: the Q8_0 dequantizer (64-bit bytes to 256-bit ints and floats), and the float kernels
+  at `SPECIES_PREFERRED`, which is wider than 128 bits on AVX2 and AVX-512 hosts.
+- Which shape reached the profile in the kit's probe JVM is not identified.
+
+**Tests first.**
+- `CpuGemmProfilePollutionTest` (new) runs `CpuGemmProfilePollutionMain` in a child JVM. The child runs the lane
+  operations at 128 bits, then at 64 and 256 bits, then four prefill-width layers through `CpuIntegerGemm`, and the
+  test asserts under 64 KB per call. Seen failing first: the child read 8,494,463,032 bytes per call on the old kernels.
+- `CpuKernelVectorEscapeTest` gains a check from `CpuIntegerGemm`'s bytecode: no Vector API call has a reassigned
+  vector local as its receiver. It also asserts the class has local variable tables, so it cannot pass vacuously.
+  On the old class it finds 48 calls; on the new one, none.
+- A first attempt with the 256-bit kernels as the other shape was dropped. On this 128-bit host they run the Vector
+  API's portable form, which also disables whole intrinsics. No kernel code can avoid that, and the two widths never
+  share a production JVM.
+
+**The change** (`CpuIntegerGemm`):
+- in `fourRows16` and `fourRows32`, `f0 = term.add(f0)` and `f0 = o.mul(x).add(f0)`, with `o` negated once per
+  sub-block;
+- the lanes read through `zero(F).add(f0)` into `TileScratch.lanes`;
+- `tile`'s Javadoc gives the reason.
+- Every output is bit for bit the earlier form's: addition commutes, `a - o*x` is `(-o)*x + a` exactly, and a zero's
+  sign is absorbed by the output's sum. The parity tests pass unchanged, and greedy replies are identical in every
+  A/B run.
+- Two forms were measured and dropped:
+  - accumulators in a `float[]` round trip: 1.13x the time;
+  - the offset negated per row: 1.04x in the reproducer, 0.955x on TinyLlama's server path.
+
+**Evidence.**
+- Reproducer: the changed kernels allocate 1,288 bytes per call after the same operations (old: 8.5 to 14.9 GB).
+- Kit: `cpu.live.tinyllama` was fast in 20 runs of 20 on the changed builds, check 9's window 17.8 to 21.6 s. The old
+  build was slow in 6 of 10.
+- Unpinned server-path A/B at 512 on the final form: TinyLlama about 1.03x and Qwen2.5-3B about 1.03x, with greedy
+  replies identical.
+
+**Tests.**
+- The full unit suite, every module of `CLAUDE.md`'s list, run on the form before the hoisted negation: 2,490 tests.
+  Two failures in `node`, `GpuAttentionHandlerParityTest` and `PrefillReserveDeviceTest`, both CUDA device-memory
+  accounting with another process on the GPU; both pass alone (2 of 2, 3 of 3) and passed in the morning's
+  reference run.
+- After the final change: the kernel and escape tests (74, 0 failures) and the new pollution test (1, 0 failures).
+- `mvn verify -pl juno-master` is not run; it is owed at the close.
+
+**Gates.**
+- `CLAUDE.md` asks for `compare-lora.sh` on a MatVec change. It runs in the pinned gate, each tree's own script.
+- Execution rule 7, the threshold proposed for the new cost: CPU pp B/A >= 0.95 at `n_prompt` 512 and 128 on every
+  sweep model; tg B/A >= 0.95 (decode is unchanged; a control); allocation per token <= 1.10x; GC pause; greedy
+  output identical in every run; LoRA training time per pass B/A <= 1.0526 and playback >= 0.80.
+- It is a no-regression gate at 0.95, so it is scored pinned, and the run is the owner's:
+  `dist/cpu-prefill-jit-gate/` (baseline `80ec949e`, built from this tree with `CpuIntegerGemm.java` and its test taken
+  from `HEAD` by `git show`).
+- A miss is an owner decision: robustness against the fast path's speed.
+
+**Not changed, recorded.**
+- The decode kernels (`CpuIntegerKernels`, the decode variants), the attention head (`GqaVectorHead`) and the 256-bit
+  forms make the same kind of calls on loop-carried vectors.
+- In the reproducer the unchanged decode matvec allocated 0.67 to 3.7 MB per call in some JVMs after the same
+  operations, and 49 bytes in others. No real run has shown it.
+- Decode is the generation hot path; a change there is a further decision.
+
+**Docs:** `CHANGELOG.md` (Session 129), `docs/agent-arch.txt`. Nothing user-facing changes, so `docs/howto.md` and
+`README.md` are unchanged.
+
+**Out-of-tier changes:** `node` (`CpuIntegerGemm`, two tests and the pollution test's child), by owner decision (a).
+
+**Owed to the owner, in order:**
+1. The pinned gate: `bash dist/cpu-prefill-jit-gate/wait-and-run.sh`, about four and a half hours with the machine
+   left alone. READY is written.
+2. Commit the change (after the gate, or before it; the gate checks that the tree's jar is the candidate).
+3. The testers' runs. `80ec949e` stays the commit the reference run names. A tester at a later commit needs a new
+   reference run.
+
+**Next for the executor:** read the gate's log and publish it. Then criterion 3's `quick` re-score on the changed
+build, step 9 as zips arrive, and the close (`mvn verify -pl juno-master`, the cross-surface table).
+
+### 2026-11-05: the CPU batched matmul's pinned gate met (owner run)
+
+**Run.** `bash dist/cpu-prefill-jit-gate/wait-and-run.sh`, owner, 2026-11-05 04:08Z to 09:11Z, `GATE: PASS`. Published:
+`docs/perf-compare/20261105T040822Z-cpu-prefill-jit-gate/` (log, scripts, per-run results, scrubbed). Baseline
+`15083b9c320c1c36` (`80ec949e`), candidate `ea700f227c83b911` (the final form); every CPU run `clock_pinned: true`.
+
+**Readings against the thresholds proposed on 2026-11-04** (medians of three, B/A unrounded):
+- CPU pp at `n_prompt` 512: 0.965 (TinyLlama), 1.031, 0.999, 1.040, against `>= 0.95`. Met. TinyLlama's three runs per
+  side overlap (31.32 to 33.43 against 31.83 to 33.59).
+- CPU pp at 128: 1.004 to 1.037; tg at 128: 1.003 to 1.015, against `>= 0.95`. Met.
+- Allocation per token in the recording at 128: 0.984x to 0.995x, against `<= 1.10x`. Met.
+- GC pause in the token span: median 0.0 ms on every model of both builds (one candidate run on Qwen2.5-3B read
+  5.04 ms). Met.
+- Greedy output: equal in 3 of 3 runs on every model at both lengths. Met.
+- LoRA: training time per pass 1.000 (GPU) and 1.001 (CPU), against `<= 1.0526`; playback 0.977 and 1.006, against
+  `>= 0.80`. Met.
+
+**Read with care.** Five generation runs had their JFR decode reading withheld by the harness's clock check (token
+span 28 to 56 ms short against the engine clock; the clock source is `hpet`), the gate log's `na`. The only gated one
+is Mistral 7B's tg at 128, whose candidate median is the lower of two readings; its request-timed tg reads 1.010. None
+of these server JVMs got the slow compile on the baseline, so the gate measures the change's cost on the fast path
+only; what it buys is in `20261104T234612Z-cpu-prefill-jit-fix/`.
+
+**Docs:** `CHANGELOG.md` Session 129 gains the pinned reading; the fix's INDEX and the `docs/perf-compare/README.md`
+row point to the gate.
+
+**Owed to the owner:** commit the change (the gate is met). The testers' runs at `80ec949e` stand.
+
+**Next for the executor:** criterion 3's `quick` re-score on the changed build, unpinned, on this host.
+
+### 2026-11-05: criterion 3 re-scored (`quick` on the corrected catalog and the changed kernels)
+
+**Run.** `./juno-kit.sh --suite quick --yes --models-dir models --skip-build`, 15:54Z to 16:36Z, kit jar
+`448867f1d5a028c3` (`80ec949e` plus the uncommitted `CpuIntegerGemm` change). Published:
+`docs/perf-compare/20261105T155413Z-kit-quick-rescore/`. Unpinned; the reading is the kit's own estimate.
+
+**Result.** First estimate 1904 / 2240 / 2688 s (low / point / high), actual 2518 s from the estimate to the zip:
+**0.890x**, inside the 0.65x to 1.35x band and inside the estimate's range. The estimate was refined during the run.
+Criterion 3 ticked. All 18 probes PASS or DONE.
+
+**Read with care.**
+- `cpu.live.tinyllama` took 249 s (2026-11-03: 451 s). Check 9's batched 573-token window read 17.6 s, so the slow
+  compile did not occur.
+- Two throughput probes (`cpu.throughput.tinyllama.512`, `gpu.throughput.tinyllama.2048`) were re-run twice by the
+  noise rule: other processes used 6% to 9% of the CPU. That added about 310 s; without it the reading would be
+  about 1.01x.
+- Other processes' share was about 5.8% per probe (median), against about 2% on 2026-11-03. Nothing else was
+  started; the editor and its extensions were open.
+- Two catalog costs disagree with both runs and offset each other: `gpu.residency.tinyllama` 20 s against 46 and 48 s,
+  `gpu.long-prompt.tinyllama` 90 s against 44 s. Not changed; a change now would move the estimate this criterion
+  scored.
+
+**Exit criteria now ticked:** 5 of 13 (estimate, probe catalog, `ingest`, rule 10, docs).
+
+### 2026-11-05: the unit suite and the integration tests on the final kernel form
+
+The full suite had last run on the form before the hoisted negation (2026-11-04, two environmental GPU failures),
+and `mvn verify -pl juno-master` was owed. Run in order on this host, nothing else running:
+
+| Command | Result |
+|---|---|
+| `mvn -fae test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player,juno-kit` | 12 modules, 2,607 tests, 0 failures, 0 errors, 53 skipped; 1 h 5 min. `GpuAttentionHandlerParityTest` and `PrefillReserveDeviceTest` pass (the GPU was idle) |
+| `mvn -q install -DskipTests` | success |
+| `mvn verify -pl juno-master` | 13 tests and 20 integration tests (`ThreeNodeClusterIT`, `TensorParallelClusterIT`, `InProcessClusterIT`, `UnsupportedArchitectureClusterIT`), 0 failures; 3 min 17 s |
+
+Criterion 11 ticked; it is re-run at the close if step 9 changes code. **Exit criteria now ticked:** 6 of 13.
+
+**Owed to the owner:** commit the CPU kernel change and today's records. The testers' runs at `80ec949e` stand.
+
+**Next for the executor:** step 9 as testers' zips arrive (`ingest` each against the reference run; fix what they
+expose, including the three cosmetic kit-output defects noted in the reference run's review). Then the close:
+the cross-surface table, and the suite and `mvn verify -pl juno-master` again if code changed.

@@ -1,0 +1,651 @@
+Juno hardware validation kit 0.1.2, Juno 80ec949ebc9796be4c45feda2865396f44d511a3
+Suite all, started 20261104T043255Z, finished 20261104T173924Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+
+env                            DONE     0:01
+calibration                    DONE     0:17, 2 attempts, attempt 1 re-run: other processes used 6% of the CPU;.
+    q4k_decode_ms_per_call                               median 0.9065, min 0.8644, max 0.9312 ms (n=5, spread 7.4%)
+cpu.live.tinyllama             PASS     4:54
+    ok   1. hello greeting: "Hi, how are you doing today?"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "Yes, the answer is 4."
+    ok   4. greedy determinism: "I'm glad to hear that you" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "I'm glad to hear that you found my"
+    ok   8. tensor-parallel greedy determinism: "I'm glad to hear that you" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=573 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+cpu.throughput.tinyllama.128   DONE     0:59
+    prefill t/s                                          median 35.13, min 34.56, max 35.19 t/s (n=3, spread 1.8%)
+    generation t/s                                       median 12.47, min 12.37, max 12.64 t/s (n=3, spread 2.2%)
+    generation allocation per token in recording         median 407753, min 390209, max 453483 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.tinyllama.512   DONE     2:08
+    prefill t/s                                          median 33.67, min 32.42, max 33.96 t/s (n=3, spread 4.6%)
+    generation t/s                                       median 12.62, min 12.35, max 12.73 t/s (n=3, spread 3.0%)
+    generation allocation per token in recording         median 418040, min 400491, max 448405 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.live.tinyllama             PASS     1:38, GPU 2748 MiB
+    ok   1. hello greeting: "I'm glad to hear that you enjoyed the article. I hope it was helpful in understanding the"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "Yes, 2 plus 2 is equal to 4"
+    ok   4. greedy determinism: "I'm glad to hear that you" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "I'm glad to hear that you enjoyed the"
+    ok   8. tensor-parallel greedy determinism: "I'm glad to hear that you" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.throughput.tinyllama.512   DONE     0:11, GPU 1134 MiB
+    prefill t/s                                          median 2802, min 2694, max 2820 t/s (n=3, spread 4.5%)
+    generation t/s                                       median 168.51, min 167.40, max 173.13 t/s (n=3, spread 3.4%)
+    generation allocation per token in recording         median 0.0000, min 0.0000, max 0.0000 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.tinyllama.2048  DONE     0:16, GPU 1666 MiB
+    prefill t/s                                          median 2378, min 2334, max 2378 t/s (n=3, spread 1.8%)
+    generation t/s                                       median 168.94, min 167.63, max 173.84 t/s (n=3, spread 3.7%)
+    generation allocation per token in recording         median 0.0000, min 0.0000, max 0.0000 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.residency.tinyllama        PASS     0:46, GPU 2742 MiB
+    ok   region off: every request answers, the last equals the first, shorter ones are its opening: 4 requests
+    ok   region on: every request answers, the last equals the first, shorter ones are its opening: 4 requests
+    ok   region on: activation or decline reported
+    ok   greedy output identical with the region on and off: identical over 32 tokens
+    ok   device memory does not grow per request
+    ok   pipeline cluster, region on: the forked nodes answer: 150 characters
+    ok   pipeline cluster: no node JVM left: 0 node JVMs left
+    ok   tensor cluster, region on: the forked nodes answer: 150 characters
+    ok   tensor cluster: no node JVM left: 0 node JVMs left
+gpu.packed-kquant.tinyllama.static PASS     0:15, GPU 1154 MiB
+    ok   prompt of about 512 tokens: 512 prompt tokens
+    ok   exactly 512 tokens generated: 512 generated
+    ok   one stream piece per generated token: 512 pieces
+    ok   streamed and unstreamed greedy text identical: 1023 characters
+    ok   packed weights resident and the tiled kernel loaded, no dequantizing fallback: Tiled K-quant GEMM kernels loaded from /cab/ml/juno/node/kquant_gemm.ptx (Q4_K, Q5_K, Q6_K)
+gpu.packed-kquant.tinyllama.continuous PASS     1:14, GPU 960 MiB
+    ok   prompt of about 512 tokens: 512 prompt tokens
+    ok   exactly 512 tokens generated: 512 generated
+    ok   one stream piece per generated token: 512 pieces
+    ok   streamed and unstreamed greedy text identical: 1023 characters
+    ok   packed weights resident and the tiled kernel loaded, no dequantizing fallback: Tiled K-quant GEMM kernels loaded from /cab/ml/juno/node/kquant_gemm.ptx (Q4_K, Q5_K, Q6_K)
+cpu.live.qwen2.5-3b            PASS     8:26
+    ok   1. hello greeting: "Hello! How can I assist you today?"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "2 plus 2 is equal to 4."
+    ok   4. greedy determinism: "Hello! How can I assist you today" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! How can I assist you today?"
+    ok   8. tensor-parallel greedy determinism: "Hello! How can I assist you today" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=560 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+cpu.live.phi-3.5-mini          PASS     14:27
+    ok   1. hello greeting: ""Hello!" is a common greeting in English-speaking contexts. It's used"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "2 plus 2 equals to the sum of two and two"
+    ok   4. greedy determinism: "Hello! I'm Phi," twice
+    ok   5. multi-turn context: 76 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! I'm Phi, an A"
+    ok   8. tensor-parallel greedy determinism: "Hello! I'm Phi," twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=583 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+cpu.live.mistral-7b            PASS     19:47
+    ok   1. hello greeting: "Hi! How can I help you today?"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "2 plus 2 is 4."
+    ok   4. greedy determinism: "Hi! How can I help you today" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hi there! How can I help you today?"
+    ok   8. tensor-parallel greedy determinism: "Hi! How can I help you today" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=561 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+cpu.live.qwen3-1.7b            PASS     5:39
+    ok   1. hello greeting: "Okay, the user said "hello". I need to respond in a friendly and helpful way"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "Okay, the user is asking "What is"
+    ok   4. greedy determinism: "Okay, the user said "" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Okay, the user said "hello"."
+    ok   8. tensor-parallel greedy determinism: "Okay, the user said "" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=560 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+gpu.live.qwen2.5-3b            PASS     2:29, GPU 6960 MiB
+    ok   1. hello greeting: "Hello! How can I assist you today?"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "2 plus 2 is equal to 4."
+    ok   4. greedy determinism: "Hello! How can I assist you today" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! How can I assist you today?"
+    ok   8. tensor-parallel greedy determinism: "Hello! How can I assist you today" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.phi-3.5-mini          PASS     3:25, GPU 7720 MiB
+    ok   1. hello greeting: "Hello! I'm Phi, Microsoft's language model. How can I help you today"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "The sum of 2 plus 2 is a basic arithmetic"
+    ok   4. greedy determinism: "Hello! I'm Phi," twice
+    ok   5. multi-turn context: 76 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! I'm Phi, Microsoft'"
+    ok   8. tensor-parallel greedy determinism: "Hello! I'm Phi," twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.mistral-7b            PASS     5:02, GPU 7306 MiB
+    ok   1. hello greeting: "Hi! How can I help you today?"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "2 plus 2 is 4."
+    ok   4. greedy determinism: "Hi! How can I help you today" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hi! How can I help you today?"
+    ok   8. tensor-parallel greedy determinism: "Hi! How can I help you today" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.qwen3-1.7b            PASS     2:09, GPU 5328 MiB
+    ok   1. hello greeting: "Okay, the user said "hello". I need to respond appropriately. Since they're starting"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "Okay, the user is asking "What is"
+    ok   4. greedy determinism: "Okay, the user said "" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Okay, the user said "hello"."
+    ok   8. tensor-parallel greedy determinism: "Okay, the user said "" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+consistency.tinyllama          PASS     1:37
+    ok   local mode refuses architecture qwen35 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture qwen35, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture qwen35, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture gemma4 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture gemma4, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture gemma4, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture mistral3 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture mistral3, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture mistral3, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture minimax-m2 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture minimax-m2, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture minimax-m2, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode loads a supported model and exits cleanly: exit 0
+    ok   static batching, cpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: OpenAI round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: native round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: OpenAI round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: native round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: a session request after batched stateless traffic equals single-request output: single 'The capital of France is Paris.', session 'The capital of France is Paris.'
+    ok   static batching, cpu: no prefix-cache hit for stateless traffic: 0 hits, 1 lookups
+    ok   static batching, cpu: native streaming joins to the native blocking answer: blocking 'Red.', streamed 'Red.'
+    ok   continuous: a session request after the same stateless request equals it: stateless 'The capital of France is Paris.', session 'The capital of France is Paris.'
+gpu.consistency.tinyllama      PASS     0:13, GPU 934 MiB
+    ok   static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: OpenAI round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: native round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: OpenAI round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: native round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: a session request after batched stateless traffic equals single-request output: single 'The capital of France is Paris.', session 'The capital of France is Paris.'
+    ok   static batching, gpu: no prefix-cache hit for stateless traffic: 0 hits, 1 lookups
+    ok   static batching, gpu: native streaming joins to the native blocking answer: blocking 'Red.', streamed 'Red.'
+grammar.tinyllama              PASS     1:37, GPU 4066 MiB
+    ok   CLI: an unsupported JSON Schema keyword fails closed: exit 1
+    ok   CLI: --grammar-file and --json-schema-file together fail closed: exit 1
+    ok   OpenAI: json_schema answer is parseable JSON with a boolean ok: HTTP 200: {
+  "ok": true}
+    ok   OpenAI: json_object answer is a parseable JSON object: HTTP 200: {
+  "booleaan": true,
+  "ok": true,
+  "message": "Successfully retrieved data from the API."}
+    ok   OpenAI: x_juno_grammar answers yes or no: HTTP 200: yes
+    ok   OpenAI: x_juno_grammar with response_format is HTTP 400 naming x_juno_grammar
+    ok   OpenAI: an unsupported JSON Schema keyword is HTTP 400 naming it
+    ok   JFR: at least 3 constrained requests, response_format server: 3 events in 1 recordings
+    ok   --grammar-file: an unconstrained request answers yes or no: HTTP 200: yes
+    ok   JFR: at least 1 constrained request, --grammar-file server: 1 events in 1 recordings
+    ok   --json-schema-file: an unconstrained request is parseable JSON with a boolean ok: HTTP 200: {
+  "ok": true}
+    ok   JFR: at least 1 constrained request, --json-schema-file server: 1 events in 1 recordings
+    ok   LoRA overlay with 2 parallel: both json_schema answers parseable: HTTP 200: {
+  "ok": true} / HTTP 200: {
+  "ok": true}
+    ok   JFR: at least 2 constrained requests, LoRA overlay with 2 parallel: 2 events in 1 recordings
+tools.qwen2.5-3b               PASS     3:09, GPU 3814 MiB
+    ok   ChatML: tool_choice required returns a get_weather call with JSON arguments: HTTP 200: ; call {"name":"get_weather","arguments":"{\"city\":\"Boston\"}"}
+    ok   ChatML: a named tool_choice returns a get_weather call: HTTP 200: ; call {"name":"get_weather","arguments":"{\"city\":\"Boston\"}"}
+    ok   ChatML: tool_choice none returns no tool call: HTTP 200: Hi
+    ok   ChatML: a role=tool turn continues with text: HTTP 200: The current temperature in Boston is 72 degrees Fahrenheit.
+    ok   ChatML: tools with response_format json_object is HTTP 400
+    ok   ChatML: tools with x_juno_grammar is HTTP 400
+    ok   ChatML: streamed tool_choice required carries the tool call: HTTP 200, 2 chunks, call streamed
+    ok   JFR: at least 2 constrained requests, ChatML server: 3 events
+    ok   TinyLlama template: tools are HTTP 400 naming the template
+    ok   TinyLlama template with a LoRA overlay: tools are HTTP 400 naming the template
+    ok   ChatML with 2 parallel: both required requests return a get_weather call
+context-policy.phi-3.5-mini    PASS     3:04:58
+    ok   static: with x_juno_context_shift every one of 3 turns answers: 3 turns
+    ok   static: a request held open past the limit shifts during decode: HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096
+    ok   static: without the opt-in a later turn fails at the limit, naming the original context length
+    ok   continuous: with x_juno_context_shift every one of 3 turns answers: 3 turns
+    ok   continuous: a request held open past the limit shifts during decode: HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096
+    ok   continuous: without the opt-in a later turn fails at the limit, naming the original context length
+    ok   static, --context-shift on: the crossing turn answers by default and fails with an explicit false: default HTTP 200, explicit false HTTP 500
+gpu.context-policy.phi-3.5-mini PASS     4:14, GPU 5036 MiB
+    ok   static: with x_juno_context_shift every one of 3 turns answers: 3 turns
+    ok   static: a request held open past the limit shifts during decode: HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096
+    ok   static: without the opt-in a later turn fails at the limit, naming the original context length
+    ok   continuous: with x_juno_context_shift every one of 3 turns answers: 3 turns
+    ok   continuous: a request held open past the limit shifts during decode: HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096
+    ok   continuous: without the opt-in a later turn fails at the limit, naming the original context length
+    ok   static, --context-shift on: the crossing turn answers by default and fails with an explicit false: default HTTP 200, explicit false HTTP 500
+long-prompt.tinyllama          PASS     10:26
+    ok   static 128: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   static 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   static 128: streamed text equals non-streamed: 58 characters
+    ok   static 512: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   static 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   static 512: streamed text equals non-streamed: 58 characters
+    ok   static 2048: HTTP 200, non-empty answer: HTTP 200: The orchard in district 14 was painted white.
+    ok   static 2048: prompt tokens within 10% of 2024: 2024 prompt tokens
+    ok   static 2048: streamed text equals non-streamed: 45 characters
+    ok   continuous 128: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   continuous 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   continuous 128: streamed text equals non-streamed: 58 characters
+    ok   continuous 512: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   continuous 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   continuous 512: streamed text equals non-streamed: 58 characters
+    ok   continuous 2048: HTTP 200, non-empty answer: HTTP 200: The orchard in district 14 was painted white.
+    ok   continuous 2048: prompt tokens within 10% of 2024: 2024 prompt tokens
+    ok   continuous 2048: streamed text equals non-streamed: 45 characters
+long-prompt.mistral-7b         PASS     1:04:24
+    ok   static 128: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   static 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   static 128: streamed text equals non-streamed: 59 characters
+    ok   static 512: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   static 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   static 512: streamed text equals non-streamed: 59 characters
+    ok   static 2048: HTTP 200, non-empty answer: HTTP 200:  The orchard in district 7 was painted white in the year 1
+    ok   static 2048: prompt tokens within 10% of 2048: 2044 prompt tokens
+    ok   static 2048: streamed text equals non-streamed: 58 characters
+    ok   continuous 128: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   continuous 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   continuous 128: streamed text equals non-streamed: 59 characters
+    ok   continuous 512: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   continuous 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   continuous 512: streamed text equals non-streamed: 59 characters
+    ok   continuous 2048: HTTP 200, non-empty answer: HTTP 200:  The orchard in district 7 was painted white in the year 1
+    ok   continuous 2048: prompt tokens within 10% of 2048: 2044 prompt tokens
+    ok   continuous 2048: streamed text equals non-streamed: 58 characters
+gpu.long-prompt.tinyllama      PASS     0:44, GPU 1144 MiB
+    ok   static 128: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   static 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   static 128: streamed text equals non-streamed: 58 characters
+    ok   static 512: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   static 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   static 512: streamed text equals non-streamed: 58 characters
+    ok   static 2048: HTTP 200, non-empty answer: HTTP 200: The orchard in district 14 was painted white.
+    ok   static 2048: prompt tokens within 10% of 2024: 2024 prompt tokens
+    ok   static 2048: streamed text equals non-streamed: 45 characters
+    ok   continuous 128: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   continuous 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   continuous 128: streamed text equals non-streamed: 58 characters
+    ok   continuous 512: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   continuous 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   continuous 512: streamed text equals non-streamed: 58 characters
+    ok   continuous 2048: HTTP 200, non-empty answer: HTTP 200: The orchard in district 14 was painted white.
+    ok   continuous 2048: prompt tokens within 10% of 2024: 2024 prompt tokens
+    ok   continuous 2048: streamed text equals non-streamed: 45 characters
+gpu.long-prompt.mistral-7b     PASS     1:33, GPU 5520 MiB
+    ok   static 128: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   static 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   static 128: streamed text equals non-streamed: 59 characters
+    ok   static 512: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   static 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   static 512: streamed text equals non-streamed: 59 characters
+    ok   static 2048: HTTP 200, non-empty answer: HTTP 200:  The orchard in district 7 was painted white in the year 1
+    ok   static 2048: prompt tokens within 10% of 2048: 2044 prompt tokens
+    ok   static 2048: streamed text equals non-streamed: 58 characters
+    ok   continuous 128: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   continuous 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   continuous 128: streamed text equals non-streamed: 59 characters
+    ok   continuous 512: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   continuous 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   continuous 512: streamed text equals non-streamed: 59 characters
+    ok   continuous 2048: HTTP 200, non-empty answer: HTTP 200:  The orchard in district 7 was painted white in the year 1
+    ok   continuous 2048: prompt tokens within 10% of 2048: 2044 prompt tokens
+    ok   continuous 2048: streamed text equals non-streamed: 58 characters
+cpu.hot-path.tinyllama-1.1b    PASS     1:39
+    ok   threads 4: the server runs CPU matmuls on 4 threads: logged
+    ok   threads 4: a short greedy request decodes: HTTP 200: 1. Red
+2. Blue
+3. Green
+    ok   threads 4: a prompt of about 512 tokens prefills and answers: 521 prompt tokens; HTTP 200: The bridge in note
+    ok   threads 12: the server runs CPU matmuls on 12 threads: logged
+    ok   threads 12: a short greedy request decodes: HTTP 200: 1. Red
+2. Blue
+3. Green
+    ok   threads 12: a prompt of about 512 tokens prefills and answers: 521 prompt tokens; HTTP 200: The bridge in note
+    ok   greedy replies identical at 4 and 12 threads: identical
+cpu.hot-path.qwen2.5-3b        PASS     4:07
+    ok   threads 4: the server runs CPU matmuls on 4 threads: logged
+    ok   threads 4: a short greedy request decodes: HTTP 200: Sure, here are three colors:
+
+1. Red
+2. Blue
+3
+    ok   threads 4: a prompt of about 512 tokens prefills and answers: 518 prompt tokens; HTTP 200: The bridge in note
+    ok   threads 12: the server runs CPU matmuls on 12 threads: logged
+    ok   threads 12: a short greedy request decodes: HTTP 200: Sure, here are three colors:
+
+1. Red
+2. Blue
+3
+    ok   threads 12: a prompt of about 512 tokens prefills and answers: 518 prompt tokens; HTTP 200: The bridge in note
+    ok   greedy replies identical at 4 and 12 threads: identical
+cpu.hot-path.phi-3.5-mini      PASS     5:29
+    ok   threads 4: the server runs CPU matmuls on 4 threads: logged
+    ok   threads 4: a short greedy request decodes: HTTP 200: 1. Red
+2. Blue
+3. Yellow
+    ok   threads 4: a prompt of about 512 tokens prefills and answers: 511 prompt tokens; HTTP 200: The bridge in note
+    ok   threads 12: the server runs CPU matmuls on 12 threads: logged
+    ok   threads 12: a short greedy request decodes: HTTP 200: 1. Red
+2. Blue
+3. Yellow
+    ok   threads 12: a prompt of about 512 tokens prefills and answers: 511 prompt tokens; HTTP 200: The bridge in note
+    ok   greedy replies identical at 4 and 12 threads: identical
+cpu.hot-path.mistral-7b        PASS     9:06
+    ok   threads 4: the server runs CPU matmuls on 4 threads: logged
+    ok   threads 4: a short greedy request decodes: HTTP 200:  1. Red
+2. Blue
+3. Yellow
+    ok   threads 4: a prompt of about 512 tokens prefills and answers: 510 prompt tokens; HTTP 200:  The bridge in district
+    ok   threads 12: the server runs CPU matmuls on 12 threads: logged
+    ok   threads 12: a short greedy request decodes: HTTP 200:  1. Red
+2. Blue
+3. Yellow
+    ok   threads 12: a prompt of about 512 tokens prefills and answers: 510 prompt tokens; HTTP 200:  The bridge in district
+    ok   greedy replies identical at 4 and 12 threads: identical
+quality.tinyllama-1.1b         PASS     7:37
+    mean NLL, integer kernels                            median 2.4561, min 2.4561, max 2.4561 nats (n=1)
+    mean NLL, float-activation kernels                   median 2.4557, min 2.4557, max 2.4557 nats (n=1)
+    argmax agreement, first 512 positions                median 99.02, min 99.02, max 99.02 % (n=1)
+    ok   integer-kernel NLL at most 1.01x the float-activation NLL: ratio 1.00017 (2.45609 over 2.45566)
+quality.qwen2.5-3b             PASS     23:47
+    mean NLL, integer kernels                            median 1.6966, min 1.6966, max 1.6966 nats (n=1)
+    mean NLL, float-activation kernels                   median 1.6977, min 1.6977, max 1.6977 nats (n=1)
+    argmax agreement, first 512 positions                median 100.00, min 100.00, max 100.00 % (n=1)
+    ok   integer-kernel NLL at most 1.01x the float-activation NLL: ratio 0.99935 (1.69656 over 1.69766)
+quality.phi-3.5-mini           PASS     1:09:48
+    mean NLL, integer kernels                            median 1.3611, min 1.3611, max 1.3611 nats (n=1)
+    mean NLL, float-activation kernels                   median 1.3583, min 1.3583, max 1.3583 nats (n=1)
+    argmax agreement, first 512 positions                median 99.41, min 99.41, max 99.41 % (n=1)
+    ok   integer-kernel NLL at most 1.01x the float-activation NLL: ratio 1.00209 (1.36110 over 1.35826)
+quality.mistral-7b             PASS     47:06
+    mean NLL, integer kernels                            median 1.5301, min 1.5301, max 1.5301 nats (n=1)
+    mean NLL, float-activation kernels                   median 1.5289, min 1.5289, max 1.5289 nats (n=1)
+    argmax agreement, first 512 positions                median 99.61, min 99.61, max 99.61 % (n=1)
+    ok   integer-kernel NLL at most 1.01x the float-activation NLL: ratio 1.00080 (1.53013 over 1.52891)
+cpu.throughput.tinyllama-1.1b.2048 DONE     7:38
+    prefill t/s                                          median 29.54, min 28.86, max 29.55 t/s (n=3, spread 2.3%)
+    generation t/s                                       median 11.38, min 11.25, max 11.74 t/s (n=3, spread 4.2%)
+    generation allocation per token in recording         median 418187, min 417523, max 447461 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.tinyllama-1.1b.128 DONE     0:10, GPU 992 MiB
+    prefill t/s                                          median 1936, min 1838, max 2023 t/s (n=3, spread 9.6%)
+    generation t/s                                       median 169.12, min 166.37, max 172.59 t/s (n=3, spread 3.7%)
+    generation allocation per token in recording         median 0.0000, min 0.0000, max 0.0000 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.qwen2.5-3b.128  DONE     2:33
+    prefill t/s                                          median 12.47, min 12.46, max 12.57 t/s (n=3, spread 0.9%)
+    generation t/s                                       median 4.4362, min 4.3725, max 4.4604 t/s (n=3, spread 2.0%)
+    generation allocation per token in recording         median 1365683, min 1357442, max 1391072 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.qwen2.5-3b.512  DONE     5:44
+    prefill t/s                                          median 12.27, min 12.02, max 12.32 t/s (n=3, spread 2.5%)
+    generation t/s                                       median 4.4389, min 4.0558, max 4.4817 t/s (n=3, spread 9.6%)
+    generation allocation per token in recording         median 1360261, min 1343163, max 1371707 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.qwen2.5-3b.2048 DONE     19:31
+    prefill t/s                                          median 11.12, min 11.07, max 11.46 t/s (n=3, spread 3.5%)
+    generation t/s                                       median 4.4955, min 4.4815, max 4.5283 t/s (n=3, spread 1.0%)
+    generation allocation per token in recording         median 1358971, min 1335765, max 1389333 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.phi-3.5-mini.128 DONE     3:15
+    prefill t/s                                          median 10.23, min 10.15, max 10.56 t/s (n=3, spread 4.0%)
+    generation t/s                                       median 3.1421, min 3.1294, max 3.1481 t/s (n=3, spread 0.6%)
+    generation allocation per token in recording         median 458941, min 451486, max 495287 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.phi-3.5-mini.512 DONE     7:14
+    prefill t/s                                          median 10.11, min 10.02, max 10.12 t/s (n=3, spread 1.0%)
+    generation t/s                                       median 2.9025, min 2.8704, max 3.0745 t/s (n=3, spread 7.0%)
+    generation allocation per token in recording         median 459093, min 452073, max 495444 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.phi-3.5-mini.2048 DONE     29:31
+    prefill t/s                                          median 7.6521, min 7.3112, max 7.6664 t/s (n=3, spread 4.6%)
+    generation t/s                                       median 3.1732, min 3.1484, max 3.1825 t/s (n=3, spread 1.1%)
+    generation allocation per token in recording         median 464088, min 451822, max 489450 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 6.9301 ms (n=3)
+cpu.throughput.mistral-7b.128  DONE     5:11
+    prefill t/s                                          median 5.3891, min 5.3824, max 5.4122 t/s (n=3, spread 0.6%)
+    generation t/s                                       median 2.1877, min 2.1765, max 2.2115 t/s (n=3, spread 1.6%)
+    generation allocation per token in recording         median 495601, min 493837, max 540989 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.mistral-7b.512  DONE     12:34
+    prefill t/s                                          median 5.1132, min 5.0864, max 5.3717 t/s (n=3, spread 5.6%)
+    generation t/s                                       median 2.1337, min 2.0292, max 2.1750 t/s (n=3, spread 6.8%)
+    generation allocation per token in recording         median 495366, min 492007, max 539616 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+cpu.throughput.mistral-7b.2048 DONE     45:02
+    prefill t/s                                          median 4.8227, min 4.7016, max 4.8563 t/s (n=3, spread 3.2%)
+    generation t/s                                       median 2.1502, min 2.0731, max 2.1628 t/s (n=3, spread 4.2%)
+    generation allocation per token in recording         median 498563, min 495584, max 545682 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.qwen2.5-3b.128  DONE     0:21, GPU 2424 MiB
+    prefill t/s                                          median 951.72, min 903.13, max 968.56 t/s (n=3, spread 6.9%)
+    generation t/s                                       median 69.03, min 67.28, max 69.07 t/s (n=3, spread 2.6%)
+    generation allocation per token in recording         median 1524122, min 1365336, max 1695339 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 10.15 ms (n=3)
+gpu.throughput.qwen2.5-3b.512  DONE     0:23, GPU 2638 MiB
+    prefill t/s                                          median 1228, min 1166, max 1235 t/s (n=3, spread 5.6%)
+    generation t/s                                       median 67.52, min 67.24, max 68.50 t/s (n=3, spread 1.9%)
+    generation allocation per token in recording         median 1534165, min 1362476, max 1637421 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 2.8785 ms (n=3)
+gpu.throughput.qwen2.5-3b.2048 DONE     0:33, GPU 3416 MiB
+    prefill t/s                                          median 994.29, min 987.04, max 997.04 t/s (n=3, spread 1.0%)
+    generation t/s                                       median 68.38, min 67.78, max 68.50 t/s (n=3, spread 1.1%)
+    generation allocation per token in recording         median 1540829, min 1364525, max 1639012 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.phi-3.5-mini.128 DONE     0:16, GPU 2806 MiB
+    prefill t/s                                          median 792.56, min 759.04, max 812.99 t/s (n=3, spread 6.8%)
+    generation t/s                                       median 60.41, min 59.96, max 60.53 t/s (n=3, spread 0.9%)
+    generation allocation per token in recording         median 349959, min 348547, max 783227 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.phi-3.5-mini.512 DONE     0:19, GPU 3242 MiB
+    prefill t/s                                          median 848.55, min 835.70, max 851.56 t/s (n=3, spread 1.9%)
+    generation t/s                                       median 60.78, min 60.34, max 60.91 t/s (n=3, spread 0.9%)
+    generation allocation per token in recording         median 353825, min 351817, max 790180 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.phi-3.5-mini.2048 DONE     0:36, GPU 4726 MiB
+    prefill t/s                                          median 658.72, min 657.64, max 661.49 t/s (n=3, spread 0.6%)
+    generation t/s                                       median 60.10, min 59.85, max 60.22 t/s (n=3, spread 0.6%)
+    generation allocation per token in recording         median 698005, min 353901, max 785863 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.mistral-7b.128  DONE     0:23, GPU 4660 MiB
+    prefill t/s                                          median 508.69, min 506.15, max 509.84 t/s (n=3, spread 0.7%)
+    generation t/s                                       median 40.43, min 40.28, max 40.54 t/s (n=3, spread 0.6%)
+    generation allocation per token in recording         median 750527, min 744336, max 1037000 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.mistral-7b.512  DONE     0:27, GPU 4990 MiB
+    prefill t/s                                          median 564.55, min 545.63, max 571.74 t/s (n=3, spread 4.6%)
+    generation t/s                                       median 40.20, min 40.20, max 40.29 t/s (n=3, spread 0.2%)
+    generation allocation per token in recording         median 736564, min 734599, max 1027008 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+gpu.throughput.mistral-7b.2048 DONE     0:51, GPU 6294 MiB
+    prefill t/s                                          median 440.32, min 439.66, max 441.00 t/s (n=3, spread 0.3%)
+    generation t/s                                       median 38.27, min 38.18, max 38.28 t/s (n=3, spread 0.3%)
+    generation allocation per token in recording         median 781746, min 722156, max 973009 B/token (n=3)
+    prefill GC pause in token span                       median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+    generation GC pause in token span                    median 0.0000, min 0.0000, max 0.0000 ms (n=3)
+parallel.tinyllama             DONE     14:11
+    aggregate t/s, --parallel 1                          median 10.84, min 10.78, max 10.85 t/s (n=3, spread 0.7%)
+    mean request latency, --parallel 1                   median 47148, min 47074, max 47410 ms (n=3)
+    aggregate t/s, --parallel 8                          median 12.40, min 12.14, max 12.40 t/s (n=3, spread 2.1%)
+    mean request latency, --parallel 8                   median 41298, min 41284, max 42161 ms (n=3)
+gpu.parallel.tinyllama         DONE     2:18, GPU 1002 MiB
+    aggregate t/s, --parallel 1                          median 104.18, min 101.08, max 104.67 t/s (n=3, spread 3.4%)
+    mean request latency, --parallel 1                   median 4770, min 4763, max 4948 ms (n=3)
+    aggregate t/s, --parallel 8                          median 84.47, min 83.14, max 84.87 t/s (n=3, spread 2.1%)
+    mean request latency, --parallel 8                   median 6061, min 6032, max 6158 ms (n=3)
+schedule.tinyllama             PASS     5:07
+    static: aggregate t/s                                median 12.09, min 12.09, max 12.09 t/s (n=1, spread 0.0%)
+    static: mean TTFT                                    median 8064, min 8064, max 8064 ms (n=1)
+    static: mean TPOT                                    median 641.44, min 641.44, max 641.44 ms (n=1)
+    static: first turn latency                           median 1747, min 1747, max 1747 ms (n=1)
+    static: mean later turn latency                      median 1351, min 1351, max 1351 ms (n=1)
+    continuous: aggregate t/s                            median 12.14, min 12.14, max 12.14 t/s (n=1, spread 0.0%)
+    continuous: mean TTFT                                median 7413, min 7413, max 7413 ms (n=1)
+    continuous: mean TPOT                                median 555.07, min 555.07, max 555.07 ms (n=1)
+    continuous: first turn latency                       median 2003, min 2003, max 2003 ms (n=1)
+    continuous: mean later turn latency                  median 1531, min 1531, max 1531 ms (n=1)
+    ok   static: the server runs the static schedule: the health endpoint reports 'static'
+    ok   static: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: the server runs the continuous schedule: the health endpoint reports 'continuous'
+    ok   continuous: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: concurrent requests shared decode steps: largest decode batch 8, shared steps 192
+gpu.schedule.tinyllama         PASS     1:03, GPU 1002 MiB
+    static: aggregate t/s                                median 79.01, min 79.01, max 79.01 t/s (n=1, spread 0.0%)
+    static: mean TTFT                                    median 255.35, min 255.35, max 255.35 ms (n=1)
+    static: mean TPOT                                    median 67.96, min 67.96, max 67.96 ms (n=1)
+    static: first turn latency                           median 137.93, min 137.93, max 137.93 ms (n=1)
+    static: mean later turn latency                      median 123.93, min 123.93, max 123.93 ms (n=1)
+    continuous: aggregate t/s                            median 77.98, min 77.98, max 77.98 t/s (n=1, spread 0.0%)
+    continuous: mean TTFT                                median 277.94, min 277.94, max 277.94 ms (n=1)
+    continuous: mean TPOT                                median 99.53, min 99.53, max 99.53 ms (n=1)
+    continuous: first turn latency                       median 338.17, min 338.17, max 338.17 ms (n=1)
+    continuous: mean later turn latency                  median 331.37, min 331.37, max 331.37 ms (n=1)
+    ok   static: the server runs the static schedule: the health endpoint reports 'static'
+    ok   static: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: the server runs the continuous schedule: the health endpoint reports 'continuous'
+    ok   continuous: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: concurrent requests shared decode steps: largest decode batch 8, shared steps 192
+mixed-prefill.tinyllama        PASS     0:53
+    mixed: short-request TTFT                            median 7508, min 7508, max 7508 ms (n=1)
+    mixed: short-request TPOT                            median 1234, min 1234, max 1234 ms (n=1)
+    mixed: long-request TTFT                             median 16313, min 16313, max 16313 ms (n=1)
+    admit: short-request TTFT                            median 13900, min 13900, max 13900 ms (n=1)
+    admit: short-request TPOT                            median 347.00, min 347.00, max 347.00 ms (n=1)
+    admit: long-request TTFT                             median 13900, min 13900, max 13900 ms (n=1)
+    ok   mixed: every stream answered: 4 of 4 streams produced text
+    ok   mixed: the long prompt was prefilled in chunks inside decode steps: 12 prefill chunks in 9 steps
+    ok   admit: every stream answered: 4 of 4 streams produced text
+gpu.mixed-prefill.tinyllama    PASS     0:24, GPU 936 MiB
+    mixed: short-request TTFT                            median 604.29, min 604.29, max 604.29 ms (n=1)
+    mixed: short-request TPOT                            median 146.91, min 146.91, max 146.91 ms (n=1)
+    mixed: long-request TTFT                             median 1694, min 1694, max 1694 ms (n=1)
+    admit: short-request TTFT                            median 749.84, min 749.84, max 749.84 ms (n=1)
+    admit: short-request TPOT                            median 138.90, min 138.90, max 138.90 ms (n=1)
+    admit: long-request TTFT                             median 744.11, min 744.11, max 744.11 ms (n=1)
+    ok   mixed: every stream answered: 4 of 4 streams produced text
+    ok   mixed: the long prompt was prefilled in chunks inside decode steps: 12 prefill chunks in 9 steps
+    ok   admit: every stream answered: 4 of 4 streams produced text
+prefill-batch.tinyllama        DONE     4:20
+    prefill t/s, --prefill-batch 1                       median 4.7815, min 4.6844, max 4.8054 t/s (n=3, spread 2.5%)
+    prefill t/s, --prefill-batch 32                      median 26.36, min 25.49, max 26.50 t/s (n=3, spread 3.8%)
+gpu.prefill-batch.tinyllama    DONE     1:11, GPU 924 MiB
+    prefill t/s, --prefill-batch 1                       median 58.22, min 58.11, max 58.99 t/s (n=3, spread 1.5%)
+    prefill t/s, --prefill-batch 32                      median 1004, min 978.59, max 1019 t/s (n=3, spread 4.0%)
+lora.tinyllama                 PASS     12:51
+    training time per pass                               median 48836, min 48836, max 48836 ms (n=1)
+    playback t/s, --lora-play                            median 0.8989, min 0.8989, max 0.8989 t/s (n=1)
+    playback t/s, merged model                           median 4.3501, min 4.3501, max 4.3501 t/s (n=1)
+    ok   training reaches the loss target: TARGET_REACHED after 15 passes, loss 1.1795 (target 1.20)
+    ok   --lora-play: the adapter answers with the trained reply: reply 'My name is Juno'
+    ok   the merged model loads and answers: HTTP 200, 15 characters
+    ok   the merged model answers with the trained reply: reply 'My name is Juno'
+gpu.lora.tinyllama             PASS     1:09, GPU 4066 MiB
+    training time per pass                               median 2796, min 2796, max 2796 ms (n=1)
+    playback t/s, --lora-play                            median 11.89, min 11.89, max 11.89 t/s (n=1)
+    playback t/s, merged model                           median 30.32, min 30.32, max 30.32 t/s (n=1)
+    ok   training reaches the loss target: TARGET_REACHED after 15 passes, loss 1.1797 (target 1.20)
+    ok   --lora-play: the adapter answers with the trained reply: reply 'My name is Juno'
+    ok   the merged model loads and answers: HTTP 200, 15 characters
+    ok   the merged model answers with the trained reply: reply 'My name is Juno'
+vision.moondream2              PASS     17:49
+    threads 4: latency                                   median 315412, min 315412, max 315412 ms (n=1)
+    threads 4: decode t/s                                median 3.9396, min 3.9396, max 3.9396 t/s (n=1)
+    threads 12: latency                                  median 204027, min 204027, max 204027 ms (n=1)
+    threads 12: decode t/s                               median 5.5196, min 5.5196, max 5.5196 t/s (n=1)
+    ok   threads 4: a caption for the benchmark prompt
+    ok   threads 4: prompt tokens between 700 and 800: 741 prompt tokens
+    ok   threads 4: a one-sentence caption within 600 s
+    ok   threads 12: a caption for the benchmark prompt
+    ok   threads 12: prompt tokens between 700 and 800: 741 prompt tokens
+    ok   threads 12: a one-sentence caption within 600 s
+    ok   captions identical at 4 and 12 threads: identical
+gpu.vision.moondream2          PASS     7:10, GPU 118 MiB
+    ok   GPU: a caption for the benchmark prompt
+    ok   GPU: prompt tokens between 700 and 800: 741 prompt tokens
+    ok   GPU: a one-sentence caption within 600 s
+launcher.tinyllama             PASS     0:13
+    ok   local mode with --api-port answers a chat request: HTTP 200: 1. Red
+2. Blue
+
+    ok   the launcher exits cleanly on exit: exit code 0, 0 of its processes still running
+    ok   lora with --grammar-file warns that constrained decoding is a no-op for LoRA training: warned (exit code 0)
+cpu.unit-tests                 PASS     35:57, GPU 108 MiB
+    ok   tests outside gpu,rocm on tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player: 2101 tests, 0 failures, 0 errors, 25 skipped; Maven exit 0
+gpu.unit-tests                 PASS     23:42, GPU 4148 MiB
+    ok   group gpu on node: 367 tests, 0 failures, 0 errors, 7 skipped; Maven exit 0
+
+Not run on this machine:
+  cpu.kernel-width               256-bit integer vectors: this JVM prefers 128-bit
+  rocm.unit-tests                ROCm: Juno found no usable AMD GPU

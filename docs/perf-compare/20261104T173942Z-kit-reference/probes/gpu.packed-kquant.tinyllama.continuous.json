@@ -1,0 +1,33 @@
+{
+  "id" : "gpu.packed-kquant.tinyllama.continuous",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "prompt of about 512 tokens",
+    "passed" : true,
+    "detail" : "512 prompt tokens"
+  }, {
+    "name" : "exactly 512 tokens generated",
+    "passed" : true,
+    "detail" : "512 generated"
+  }, {
+    "name" : "one stream piece per generated token",
+    "passed" : true,
+    "detail" : "512 pieces"
+  }, {
+    "name" : "streamed and unstreamed greedy text identical",
+    "passed" : true,
+    "detail" : "1023 characters"
+  }, {
+    "name" : "packed weights resident and the tiled kernel loaded, no dequantizing fallback",
+    "passed" : true,
+    "detail" : "Tiled K-quant GEMM kernels loaded from /cab/ml/juno/node/kquant_gemm.ptx (Q4_K, Q5_K, Q6_K)"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "promptTokens" : 512,
+    "ttftMs" : 1407.255322,
+    "peakDeviceMiB" : 960,
+    "schedule" : "continuous"
+  }
+}

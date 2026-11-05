@@ -1,0 +1,40 @@
+{
+  "id" : "gpu.parallel.tinyllama",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "aggregate t/s, --parallel 1",
+    "unit" : "t/s",
+    "values" : [ 101.08069038158912, 104.67399046167624, 104.17948155680035 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "mean request latency, --parallel 1",
+    "unit" : "ms",
+    "values" : [ 4947.54520625, 4762.6055265, 4770.28328275 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "aggregate t/s, --parallel 8",
+    "unit" : "t/s",
+    "values" : [ 83.13835652619356, 84.87194076248716, 84.46844096138724 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "mean request latency, --parallel 8",
+    "unit" : "ms",
+    "values" : [ 6157.630623125, 6032.27753775, 6061.1359095 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "parallel1.distinctReplies" : 1,
+    "parallel8.distinctReplies" : 1,
+    "maxTokens" : 64,
+    "backend" : "gpu",
+    "sessions" : 8,
+    "parallel8OverParallel1" : 0.8107972865590972,
+    "warmupRounds" : 2
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "id" : "gpu.consistency.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: OpenAI round 1, prompt 1 equals its single-request output",
+    "passed" : true,
+    "detail" : "'Red.'"
+  }, {
+    "name" : "static batching, gpu: OpenAI round 1, prompt 2 equals its single-request output",
+    "passed" : true,
+    "detail" : "'A spider has six legs.'"
+  }, {
+    "name" : "static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: native round 1, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: native round 1, prompt 1 equals its single-request output",
+    "passed" : true,
+    "detail" : "'Red.'"
+  }, {
+    "name" : "static batching, gpu: native round 1, prompt 2 equals its single-request output",
+    "passed" : true,
+    "detail" : "'A spider has six legs.'"
+  }, {
+    "name" : "static batching, gpu: native round 1, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: OpenAI round 2, prompt 1 equals its single-request output",
+    "passed" : true,
+    "detail" : "'Red.'"
+  }, {
+    "name" : "static batching, gpu: OpenAI round 2, prompt 2 equals its single-request output",
+    "passed" : true,
+    "detail" : "'A spider has six legs.'"
+  }, {
+    "name" : "static batching, gpu: native round 2, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: native round 2, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: native round 2, prompt 1 equals its single-request output",
+    "passed" : true,
+    "detail" : "'Red.'"
+  }, {
+    "name" : "static batching, gpu: native round 2, prompt 2 equals its single-request output",
+    "passed" : true,
+    "detail" : "'A spider has six legs.'"
+  }, {
+    "name" : "static batching, gpu: a session request after batched stateless traffic equals single-request output",
+    "passed" : true,
+    "detail" : "single 'The capital of France is Paris.', session 'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, gpu: no prefix-cache hit for stateless traffic",
+    "passed" : true,
+    "detail" : "0 hits, 1 lookups"
+  }, {
+    "name" : "static batching, gpu: native streaming joins to the native blocking answer",
+    "passed" : true,
+    "detail" : "blocking 'Red.', streamed 'Red.'"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "gpu" : true
+  }
+}

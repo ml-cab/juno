@@ -1,0 +1,38 @@
+Fresh JVMs on this host (JDK 25.0.4.1, Xeon E5-1650 v2), CpuIntegerGemm alone at prefill width: per window, layers of
+four Q4_K 2048x2048 matmuls and one Q6_K 2048x5632 matmul at 572 activation rows (synthetic weights from
+CpuIntegerKernelsTestSupport). Bytes allocated per matmul call on all threads, and window time. "old" is 80ec949e's
+CpuIntegerGemm; "first form" the change with the offset negated per row; "final" the change as committed for the gate.
+Window 1 includes the interpreter and C1 before the kernels compile; the later windows are the compiled kernels.
+
+1. No other vector shape first: never reproduced. Old kernel, 22-layer windows, window 2 at 1,261 bytes/call in all of:
+   default flags (4 runs), -XX:-UseOnStackReplacement (2), the decode kernels run first (2), -XX:-TieredCompilation (2),
+   -XX:PerMethodTrapLimit=0, -XX:PerBytecodeTrapLimit=0, without aggressive reboxing, -XX:-UseLoopPredicate,
+   -XX:TypeProfileLevel=0. Blunt flags that do reproduce it but change C2 for every method: -XX:TypeProfileWidth=0
+   (17.7 GB/call), -XX:LiveNodeCountInliningCutoff=4000 (299 MB/call).
+
+2. The kernels' own lane operations (short multiply-add, int shifts, I2F, float multiply, add, sub) run first at 128 bits
+   only: 1,261 bytes/call (two runs).
+
+3. The same operations hot at 128 bits, then a few thousand times at 64 and 256 bits ("mixed"):
+   old, 22 layers:   window 2: 61.7 s and 58.4 s, about 8.5 GB/call (two runs)
+   final, 22 layers: window 2: 9.9 s, 1,261 bytes/call
+   old, 4 layers:    window 3: 11.0 s and 17.8 s, 8.5 and 14.9 GB/call (two runs)
+   final, 4 layers:  window 3: 1.7 s and 1.8 s, 1,288 bytes/call (two runs)
+   This is CpuGemmProfilePollutionTest's child (4 layers): 8,494,463,032 bytes/call on the old kernel; the test passes
+   on the final one in 8.8 s.
+   Other shapes first, then 128 bits: old, 22 layers, window 2: 134.4 s and 150.9 s, 14.5 and 15.3 GB/call.
+
+4. Not removed by the change: the 256-bit kernels themselves run first (on this 128-bit host they take the Vector
+   API's portable form, so int and short operations run through the Java fallbacks), small shapes (256 x 1024, 8 rows):
+   old 1.0 to 12.9 MB/call (two runs), final 0.8 to 2.1 MB/call. The allocation is then in the fallbacks (convert0, uOpTemplate,
+   bOpTemplate, defaultReinterpret), which no kernel code avoids. The 128-bit and 256-bit kernels never run in one
+   production JVM (the width is chosen once per JVM).
+
+5. Fast-path cost, interleaved, 22-layer windows, windows 2 and 3, medians of three runs per side:
+   old 9.91 s against the first form 10.13 s (1.02x the time); a second session: old about 10.55 s, first form
+   10.95 s, final 10.46 s. An earlier form with the accumulators in a float[] round trip read 11.3 s against 10.0 s
+   (1.13x) and was dropped.
+
+6. The decode matvec (CpuIntegerKernels, unchanged) at small shapes after the "mixed" operations: 49 bytes/call in two
+   runs and 3.0 to 3.7 MB/call (Q4_K, Q5_K) in two others; once 0.67 MB/call (Q4_K) after float-only operations
+   at 128, 256 and 64 bits. Recorded, not changed.

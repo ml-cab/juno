@@ -1,0 +1,42 @@
+{
+  "id" : "cpu.hot-path.tinyllama-1.1b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "threads 4: the server runs CPU matmuls on 4 threads",
+    "passed" : true,
+    "detail" : "logged"
+  }, {
+    "name" : "threads 4: a short greedy request decodes",
+    "passed" : true,
+    "detail" : "HTTP 200: 1. Red\n2. Blue\n3. Green"
+  }, {
+    "name" : "threads 4: a prompt of about 512 tokens prefills and answers",
+    "passed" : true,
+    "detail" : "521 prompt tokens; HTTP 200: The bridge in note"
+  }, {
+    "name" : "threads 12: the server runs CPU matmuls on 12 threads",
+    "passed" : true,
+    "detail" : "logged"
+  }, {
+    "name" : "threads 12: a short greedy request decodes",
+    "passed" : true,
+    "detail" : "HTTP 200: 1. Red\n2. Blue\n3. Green"
+  }, {
+    "name" : "threads 12: a prompt of about 512 tokens prefills and answers",
+    "passed" : true,
+    "detail" : "521 prompt tokens; HTTP 200: The bridge in note"
+  }, {
+    "name" : "greedy replies identical at 4 and 12 threads",
+    "passed" : true,
+    "detail" : "identical"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "threads12.long" : "The bridge in note",
+    "threads" : [ 4, 12 ],
+    "threads4.long" : "The bridge in note",
+    "threads4.short" : "1. Red\n2. Blue\n3. Green",
+    "threads12.short" : "1. Red\n2. Blue\n3. Green"
+  }
+}

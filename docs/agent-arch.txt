@@ -57,7 +57,17 @@ Module dependency (excerpt):
         row's output does not depend on its position in the batch. No production
         kernel class declares a method that takes or returns a Vector API type
         (CpuKernelVectorEscapeTest): a vector handed to a helper C2 does not
-        inline is boxed and allocates on every lane operation. CpuIntegerWidth picks the lane width once per JVM: 128 by default
+        inline is boxed and allocates on every lane operation. In fourRows16 and
+        fourRows32 no Vector API method is called on a vector carried from one
+        loop iteration to the next: the lane accumulators are only arguments
+        (f0 = term.add(f0)), because C2 types a carried vector inexactly and
+        binds calls on it through the JDK's shared type profile, and in some
+        JVMs then boxed the accumulators (prefill 2x to 5.5x slower). The same
+        test checks this from CpuIntegerGemm's bytecode, and
+        CpuGemmProfilePollutionTest measures it: in a child JVM where the kernels'
+        lane operations have also run at 64 and 256 bits, the matmul at prefill
+        width allocates nothing per call (the earlier form, about 8.5 GB). Outputs
+        are bit for bit the earlier form's. CpuIntegerWidth picks the lane width once per JVM: 128 by default
         (auto) on every host until the 256-bit kernels are measured on an AVX2
         host; -Djuno.cpu.integerWidth=256 selects them, 128|auto the default, and
         any other value fails with the property named. The host's preferred

@@ -1,0 +1,26 @@
+{
+  "id" : "gpu.vision.moondream2",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "GPU: a caption for the benchmark prompt",
+    "passed" : true,
+    "detail" : "HTTP 200:  The image features a collection of squares, each with different colors and patterns. These squares are arranged in various positions to create an interesting visual display. There is also"
+  }, {
+    "name" : "GPU: prompt tokens between 700 and 800",
+    "passed" : true,
+    "detail" : "741 prompt tokens"
+  }, {
+    "name" : "GPU: a one-sentence caption within 600 s",
+    "passed" : true,
+    "detail" : "HTTP 200:  A black and white image features a grid of squares, with the top row alternating between red and blue squares. (205 s)"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "image" : "vision-bench.jpg",
+    "backend" : "gpu",
+    "gpu.sentence" : " A black and white image features a grid of squares, with the top row alternating between red and blue squares.",
+    "gpu.caption" : " The image features a collection of squares, each with different colors and patterns. These squares are arranged in various positions to create an interesting visual display. There is also",
+    "gpu.deviceMatVecs" : 0
+  }
+}

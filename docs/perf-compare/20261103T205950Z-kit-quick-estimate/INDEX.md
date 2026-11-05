@@ -83,6 +83,15 @@ the probe JVM's wide windows slow under the kit's runner is not found. Ruled out
 clock source, `nvidia-smi` polling, the probe's entry class (it calls the same method), and other load. The finding is
 open in the tier record; the probe's checks are unaffected (all pass).
 
+*2026-11-04: explained in `20261104T191116Z-cpu-prefill-jit/`. In slow JVMs, C2 compiles the batched integer matmul's
+kernels with boxed vectors, so every float vector operation allocates. It happened in 6 of 10 kit runs and 0 of 7 runs
+outside the kit, the probe's exact command line from a shell included; the five runs above were outside the kit and
+all fast. So it is the engine's kernels under the JIT, not the kit's code, and "the engine is not slower" above holds
+only for the runs that got the fast compile.*
+
+*2026-11-05: re-scored in `20261105T155413Z-kit-quick-rescore/` on the corrected catalog and the changed kernels:
+0.890x (point 2240 s against 2518 s), `cpu.live.tinyllama` 249 s.*
+
 ## Files
 
 - `SUMMARY-quick.txt`, `SUMMARY-live-rerun.txt`: the kit's summaries, from the scrubbed results zips.

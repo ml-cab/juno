@@ -1,0 +1,54 @@
+{
+  "id" : "gpu.lora.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "training reaches the loss target",
+    "passed" : true,
+    "detail" : "TARGET_REACHED after 15 passes, loss 1.1797 (target 1.20)"
+  }, {
+    "name" : "--lora-play: the adapter answers with the trained reply",
+    "passed" : true,
+    "detail" : "reply 'My name is Juno'"
+  }, {
+    "name" : "the merged model loads and answers",
+    "passed" : true,
+    "detail" : "HTTP 200, 15 characters"
+  }, {
+    "name" : "the merged model answers with the trained reply",
+    "passed" : true,
+    "detail" : "reply 'My name is Juno'"
+  } ],
+  "readings" : [ {
+    "name" : "training time per pass",
+    "unit" : "ms",
+    "values" : [ 2795.5780566666667 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "playback t/s, --lora-play",
+    "unit" : "t/s",
+    "values" : [ 11.891623056729781 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  }, {
+    "name" : "playback t/s, merged model",
+    "unit" : "t/s",
+    "values" : [ 30.317206287457694 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "finalLoss" : 1.179659128189087,
+    "mergeTensorsPatched" : 44,
+    "passes" : 15,
+    "reply.merged" : "My name is Juno",
+    "stopReason" : "TARGET_REACHED",
+    "reply.loraPlay" : "My name is Juno",
+    "optimizerUpdates" : 90,
+    "mergeSkipped" : 0,
+    "trainDevice" : "cuda",
+    "mergeAdaptersApplied" : 44,
+    "backend" : "gpu"
+  }
+}

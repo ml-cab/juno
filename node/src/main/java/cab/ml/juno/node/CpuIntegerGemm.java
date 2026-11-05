@@ -257,6 +257,8 @@ final class CpuIntegerGemm {
 		/** Per row and sub-block: the factor on the activation sum (minimum or offset term). */
 		final float[] offset = new float[TILE_ROWS * 16];
 		float[] acc = new float[0];
+		/** The four-row forms' lane sums for one row, four floats per activation row, read as scalars. */
+		final float[] lanes = new float[16];
 	}
 
 	/**
@@ -267,7 +269,15 @@ final class CpuIntegerGemm {
 	 * method holding every row form, once every path had run, and a separate one-row form for the remainder, which
 	 * runs too rarely to be compiled reliably. Padding gives every row the same, always-hot code; a padded row's
 	 * outputs are discarded, and a real row's arithmetic is the same in any position of the four. No vector crosses
-	 * a call.
+	 * a call, and no Vector API method is called on a vector carried from one loop iteration to the next: a lane
+	 * accumulator is only ever the argument ({@code f0 = term.add(f0)}, {@code f0 = o.mul(x).add(f0)} with the offset
+	 * {@code o} negated once per sub-block), and its lanes are read through {@code zero(F).add(f0)} into
+	 * {@link TileScratch#lanes}. While C2 parses a loop it types a carried vector only as {@code FloatVector}, so a
+	 * method called on one is bound to {@code Float128Vector} through the JDK's shared type profile, behind a guard;
+	 * in some server JVMs C2 then boxed the accumulators and the matmul allocated on every operation, 2x to 5.5x
+	 * slower. A freshly computed vector is typed exactly, so the binding no longer depends on the profile. Addition
+	 * commutes, {@code a - o * x} is {@code (-o) * x + a} exactly, and adding zero changes at most the sign of a zero,
+	 * which the output's sum (starting at {@code +0}) absorbs: every output is the same, bit for bit.
 	 */
 	private static void tile(TileScratch ts, int type, byte[] raw, Activations act, int batch, int cols, int r0, int r1,
 			float[][] Y, int rowStart) {
@@ -285,15 +295,16 @@ final class CpuIntegerGemm {
 		short[] w = ts.w;
 		float[] sc = ts.scale;
 		float[] off = ts.offset;
+		float[] lanes = ts.lanes;
 		for (int kb = 0; kb < blocks; kb++) {
 			for (int r = 0; r < nr; r++)
 				unpack(type, raw, r0 + r, kb, cols, w, r * 256, sc, off, r * 16);
 			if (sub16)
 				for (int b = 0; b < pb; b += 4)
-					fourRows16(w, sc, off, xq, xd, xds, acc, nr, pb, b, b * cols + kb * 256, cols);
+					fourRows16(w, sc, off, xq, xd, xds, acc, nr, pb, b, b * cols + kb * 256, cols, lanes);
 			else
 				for (int b = 0; b < pb; b += 4)
-					fourRows32(w, sc, off, xq, xd, xds, acc, nr, pb, b, b * cols + kb * 256, cols);
+					fourRows32(w, sc, off, xq, xd, xds, acc, nr, pb, b, b * cols + kb * 256, cols, lanes);
 		}
 		for (int r = 0; r < nr; r++) {
 			int yr = r0 + r - rowStart;
@@ -307,7 +318,7 @@ final class CpuIntegerGemm {
 	 * unpacked block, 16-wide: 16-weight sub-blocks (Q6_K, Q8_0). Each loaded weight vector serves the four activation rows.
 	 */
 	private static void fourRows16(short[] w, float[] sc, float[] off, short[] xq, float[] xd, float[] xds,
-			float[] acc, int nr, int batch, int b, int xo0, int cols) {
+			float[] acc, int nr, int batch, int b, int xo0, int cols, float[] lanes) {
 		int xo1 = xo0 + 1 * cols;
 		int xo2 = xo0 + 2 * cols;
 		int xo3 = xo0 + 3 * cols;
@@ -333,39 +344,43 @@ final class CpuIntegerGemm {
 				ShortVector s0 = w0.mul(ShortVector.fromArray(S, xq, xo0 + e))
 						.add(w8.mul(ShortVector.fromArray(S, xq, xo0 + e + 8)));
 				IntVector v0 = s0.reinterpretAsInts();
-				f0 = f0.add(((FloatVector) v0.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
+				f0 = ((FloatVector) v0.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
 						.add(v0.lanewise(VectorOperators.ASHR, 16)).convertShape(VectorOperators.I2F, F, 0))
-						.mul(sc[so + j] * xd[xd0 + (j >> 1)]));
+						.mul(sc[so + j] * xd[xd0 + (j >> 1)]).add(f0);
 				ShortVector s1 = w0.mul(ShortVector.fromArray(S, xq, xo1 + e))
 						.add(w8.mul(ShortVector.fromArray(S, xq, xo1 + e + 8)));
 				IntVector v1 = s1.reinterpretAsInts();
-				f1 = f1.add(((FloatVector) v1.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
+				f1 = ((FloatVector) v1.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
 						.add(v1.lanewise(VectorOperators.ASHR, 16)).convertShape(VectorOperators.I2F, F, 0))
-						.mul(sc[so + j] * xd[xd1 + (j >> 1)]));
+						.mul(sc[so + j] * xd[xd1 + (j >> 1)]).add(f1);
 				ShortVector s2 = w0.mul(ShortVector.fromArray(S, xq, xo2 + e))
 						.add(w8.mul(ShortVector.fromArray(S, xq, xo2 + e + 8)));
 				IntVector v2 = s2.reinterpretAsInts();
-				f2 = f2.add(((FloatVector) v2.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
+				f2 = ((FloatVector) v2.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
 						.add(v2.lanewise(VectorOperators.ASHR, 16)).convertShape(VectorOperators.I2F, F, 0))
-						.mul(sc[so + j] * xd[xd2 + (j >> 1)]));
+						.mul(sc[so + j] * xd[xd2 + (j >> 1)]).add(f2);
 				ShortVector s3 = w0.mul(ShortVector.fromArray(S, xq, xo3 + e))
 						.add(w8.mul(ShortVector.fromArray(S, xq, xo3 + e + 8)));
 				IntVector v3 = s3.reinterpretAsInts();
-				f3 = f3.add(((FloatVector) v3.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
+				f3 = ((FloatVector) v3.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
 						.add(v3.lanewise(VectorOperators.ASHR, 16)).convertShape(VectorOperators.I2F, F, 0))
-						.mul(sc[so + j] * xd[xd3 + (j >> 1)]));
+						.mul(sc[so + j] * xd[xd3 + (j >> 1)]).add(f3);
 			}
 			for (int j = 0; j < 16; j += 4) {
-				FloatVector o = FloatVector.fromArray(F, off, so + j);
-				f0 = f0.sub(o.mul(FloatVector.fromArray(F, xds, xs0 + j)));
-				f1 = f1.sub(o.mul(FloatVector.fromArray(F, xds, xs1 + j)));
-				f2 = f2.sub(o.mul(FloatVector.fromArray(F, xds, xs2 + j)));
-				f3 = f3.sub(o.mul(FloatVector.fromArray(F, xds, xs3 + j)));
+				FloatVector o = FloatVector.fromArray(F, off, so + j).neg();
+				f0 = o.mul(FloatVector.fromArray(F, xds, xs0 + j)).add(f0);
+				f1 = o.mul(FloatVector.fromArray(F, xds, xs1 + j)).add(f1);
+				f2 = o.mul(FloatVector.fromArray(F, xds, xs2 + j)).add(f2);
+				f3 = o.mul(FloatVector.fromArray(F, xds, xs3 + j)).add(f3);
 			}
-			acc[r * batch + b + 0] += (f0.lane(0) + f0.lane(1)) + (f0.lane(2) + f0.lane(3));
-			acc[r * batch + b + 1] += (f1.lane(0) + f1.lane(1)) + (f1.lane(2) + f1.lane(3));
-			acc[r * batch + b + 2] += (f2.lane(0) + f2.lane(1)) + (f2.lane(2) + f2.lane(3));
-			acc[r * batch + b + 3] += (f3.lane(0) + f3.lane(1)) + (f3.lane(2) + f3.lane(3));
+			FloatVector.zero(F).add(f0).intoArray(lanes, 0);
+			FloatVector.zero(F).add(f1).intoArray(lanes, 4);
+			FloatVector.zero(F).add(f2).intoArray(lanes, 8);
+			FloatVector.zero(F).add(f3).intoArray(lanes, 12);
+			acc[r * batch + b + 0] += (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+			acc[r * batch + b + 1] += (lanes[4] + lanes[5]) + (lanes[6] + lanes[7]);
+			acc[r * batch + b + 2] += (lanes[8] + lanes[9]) + (lanes[10] + lanes[11]);
+			acc[r * batch + b + 3] += (lanes[12] + lanes[13]) + (lanes[14] + lanes[15]);
 		}
 	}
 
@@ -374,7 +389,7 @@ final class CpuIntegerGemm {
 	 * unpacked block, 32-wide: 32-weight sub-blocks (Q4_K, Q5_K). Each loaded weight vector serves the four activation rows.
 	 */
 	private static void fourRows32(short[] w, float[] sc, float[] off, short[] xq, float[] xd, float[] xds,
-			float[] acc, int nr, int batch, int b, int xo0, int cols) {
+			float[] acc, int nr, int batch, int b, int xo0, int cols, float[] lanes) {
 		int xo1 = xo0 + 1 * cols;
 		int xo2 = xo0 + 2 * cols;
 		int xo3 = xo0 + 3 * cols;
@@ -404,45 +419,49 @@ final class CpuIntegerGemm {
 						.add(w16.mul(ShortVector.fromArray(S, xq, xo0 + e + 16)))
 						.add(w24.mul(ShortVector.fromArray(S, xq, xo0 + e + 24)));
 				IntVector v0 = s0.reinterpretAsInts();
-				f0 = f0.add(((FloatVector) v0.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
+				f0 = ((FloatVector) v0.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
 						.add(v0.lanewise(VectorOperators.ASHR, 16)).convertShape(VectorOperators.I2F, F, 0))
-						.mul(sc[so + j] * xd[xd0 + j]));
+						.mul(sc[so + j] * xd[xd0 + j]).add(f0);
 				ShortVector s1 = w0.mul(ShortVector.fromArray(S, xq, xo1 + e))
 						.add(w8.mul(ShortVector.fromArray(S, xq, xo1 + e + 8)))
 						.add(w16.mul(ShortVector.fromArray(S, xq, xo1 + e + 16)))
 						.add(w24.mul(ShortVector.fromArray(S, xq, xo1 + e + 24)));
 				IntVector v1 = s1.reinterpretAsInts();
-				f1 = f1.add(((FloatVector) v1.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
+				f1 = ((FloatVector) v1.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
 						.add(v1.lanewise(VectorOperators.ASHR, 16)).convertShape(VectorOperators.I2F, F, 0))
-						.mul(sc[so + j] * xd[xd1 + j]));
+						.mul(sc[so + j] * xd[xd1 + j]).add(f1);
 				ShortVector s2 = w0.mul(ShortVector.fromArray(S, xq, xo2 + e))
 						.add(w8.mul(ShortVector.fromArray(S, xq, xo2 + e + 8)))
 						.add(w16.mul(ShortVector.fromArray(S, xq, xo2 + e + 16)))
 						.add(w24.mul(ShortVector.fromArray(S, xq, xo2 + e + 24)));
 				IntVector v2 = s2.reinterpretAsInts();
-				f2 = f2.add(((FloatVector) v2.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
+				f2 = ((FloatVector) v2.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
 						.add(v2.lanewise(VectorOperators.ASHR, 16)).convertShape(VectorOperators.I2F, F, 0))
-						.mul(sc[so + j] * xd[xd2 + j]));
+						.mul(sc[so + j] * xd[xd2 + j]).add(f2);
 				ShortVector s3 = w0.mul(ShortVector.fromArray(S, xq, xo3 + e))
 						.add(w8.mul(ShortVector.fromArray(S, xq, xo3 + e + 8)))
 						.add(w16.mul(ShortVector.fromArray(S, xq, xo3 + e + 16)))
 						.add(w24.mul(ShortVector.fromArray(S, xq, xo3 + e + 24)));
 				IntVector v3 = s3.reinterpretAsInts();
-				f3 = f3.add(((FloatVector) v3.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
+				f3 = ((FloatVector) v3.lanewise(VectorOperators.LSHL, 16).lanewise(VectorOperators.ASHR, 16)
 						.add(v3.lanewise(VectorOperators.ASHR, 16)).convertShape(VectorOperators.I2F, F, 0))
-						.mul(sc[so + j] * xd[xd3 + j]));
+						.mul(sc[so + j] * xd[xd3 + j]).add(f3);
 			}
 			for (int j = 0; j < 8; j += 4) {
-				FloatVector o = FloatVector.fromArray(F, off, so + j);
-				f0 = f0.sub(o.mul(FloatVector.fromArray(F, xds, xs0 + j)));
-				f1 = f1.sub(o.mul(FloatVector.fromArray(F, xds, xs1 + j)));
-				f2 = f2.sub(o.mul(FloatVector.fromArray(F, xds, xs2 + j)));
-				f3 = f3.sub(o.mul(FloatVector.fromArray(F, xds, xs3 + j)));
+				FloatVector o = FloatVector.fromArray(F, off, so + j).neg();
+				f0 = o.mul(FloatVector.fromArray(F, xds, xs0 + j)).add(f0);
+				f1 = o.mul(FloatVector.fromArray(F, xds, xs1 + j)).add(f1);
+				f2 = o.mul(FloatVector.fromArray(F, xds, xs2 + j)).add(f2);
+				f3 = o.mul(FloatVector.fromArray(F, xds, xs3 + j)).add(f3);
 			}
-			acc[r * batch + b + 0] += (f0.lane(0) + f0.lane(1)) + (f0.lane(2) + f0.lane(3));
-			acc[r * batch + b + 1] += (f1.lane(0) + f1.lane(1)) + (f1.lane(2) + f1.lane(3));
-			acc[r * batch + b + 2] += (f2.lane(0) + f2.lane(1)) + (f2.lane(2) + f2.lane(3));
-			acc[r * batch + b + 3] += (f3.lane(0) + f3.lane(1)) + (f3.lane(2) + f3.lane(3));
+			FloatVector.zero(F).add(f0).intoArray(lanes, 0);
+			FloatVector.zero(F).add(f1).intoArray(lanes, 4);
+			FloatVector.zero(F).add(f2).intoArray(lanes, 8);
+			FloatVector.zero(F).add(f3).intoArray(lanes, 12);
+			acc[r * batch + b + 0] += (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+			acc[r * batch + b + 1] += (lanes[4] + lanes[5]) + (lanes[6] + lanes[7]);
+			acc[r * batch + b + 2] += (lanes[8] + lanes[9]) + (lanes[10] + lanes[11]);
+			acc[r * batch + b + 3] += (lanes[12] + lanes[13]) + (lanes[14] + lanes[15]);
 		}
 	}
 
