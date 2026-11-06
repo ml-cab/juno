@@ -19,9 +19,14 @@ run 2026-11-05, `docs/perf-compare/20261105T040822Z-cpu-prefill-jit-gate/`).
 The CPU batch dependence found in part 1 is
 explained (not a KV leak; see "CPU batch dependence investigated") and fixed in the engine 2026-10-29 by owner
 go-ahead, an out-of-tier change (see "CPU decode batch made bit for bit the single-request decode"); its pinned
-throughput gate is met (owner run, 2026-10-29). Six exit criteria are ticked: the estimate (re-scored 2026-11-05),
-the probe catalog (step 6), `ingest` with the reference run (2026-11-04), rule 10 with check 10 (step 7), the unit
-suite with `mvn verify -pl juno-master` (2026-11-05) and the docs (step 10).
+throughput gate is met (owner run, 2026-10-29). Seven exit criteria are ticked: the estimate (re-scored 2026-11-05),
+the model catalog (a real download, interrupted and resumed, 2026-11-05), the probe catalog (step 6), `ingest` with the
+reference run (2026-11-04), rule 10 with check 10 (step 7), the unit suite with `mvn verify -pl juno-master` (2026-11-05)
+and the docs (step 10). Step 9 begun 2026-11-05 with no tester's zip
+yet: the three kit-output defects from the reference run's review are fixed, test first, and the cross-surface table is
+drafted from this host's runs. The same day a real download from Hugging Face, interrupted and resumed, met the model
+catalog criterion, and the Linux keep-awake inhibitor was seen held. Every open criterion now waits on
+Windows and macOS runs by testers (owner decision 2026-11-05: CI stays deferred), as each criterion's dated note says.
 Gap analysis refs: none — see "Why this tier, why now"
 
 **Added 2026-10-13 (owner decisions, recorded in the execution record below).** This host has one CPU
@@ -296,8 +301,13 @@ GPU, macOS.
 
 - [ ] `juno-kit` is in the reactor with the `juno-kit.sh` and `juno-kit.bat` launchers; the bootstrap checks
       prerequisites before building, and a failed build still produces a results zip.
+      *(2026-11-05: met on Linux (every run here; the failed-build zip in `KitBootstrapTest`). Owed: `juno-kit.bat` has
+      run nowhere yet; a Windows tester's run (step 9).)*
 - [ ] Detection, the suites, `--budget`, `--plan`, `--yes`, `--list`, `resume` and `pack` work as
       specified, each unit-tested.
+      *(2026-11-05: all unit-tested, and seen working here (`resume` and `pack` in step 3). Owed: the Windows and macOS
+      detection fixtures follow documented output formats, not recordings; a Windows and a macOS tester's run supply
+      recorded outputs (step 9).)*
 - [x] The estimate is shown before the run and refined during it. On this host, the first estimate for the
       `quick` suite is `>= 0.65x` and `<= 1.35x` the actual time.
       *(2026-11-03: read 0.741x, point 1738 s against 2345 s, on the `a1fe7166` catalog
@@ -312,7 +322,19 @@ GPU, macOS.
       during the run ("about 41 min to 58 min left" after a re-run probe).
       `docs/perf-compare/20261105T155413Z-kit-quick-rescore/`.)*
 - [ ] Stage warnings, keep-awake on each OS, and the noise rule's re-runs work as specified.
-- [ ] The model catalog is pinned by SHA-256, downloads resume, and hashes are verified.
+      *(2026-11-05: the noise rule's re-runs seen here (calibration in the reference run; two throughput probes in the
+      `quick` re-score). Owed: `KeepAwake`'s Windows (FFM) and macOS paths have run nowhere, and on Linux whether the
+      inhibitor held was not observed; a Windows and a macOS tester's run (step 9).)*
+      *(2026-11-05, later: Linux observed. `systemd-inhibit --list` showed the kit's `sleep:idle` block inhibitor during
+      both runs of the download check, and none after either. Owed: the Windows and macOS paths (step 9).)*
+- [x] The model catalog is pinned by SHA-256, downloads resume, and hashes are verified.
+      *(2026-11-05: pinned (step 2) and verified here against `models/`; `ModelStoreTest` replaces a wrong-hash copy and
+      refuses a tampered download on a local server. Owed: nothing has been downloaded from Hugging Face by the kit yet;
+      a tester's first run, which downloads (step 9).)*
+      *(2026-11-05, later: met. The kit downloaded TinyLlama from Hugging Face into an empty cache on this host, once
+      whole and once interrupted by Ctrl+C at 160,480,372 bytes and continued by `resume`, which resumed from that byte;
+      both copies are 668,788,096 bytes and hash to the catalog's SHA-256, and the probe passed. A download on Windows and
+      macOS is part of criterion 9's runs. See the step 9 record "a real download, interrupted and resumed".)*
 - [x] The probe catalog covers every row of the README's smoke matrix and the Juno-side checks and readings
       of every smoke and compare script. Every probe has a self-test in `mvn test`, and the coverage test
       passes. *(2026-10-31, step 6: `CoverageTest` passes against the catalog, the scripts on disk and the
@@ -320,6 +342,10 @@ GPU, macOS.
       `SurefireReportsTest`, its command and report parsing, since running Maven inside `mvn test` would recurse.)*
 - [ ] Results are scrubbed (fixture tests), the zip holds `SUMMARY.txt` and the HTML report, and nothing in
       the kit uploads.
+      *(2026-11-05: every zip here holds `SUMMARY.txt` and `report.html`; the kit's network calls are HEAD requests to
+      Maven Central and huggingface.co, the pinned downloads, and Juno on 127.0.0.1, so nothing uploads (read from the
+      code). Owed: `PrivacyTest`'s Windows and macOS fixtures are not recordings; scrubbing checked on a Windows and a
+      macOS tester's zip (step 9).)*
 - [x] `ingest` drafts the `docs/perf-compare/` entry and compares against the owner's reference run; the
       reference run on this host is published.
       *(2026-11-04: the owner's reference run at `80ec949e`, suite `all`, 72 of 72 runnable probes PASS or DONE, is
@@ -327,6 +353,8 @@ GPU, macOS.
       it read "10 items compared: 10 equal or within the bound"; that test draft was not published.)*
 - [ ] The kit has completed at least once each on Windows, macOS and Linux (CI runner or tester), each zip
       ingested.
+      *(2026-11-05: Linux done (this host; the reference run ingested). Owed: a Windows and a macOS run, by testers while
+      CI is deferred (owner decision 2026-11-03), each ingested (step 9).)*
 - [x] Rule 10 and check 10 are in place (check 10 seen failing first); every open tier file has its **Kit
       probes** section; `INVENTORY.md` has the "Borrowed hardware" table.
       *(2026-10-31, step 7: check 10 failed on all 17 open tier files, then passed once the sections were
@@ -336,6 +364,8 @@ GPU, macOS.
       53 skipped; then `mvn install -DskipTests` and `mvn verify -pl juno-master`, 13 tests and 20 integration tests,
       0 failures. Re-run at the close if step 9 changes code.)*
 - [ ] Cross-surface checklist fully resolved.
+      *(2026-11-05: drafted from this host's runs (the 2026-11-05 step 9 record): rows 1, 2 and 4 to 15 PASS on Linux,
+      row 3 NEEDS-AMD-HARDWARE. Owed: row 14's `juno.bat`, which only a Windows tester's run exercises (step 9).)*
 - [x] Docs (`juno-kit/README.md`, `docs/howto.md`, `docs/agent-arch.txt`, `README.md`) updated, in
       Juno-native language only; `CHANGELOG.md` entry added.
       *(2026-11-03, step 10: all five written; a grep of the added text finds no competitor product name, tier number,
@@ -1568,3 +1598,184 @@ Criterion 11 ticked; it is re-run at the close if step 9 changes code. **Exit cr
 **Next for the executor:** step 9 as testers' zips arrive (`ingest` each against the reference run; fix what they
 expose, including the three cosmetic kit-output defects noted in the reference run's review). Then the close:
 the cross-surface table, and the suite and `mvn verify -pl juno-master` again if code changed.
+
+### 2026-11-05: step 9, the kit-output defects from the reference run's review (no tester's zip yet)
+
+**Plan against code, verified at HEAD `34dd9a90`.** The owner committed the CPU batched matmul change and the 2026-11-05
+records as `34dd9a90`; `.github/` stays untracked, as decided. `check-plan-thresholds.sh` passed first (26 tier files). No
+gate, sweep or build was running. No tester's zip has arrived: the 45 zips under `juno-kit-results/` are all this host's
+(`linux-amd64`). So step 9's only executor work today is the three kit-output defects the reference run's review found,
+each confirmed in the code before the tests:
+- **The calibration note's "`;.`".** `NoiseRule.reason` ended every cause with "`; `" and trimmed, leaving a trailing
+  "`;`", and `ProbeRunner` appends "`. `" to each re-run's reason. The note is stored in the checkpoint, so `SUMMARY.txt`,
+  the progress line, `report.html` and `ingest`'s probe table all showed it. A marked reading's "still: ..." note had the
+  same trailing "`;`".
+- **`README-row.md`'s two cells.** `IngestReport.readmeRow` wrote the entry and then one cell of host, commit and counts.
+  `docs/perf-compare/README.md`'s table has four columns (Run, Backend, Juno metrics, Artifacts).
+- **The coverage table's GPU backend.** `ingest` counts every probe a row lists. A GPU probe that needs no particular
+  backend runs on the one `GpuContext.selectBindings()` picks, CUDA before ROCm, and the draft did not say which. The
+  manifest's host map already holds Juno's own backend probe (`cuda`, `rocm`), so the zip needs no new field.
+
+**Tests first** (`juno-kit`; each seen failing for the defect, then passing):
+- `NoiseRuleTest.theReasonJoinsItsCausesWithNoTrailingSeparator`: failed with "`...another program used the GPU;`".
+- `IngestTest.theReadmeRowHasThePerfCompareTablesFourCells` (a remote run compared with a reference, and the reference run
+  itself) and the build-failure test's new row assertions: failed with 2 cells, not 4.
+- `IngestTest.theCoverageSectionNamesTheBackendTheGpuProbesRanOn` (CUDA, ROCm, both, neither, not recorded): failed, no
+  backend line.
+
+**The change** (`juno-kit` only):
+- `NoiseRule.reason` joins its causes with "`; `".
+- `IngestReport.readmeRow` writes four cells:
+  - the entry;
+  - "Hardware validation kit reference run" or "Hardware validation kit, remote run", then the host, the Juno commit
+    ("modified tree" when so), the kit jar's first 16 hex digits, the suite, "unpinned" (the kit never pins clocks) and
+    the status counts, and for a compared run how many items differ;
+  - what the entry records, plus "correctness against the reference run" when compared;
+  - the INDEX link.
+
+  A build-failure row reads "the build failed" and "the end of the build log". `Ingest` passes `--reference-run` through.
+- `IngestReport` writes a **GPU backend** line above the coverage table. On this host it reads "CUDA. Every GPU probe ran
+  on it, so the ROCm row counts CUDA runs and says nothing about ROCm here."
+
+**Checked on a real zip.** The reference run's zip (`20261104T043255Z`) re-ingested into a scratch folder, not published:
+the row has four cells and carries what the hand-written row does, and the backend line reads as above. Its calibration
+note still reads "`;.`", because the runner wrote it into that zip's checkpoint. Zips built at `80ec949e` keep it; runs
+from this change on do not.
+
+**Tests.** `mvn package -pl juno-kit -am -Dtest='cab.ml.juno.kit.**' -Dsurefire.failIfNoSpecifiedTests=false`: 119 tests,
+0 failures, 0 errors (116 before, 3 new). Only `juno-kit` changed since the 2026-11-05 full suite and `mvn verify -pl
+juno-master` (`git diff --stat`: five kit files), so criterion 11 stands. `check-plan-thresholds.sh` passes after the edits.
+
+**Docs:** `CHANGELOG.md` Session 130. The reference run's INDEX marks the three as fixed; its draft is kept as written.
+`juno-kit/README.md`, `docs/howto.md` and `docs/agent-arch.txt` do not quote these outputs and are unchanged.
+
+**Out-of-tier changes:** none. The kit is this tier's code.
+
+**The cross-surface table, drafted from this host's runs** (reference run `docs/perf-compare/20261104T173942Z-kit-reference/`
+at `80ec949e`, its "Coverage on this host" counts; the CPU rows also by the `quick` re-score on the changed kernels,
+`docs/perf-compare/20261105T155413Z-kit-quick-rescore/`, 18 of 18 PASS or DONE):
+
+| # | Surface | Here (Linux, CUDA) | Owed |
+|---|---|---|---|
+| 1 | CPU inference | PASS: 26 probes, 12 DONE, 14 PASS; CPU unit tests 2101, 0 failures | Windows and macOS (criterion 9) |
+| 2 | CUDA GPU inference | PASS on Linux: 21 probes, 12 DONE, 9 PASS; CUDA test group 367 tests, 0 failures | Windows NVIDIA after [Tier 02G](TIER-02G-cuda-on-windows.md); until then expected not runnable there, to be seen on a Windows run |
+| 3 | ROCm GPU inference | NEEDS-AMD-HARDWARE: `rocm.unit-tests` not runnable here; the 16 probes the row counts ran on CUDA | an AMD GPU host's run |
+| 4 | Static schedule | PASS: 7 probes, 2 DONE, 5 PASS | |
+| 5 | Continuous schedule | PASS: 11 PASS | |
+| 6 | Single-node local mode | PASS: 7 PASS | |
+| 7 | Pipeline-parallel cluster | PASS: 10 PASS (live checks 1 to 6, CPU and CUDA) | |
+| 8 | Tensor-parallel cluster | PASS: 10 PASS (live checks 7 and 8) | |
+| 9 | LoRA training | PASS: 2 PASS | |
+| 10 | LoRA playback | PASS: 3 PASS | |
+| 11 | Vision | PASS: 2 PASS | |
+| 12 | OpenAI REST surface | PASS: 11 PASS | |
+| 13 | Native REST surface | PASS: 2 PASS | |
+| 14 | CLI | PASS for `juno` and the kit's own CLI on Linux: 2 PASS | `juno.bat` and `juno-kit.bat`: a Windows run |
+| 15 | JVM embedding facade | PASS: 30 probes, 24 DONE, 6 PASS | |
+
+Not ticked: row 14 waits on a Windows run.
+
+**What each open criterion waits on** (each now carries a dated note): criteria 1, 2, 4, 5, 7, 9 and 12 all wait on step 9's
+first tester runs on Windows and macOS: `juno-kit.bat` and `juno.bat`, recorded detection output, `KeepAwake`'s Windows and
+macOS paths, a real download from Hugging Face, and scrubbing on those OSes' zips. Nothing else is open for the executor.
+
+**Exit criteria now ticked:** 6 of 13, unchanged.
+
+**Owed to the owner:**
+1. Commit this change (the kit fixes and today's records).
+2. The testers' runs: Windows (with an NVIDIA GPU if possible, for Tier 02G's later runs), macOS, a 256-bit integer host
+   (Tier 02E's width row), and an AMD GPU host if one can be borrowed. Testers build `80ec949e`, as before, so `ingest`
+   compares them with the reference run. The owner ingests their zips with the kit at this change or later, which reads
+   `80ec949e` zips (same schema) and writes the corrected row and backend line.
+
+**Next for the executor:** `ingest` each tester's zip as it arrives, fix what it exposes, record its host in `INVENTORY.md`'s
+"Borrowed hardware" table, then the close: the cross-surface row 14, and the full suite and `mvn verify -pl juno-master`
+again if engine code changed.
+
+### 2026-11-05: step 9, a real download, interrupted and resumed; the Linux inhibitor observed (no tester's zip yet)
+
+**Plan against code, verified at HEAD `34dd9a90`** with the previous entry's kit fixes uncommitted (`git diff --stat`: the five
+kit files, this file, `CHANGELOG.md` and the reference run's INDEX, as that entry says). `check-plan-thresholds.sh` passed first
+(26 tier files). No gate, sweep or build was running. No tester's zip has arrived: the 45 zips under `juno-kit-results/` are all
+`linux-amd64`. Two owed items did not need a tester, because the hardware they turn on is this host's:
+- criterion 5's "nothing has been downloaded from Hugging Face by the kit yet": the catalog, `ModelStore` and
+  `HfGgufFetcher.downloadPinned` are the same on every OS;
+- criterion 4's "on Linux whether the inhibitor held was not observed".
+
+Code read first: `ModelStore.ensure` downloads into the cache when no file of the catalog's name and size is found, then
+hashes it and refuses a mismatch. `downloadPinned` resumes a `.part` file with an HTTP `Range` request and appends on a 206.
+`KeepAwake` starts `systemd-inhibit --what=idle:sleep --mode=block tail --pid=<kit pid>` and discards its output.
+
+**Run.** `./juno-kit.sh --yes --probes launcher.tinyllama --cache-dir <empty scratch dir> --out <scratch dir>`, no
+`--models-dir`, so the kit had to download TinyLlama (637 MiB). A driver script polled the `.part` file, read
+`systemd-inhibit --list` and, at 150 MiB, sent SIGINT to the launcher's process group, as a terminal's Ctrl+C does. Then
+`./juno-kit.sh resume <run dir>`.
+- **Attempt 1 is a harness artifact, not a kit defect.** The interrupt did nothing: the run went on, downloaded the whole file,
+  verified it and passed. A background job of a non-interactive shell starts with SIGINT ignored, and the JVM installs no handler
+  for a signal ignored at its start. So attempt 1 is an uninterrupted download: 637 MiB in about 26 s, SHA-256 equal to the
+  catalog's, `launcher.tinyllama` PASS.
+- **Attempt 2**, SIGINT restored to its default before `exec` (the kit JVM's `SigIgn` read 0), from an emptied cache (run
+  `20261106T004928Z-custom`; its zip is kept in `juno-kit-results/`):
+
+  | Stage | Seen |
+  |---|---|
+  | Ctrl+C at 160,480,372 bytes | launcher exit 130; the `.part` file kept; no final file; no inhibitor or helper left |
+  | `resume` | "Resuming 20261106T004928Z-custom: 1 of 1 probes left."; `HfGgufFetcher`: "Resuming download of tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf from byte 160480372" (Hugging Face's CDN answered the `Range` request with 206 through the redirect) |
+  | Finished file | 668,788,096 bytes, SHA-256 `9fecc3b3...2776a0`, the catalog's; "Verifying" printed and no mismatch |
+  | Probe | `launcher.tinyllama` PASS, 3 of 3 checks; exit 0 |
+  | Inhibitor | `juno-kit ... sleep:idle ... Juno hardware validation run ... block` listed during both runs, held by the kit's `systemd-inhibit` child; none listed after either run |
+
+**Not changed, recorded.**
+- On Ctrl+C the console prints nothing after the last progress line. The run directory's name appears first in the closing
+  "Results:" line, so after an interrupt the tester finds it by listing `juno-kit-results/`, as the guide's "If it stops"
+  section says. That is enough. A line naming the run directory at the start would be a convenience, not a fix.
+- `HfGgufFetcher` logs "Starting" or "Resuming ... from byte N" through `java.util.logging` to the console only, so a returned
+  zip's `kit.log` shows a resume only through the progress lines (103 MiB before, 247 MiB five seconds after). This does not
+  affect a result.
+
+**Tests.** No code changed. `check-plan-thresholds.sh` passes after the edits. The previous entry's kit tests (119, 0 failures)
+stand; this run used a jar its launcher rebuilt from that tree.
+
+**Out-of-tier changes:** none.
+
+**Exit criteria now ticked:** 7 of 13 (the model catalog added). Criterion 4's note records the Linux observation; it stays
+open for Windows and macOS.
+
+**What remains, all of it on Windows and macOS** (criteria 1, 2, 4, 6, 9 and 12, the last for row 14):
+- `juno-kit.bat` and `juno.bat`;
+- recorded detection output;
+- `KeepAwake`'s FFM and `caffeinate` paths;
+- scrubbing on those OSes' zips.
+No executor work is left that this host can do.
+
+**Decision for the owner: where the Windows and macOS runs come from.** Testers' runs have been owed since 2026-11-03 and no
+zip has arrived. CI was deferred the same day ("for now skip github ci").
+- (a) **Take CI up once for this.** Commit `.github/workflows/kit.yml` (written and checked at step 8), push, and dispatch its
+  `quick-suite` job. It runs on the free runners for Linux x64 and arm64, Windows and macOS: `juno-kit.bat` on Windows, and
+  `quick`'s `launcher.tinyllama` drives `juno.bat` there. Every runner downloads TinyLlama, and its zip is a run artifact. The
+  x64 runners likely give the first, noisy 256-bit integer reading (`cpu.kernel-width`, in `quick`).
+  - The runs build the pushed commit, not `80ec949e`. Ingest each zip with
+    `--reference docs/perf-compare/20261104T173942Z-kit-reference`. The only engine change between them is the CPU batched
+    matmul, whose outputs are bit for bit the earlier form's.
+  - Deleting the `schedule:` trigger keeps the weekly run off, if wanted.
+- (b) Install the Windows 11 evaluation on this host now, not at [Tier 02G](TIER-02G-cuda-on-windows.md) step 2 as decided on
+  2026-10-13. A kit run there is the Windows run, and with no code change in between it can also be Tier 02G's step 3 pre-tier
+  record. The evaluation's 90 days start earlier. macOS still needs a tester or CI.
+- (c) Keep waiting for testers.
+- **Recommendation: (a).** It needs no person and no hardware. Decision 8 approved it for this purpose, and the file exists. It
+  covers both open OSes and arm64 in one dispatch, at no cost. The runners have fewer cores than this host, so `quick` takes
+  longer there than its 32 to 45 minutes here.
+- **Owner decision 2026-11-05: (c), keep waiting for testers.** CI stays deferred, and the Windows evaluation stays at Tier
+  02G step 2. Testers build `80ec949e`, as before. A step-by-step page for testers was prepared for the owner to send, outside
+  the repository. It covers which machines help, prerequisites, the commit (git or the commit archive, keeping the archive's
+  folder name), the commands per OS, `resume` and `pack`, and privacy, and it follows `juno-kit/README.md`, which is unchanged
+  since `80ec949e`. The suites it asks for:
+  - every tester runs `quick`;
+  - a Linux host with an AMD GPU runs `gpu` as well.
+
+**Owed to the owner:** commit the previous entry's kit fixes and these records; send the tester page and collect the zips
+(Windows, macOS, a 256-bit integer host, an AMD GPU host if one can be borrowed).
+
+**Next for the executor:** `ingest` each tester's zip as it arrives (with the kit at this change or later, against the reference
+run at `80ec949e`), fix what it exposes, record its host in `INVENTORY.md`'s "Borrowed hardware" table, and tick what it meets.
+Then the close: the cross-surface row 14, and the full suite and `mvn verify -pl juno-master` again if code changed.

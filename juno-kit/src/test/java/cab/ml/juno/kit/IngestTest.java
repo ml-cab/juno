@@ -83,6 +83,46 @@ class IngestTest {
 				+ ReferenceComparison.FAILS_HERE + " |");
 	}
 
+	/** The perf-compare README's table has four columns: the run, what it is, what it records, its INDEX. */
+	@Test
+	void theReadmeRowHasThePerfCompareTablesFourCells() throws Exception {
+		Path out = Files.createDirectories(tmp.resolve("perf-compare"));
+		Path ref = Ingest.run(zip(run("ref", COMMIT, 1.20, "Sure", true)), null, out, "20261031T000000Z", tmp.resolve("s1"),
+				true);
+		Path remote = Ingest.run(zip(run("remote", COMMIT, 1.20, "Sure", true)), null, out, UTC, tmp.resolve("s2"));
+
+		List<String> r = cells(Files.readString(remote.resolve("README-row.md")).strip());
+		String name = remote.getFileName().toString();
+		assertThat(r).hasSize(4);
+		assertThat(r.get(0)).isEqualTo("[`" + name + "`](" + name + "/)");
+		assertThat(r.get(1)).startsWith("Hardware validation kit, remote run")
+				.contains("Xeon(R) CPU E5-1650 v2", "Juno `06d6d22d`", "kit jar `ab12`", "suite `custom`", "unpinned",
+						"4 PASS or DONE", "against the reference run, 0 of 4 items differ");
+		assertThat(r.get(2)).isEqualTo("probe status and time, readings per probe, coverage, correctness against the"
+				+ " reference run");
+		assertThat(r.get(3)).isEqualTo("[INDEX](" + name + "/INDEX.md)");
+
+		List<String> f = cells(Files.readString(ref.resolve("README-row.md")).strip());
+		assertThat(f).hasSize(4);
+		assertThat(f.get(1)).startsWith("Hardware validation kit reference run").doesNotContain("against the reference");
+		assertThat(f.get(2)).isEqualTo("probe status and time, readings per probe, coverage");
+	}
+
+	/** Juno selects CUDA before ROCm, so the GPU probes that name no backend say nothing about the other one. */
+	@Test
+	void theCoverageSectionNamesTheBackendTheGpuProbesRanOn() throws Exception {
+		Path out = Files.createDirectories(tmp.resolve("perf-compare"));
+
+		assertThat(coverage(out, "a", Map.of("cuda", true, "rocm", false))).startsWith("**GPU backend:** CUDA.")
+				.contains("says nothing about ROCm here");
+		assertThat(coverage(out, "b", Map.of("cuda", false, "rocm", true))).startsWith("**GPU backend:** ROCm.")
+				.contains("says nothing about CUDA here");
+		assertThat(coverage(out, "c", Map.of("cuda", true, "rocm", true)))
+				.startsWith("**GPU backend:** CUDA and ROCm both load.");
+		assertThat(coverage(out, "d", Map.of("cuda", false, "rocm", false))).startsWith("**GPU backend:** none.");
+		assertThat(coverage(out, "e", Map.of())).startsWith("**GPU backend:** not recorded");
+	}
+
 	@Test
 	void equalRepliesAndNllWithinTheBoundAreCountedNotListed() throws Exception {
 		RunResults ref = RunResults.open(run("ref", COMMIT, 1.20, "Sure", true), tmp.resolve("s1"));
@@ -147,6 +187,10 @@ class IngestTest {
 		assertThat(draft.getFileName().toString()).startsWith(UTC + "-remote-windows-amd64");
 		assertThat(Files.readString(draft.resolve("INDEX.md"))).contains("The build failed")
 				.contains("[ERROR] cannot find symbol Foo");
+		List<String> row = cells(Files.readString(draft.resolve("README-row.md")).strip());
+		assertThat(row).hasSize(4);
+		assertThat(row.get(1)).endsWith("the build failed");
+		assertThat(row.get(2)).isEqualTo("the end of the build log");
 	}
 
 	@Test
@@ -163,9 +207,35 @@ class IngestTest {
 
 	// ── fixtures ─────────────────────────────────────────────────────────────
 
-	/** A finished run directory: four probes, one throughput reading, one NLL, one reply, one check. */
+	/** The coverage section of the draft of a run whose host map also holds {@code backend}. */
+	private String coverage(Path out, String name, Map<String, Object> backend) throws IOException {
+		Path draft = Ingest.run(zip(run(name, COMMIT, 1.20, "Sure", true, backend)), null, out,
+				"20261101T12000" + name + "Z", tmp.resolve("scratch-" + name));
+		String index = Files.readString(draft.resolve("INDEX.md"));
+		String section = index.substring(index.indexOf("## Coverage on this host\n\n") + 26);
+		assertThat(section.indexOf("**GPU backend:**")).isLessThan(section.indexOf("| Item |"));
+		return section;
+	}
+
+	/** A markdown table row's cells, split at the pipes no cell escapes. */
+	private static List<String> cells(String row) {
+		List<String> cells = new ArrayList<>();
+		for (String c : row.substring(1, row.length() - 1).split("(?<!\\\\)\\|"))
+			cells.add(c.strip());
+		return cells;
+	}
+
 	private Path run(String name, String commit, double nll, String reply, boolean jsonCheckPasses)
 			throws IOException {
+		return run(name, commit, nll, reply, jsonCheckPasses, Map.of());
+	}
+
+	/**
+	 * A finished run directory: four probes, one throughput reading, one NLL, one reply, one check; {@code extraHost}
+	 * is added to the manifest's host map.
+	 */
+	private Path run(String name, String commit, double nll, String reply, boolean jsonCheckPasses,
+			Map<String, Object> extraHost) throws IOException {
 		Path dir = Files.createDirectories(tmp.resolve(name + "-" + commit.substring(0, 4)));
 		Map<String, Object> host = new LinkedHashMap<>();
 		host.put("os", "Linux");
@@ -173,6 +243,7 @@ class IngestTest {
 		host.put("cpuModel", "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz");
 		host.put("threads", 12);
 		host.put("gpus", List.of(Map.of("vendor", "NVIDIA", "name", "NVIDIA GeForce GTX 1080")));
+		host.putAll(extraHost);
 		List<String> ids = List.of("cpu.throughput.tinyllama.128", "grammar.tinyllama", "quality.tinyllama-1.1b",
 				"cpu.hot-path.tinyllama-1.1b");
 		new Manifest(Manifest.SCHEMA_VERSION, "run", "0.1.2", commit, false, "ab12", "custom", ids,

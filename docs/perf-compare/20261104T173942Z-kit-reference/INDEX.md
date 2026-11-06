@@ -30,7 +30,10 @@ gate. Run with `dist/kit-reference/run-reference.sh` on a clean tree (tracked fi
   unit tests only (no real file in the kit's catalog).
 - **Kit output to fix later:** the calibration note ends in "`;.`"; `README-row.md` has two cells where the
   perf-compare README's table has four (the README row was written by hand); the coverage table does not say which
-  GPU backend its GPU rows ran on. None changes a result.
+  GPU backend its GPU rows ran on. None changes a result. *(2026-11-05: all three fixed in the kit. `ingest` now
+  writes the row in four cells and a "GPU backend" line above the coverage table (here: CUDA, so the ROCm row counts
+  CUDA runs), and a re-run's note ends in one full stop. This draft is kept as written; zips built at `80ec949e` keep
+  the old note text.)*
 - **Checked by ingest:** a later zip from this host at the same commit (`20261104T183707Z`, `cpu.live.tinyllama` alone)
   ingested against this run reads "10 items compared: 10 equal or within the bound". That test draft was not published.
 - **Files** also include `estimate.json` (the first estimate), `skipped.json` (the two probes not runnable here) and

@@ -1,5 +1,16 @@
 ## Status 
 
+**Session 130** - Hardware validation kit: re-run notes, the perf-compare row and the GPU backend in `ingest`'s draft
+
+- **A re-run's note ends in one full stop.** It read "attempt 1 re-run: other processes used 6% of the CPU;." in
+  `SUMMARY.txt`, the HTML report and the progress line; a reading still noisy after its re-runs ended its note in "`;`".
+- **`ingest` writes `README-row.md` in the perf-compare table's four columns**: the entry; the run (reference or
+  remote), host, Juno commit, kit jar, suite, "unpinned" and status counts, and for a compared run how many items
+  differ; what the entry records; its INDEX link. Before, it wrote two cells and the row had to be rewritten by hand.
+- **`ingest`'s coverage section names the GPU backend.** A GPU probe that needs no particular backend runs on the one
+  Juno selects, CUDA before ROCm, so on a CUDA host the ROCm row counts CUDA runs. A line above the table now says which
+  backend ran ("CUDA", "ROCm", both, or none), read from Juno's backend probe in the manifest.
+
 **Session 129** - CPU prefill no longer slows down 2x to 5.5x in some JVMs
 
 - **The CPU batched matmul (prefill at window width) kept its speed in every JVM.** Before, C2 compiled its four-row

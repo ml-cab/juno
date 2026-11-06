@@ -69,6 +69,16 @@ class NoiseRuleTest {
 		assertThat(NoiseRule.reason(clean, 0.0, true)).contains("GPU");
 	}
 
+	/** The runner ends each re-run's reason with a full stop, so the reason itself ends with none. */
+	@Test
+	void theReasonJoinsItsCausesWithNoTrailingSeparator() {
+		assertThat(NoiseRule.reason(reading(100, 130, 90), 0.06, true))
+				.isEqualTo("tg spread 40% > 15%; other processes used 6% of the CPU; another program used the GPU");
+		assertThat(NoiseRule.reason(reading(100, 101, 99), 0.06, false))
+				.isEqualTo("other processes used 6% of the CPU");
+		assertThat(NoiseRule.reason(reading(100, 101, 99), 0.0, false)).isEmpty();
+	}
+
 	@Test
 	void anUnscoredReadingNeverTriggersAReRun() {
 		ProbeReport gc = new ProbeReport("r", ProbeKind.READING, null, List.of(),

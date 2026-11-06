@@ -78,7 +78,8 @@ final class Ingest {
 		List<ReferenceComparison.Row> rows = ref == null ? List.of() : ReferenceComparison.compare(remote, ref);
 		Files.writeString(draft.resolve("INDEX.md"),
 				IngestReport.index(name, remote, ref, refName, rows, Coverage.load(), asReference));
-		Files.writeString(draft.resolve("README-row.md"), IngestReport.readmeRow(name, remote, ref, rows) + "\n");
+		Files.writeString(draft.resolve("README-row.md"),
+				IngestReport.readmeRow(name, remote, ref, rows, asReference) + "\n");
 		return draft;
 	}
 

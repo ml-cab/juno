@@ -70,18 +70,18 @@ final class NoiseRule {
 		return attempt < MAX_ATTEMPTS ? Verdict.RERUN : Verdict.NOISY;
 	}
 
-	/** Why {@code report} was marked, for the summary; empty when it was not. */
+	/** Why {@code report} was marked, for the summary: its causes joined by {@code "; "}; empty when it was not. */
 	static String reason(ProbeReport report, double otherCpuShare, boolean gpuBusy) {
-		StringBuilder sb = new StringBuilder();
+		List<String> causes = new ArrayList<>();
 		for (ProbeReport.Reading r : report.readings())
 			if (r.scored() && noisy(r.values()))
-				sb.append(String.format(java.util.Locale.ROOT, "%s spread %.0f%% > 15%%; ", r.name(),
+				causes.add(String.format(java.util.Locale.ROOT, "%s spread %.0f%% > 15%%", r.name(),
 						spread(r.values()) * 100));
 		if (otherCpuShare > MAX_OTHER_CPU_SHARE)
-			sb.append(String.format(java.util.Locale.ROOT, "other processes used %.0f%% of the CPU; ",
+			causes.add(String.format(java.util.Locale.ROOT, "other processes used %.0f%% of the CPU",
 					otherCpuShare * 100));
 		if (gpuBusy)
-			sb.append("another program used the GPU; ");
-		return sb.toString().trim();
+			causes.add("another program used the GPU");
+		return String.join("; ", causes);
 	}
 }

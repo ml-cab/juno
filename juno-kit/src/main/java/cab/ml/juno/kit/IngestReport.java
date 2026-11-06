@@ -101,7 +101,8 @@ final class IngestReport {
 			}
 		}
 
-		b.append("\n## Coverage on this host\n\n| Item | Title | Probes run here |\n|---|---|---|\n");
+		b.append("\n## Coverage on this host\n\n").append(gpuBackend(m.host()))
+				.append("\n\n| Item | Title | Probes run here |\n|---|---|---|\n");
 		for (Coverage.Entry e : coverage.entries()) {
 			List<ProbeOutcome> ran = new ArrayList<>();
 			for (String p : e.probes())
@@ -117,23 +118,37 @@ final class IngestReport {
 		return b.toString();
 	}
 
-	static String readmeRow(String name, RunResults run, RunResults ref, List<ReferenceComparison.Row> rows) {
+	/**
+	 * The row for the perf-compare README's table, in its four columns: the entry, what ran on which host, what the
+	 * entry records, its INDEX. A kit run is never clock-pinned, since pinning needs admin rights.
+	 */
+	static String readmeRow(String name, RunResults run, RunResults ref, List<ReferenceComparison.Row> rows,
+			boolean asReference) {
 		Manifest m = run.manifest();
 		StringBuilder b = new StringBuilder("| [`").append(name).append("`](").append(name).append("/) | ");
-		b.append(host(m.host())).append("; Juno `").append(shortCommit(m)).append("`, ");
+		b.append(asReference ? "Hardware validation kit reference run: " : "Hardware validation kit, remote run: ")
+				.append(host(m.host())).append("; Juno `").append(shortCommit(m)).append('`')
+				.append(m.junoTreeDirty() ? " (modified tree)" : "");
+		String index = " | [INDEX](" + name + "/INDEX.md) |";
 		if (run.buildFailed())
-			return b.append("the build failed |").toString();
+			return b.append(", the build failed | the end of the build log").append(index).toString();
+		String jar = m.kitJarSha256();
+		if (jar != null)
+			b.append(", kit jar `").append(jar, 0, Math.min(16, jar.length())).append('`');
 		Map<String, Long> counts = run.checkpoint().done().stream()
 				.collect(Collectors.groupingBy(ProbeOutcome::status, TreeMap::new, Collectors.counting()));
 		long good = counts.getOrDefault(ProbeOutcome.PASS, 0L) + counts.getOrDefault(ProbeOutcome.DONE, 0L);
-		b.append("suite ").append(m.suite()).append(": ").append(good).append(" PASS or DONE");
+		b.append(", suite `").append(m.suite()).append("`, unpinned: ").append(good).append(" PASS or DONE");
 		for (String s : List.of(ProbeOutcome.FAIL, ProbeOutcome.NOISY, ProbeOutcome.ERROR, ProbeOutcome.TIMEOUT))
 			if (counts.containsKey(s))
 				b.append(", ").append(counts.get(s)).append(' ').append(s);
 		if (ref != null)
 			b.append("; against the reference run, ").append(rows.stream().filter(ReferenceComparison.Row::listed).count())
 					.append(" of ").append(rows.size()).append(" items differ");
-		return b.append(" |").toString();
+		b.append(" | probe status and time, readings per probe, coverage");
+		if (ref != null)
+			b.append(", correctness against the reference run");
+		return b.append(index).toString();
 	}
 
 	/** Six significant digits, trailing zeros dropped; {@code n/a} for a missing value. */
@@ -165,6 +180,27 @@ final class IngestReport {
 					: gpus.stream().map(g -> g instanceof Map<?, ?> gm ? String.valueOf(gm.get("name")) : "?")
 							.collect(Collectors.joining(", ")));
 		return cell(b.toString(), 400);
+	}
+
+	/**
+	 * Which backend the GPU probes ran on, from Juno's own backend probe in the host map. A probe that needs no
+	 * particular backend runs on the one Juno selects, CUDA before ROCm, whichever GPU row lists it.
+	 */
+	private static String gpuBackend(Map<String, Object> h) {
+		if (!h.containsKey("cuda") && !h.containsKey("rocm"))
+			return "**GPU backend:** not recorded in the manifest.";
+		boolean cuda = Boolean.TRUE.equals(h.get("cuda"));
+		boolean rocm = Boolean.TRUE.equals(h.get("rocm"));
+		if (cuda && rocm)
+			return "**GPU backend:** CUDA and ROCm both load. A GPU probe that needs no particular backend ran on CUDA,"
+					+ " which Juno selects first, so the ROCm row counts CUDA runs except for the probes that need ROCm.";
+		if (cuda)
+			return "**GPU backend:** CUDA. Every GPU probe ran on it, so the ROCm row counts CUDA runs and says nothing"
+					+ " about ROCm here.";
+		if (rocm)
+			return "**GPU backend:** ROCm. Every GPU probe ran on it, so the CUDA row counts ROCm runs and says nothing"
+					+ " about CUDA here.";
+		return "**GPU backend:** none. Juno found no usable GPU, so no GPU probe ran.";
 	}
 
 	private static String statusCounts(List<ProbeOutcome> outcomes) {
