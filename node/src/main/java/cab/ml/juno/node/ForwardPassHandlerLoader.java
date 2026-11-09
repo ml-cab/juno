@@ -203,6 +203,17 @@ public final class ForwardPassHandlerLoader {
 	 * <p>When {@code adapters} is {@code null} this method behaves identically to
 	 * {@link #load(Path, ShardContext, MatVec)}.
 	 */
+	/**
+	 * Says once, at startup, that a dedicated handler outside the device-resident
+	 * region keeps the host-driven path for one request and for a decode batch.
+	 */
+	static void announceNoDecodeRegion(java.util.logging.Logger log, String arch) {
+		if (DEDICATED_HANDLER_ARCHITECTURES.contains(arch) && GpuResidencyOptions.unsupportedArchitectureReason(arch) != null)
+			GpuResidencyOptions.announceUnsupported(log, "the " + arch + " handler",
+					"has no device-resident decode region (the LLaMA-family, Phi-3 and Qwen3 handlers do), so its decode,"
+							+ " one request or a batch (--parallel, continuous schedule), stays host-driven");
+	}
+
 	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend,
 			LoraAdapterSet adapters) throws IOException {
 		String arch = readArchitecture(modelPath);
@@ -214,9 +225,7 @@ public final class ForwardPassHandlerLoader {
 			return LoraTrainingHandlerFactory.create(modelPath, context, adapters, backend);
 		}
 
-		if (DEDICATED_HANDLER_ARCHITECTURES.contains(arch) && GpuResidencyOptions.unsupportedArchitectureReason(arch) != null)
-			GpuResidencyOptions.announceUnsupported(log, "the " + arch + " handler",
-					"has no device-resident decode region (the LLaMA-family, Phi-3 and Qwen3 handlers do)");
+		announceNoDecodeRegion(log, arch);
 		if (backend instanceof GpuMatVec)
 			GpuAttentionSupport.announceCpuOnlyHandler(arch);
 

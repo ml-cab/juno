@@ -1,0 +1,21 @@
+{
+  "run_id": "20261109T010534Z",
+  "tool": "compare-parallel",
+  "status": "success",
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "model_path": "models/mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "backend": "gpu",
+  "parallel": 1,
+  "batch_window_ms": 50,
+  "sessions": 8,
+  "max_tokens": 64,
+  "wall_ms": 14813,
+  "sessions_ok": 8,
+  "sessions_failed": 0,
+  "total_completion_tokens": 512,
+  "total_prompt_tokens": 160,
+  "aggregate_token_gen_tps": 34.5642,
+  "mean_per_session_latency_ms": 14373.75,
+  "prompt": "could you please write me a short poem about love and war",
+  "log": "docs/perf-compare/20261109T005616Z-gpu-batched-decode-parallel/mistral/p1-rep1/parallel-1.log"
+}

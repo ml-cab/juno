@@ -1,0 +1,321 @@
+{
+ "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+ "runs": [
+  {
+   "pType": "pipeline",
+   "parallel": 1,
+   "rep": 1,
+   "rounds": [
+    {
+     "tps": 111.92664186037203,
+     "latency_s": 4.531745105981827,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 113.82692853437823,
+     "latency_s": 4.460523098707199,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 114.21941474643177,
+     "latency_s": 4.430243968963623,
+     "tokens": 512,
+     "same_reply": true
+    }
+   ],
+   "differing": 0,
+   "of": 8,
+   "statement_printed": false,
+   "replies": [
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red."
+   ]
+  },
+  {
+   "pType": "pipeline",
+   "parallel": 8,
+   "rep": 1,
+   "rounds": [
+    {
+     "tps": 27.549020574509278,
+     "latency_s": 18.581734597682953,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 36.27732711618832,
+     "latency_s": 14.110932171344757,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 41.60271677592395,
+     "latency_s": 12.303910911083221,
+     "tokens": 512,
+     "same_reply": true
+    }
+   ],
+   "differing": 0,
+   "of": 8,
+   "statement_printed": false,
+   "replies": [
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red."
+   ]
+  },
+  {
+   "pType": "pipeline",
+   "parallel": 1,
+   "rep": 2,
+   "rounds": [
+    {
+     "tps": 110.9886785517539,
+     "latency_s": 4.5759183168411255,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 112.90588188656203,
+     "latency_s": 4.496508032083511,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 113.12757959185049,
+     "latency_s": 4.488647133111954,
+     "tokens": 512,
+     "same_reply": true
+    }
+   ],
+   "differing": 0,
+   "of": 8,
+   "statement_printed": false,
+   "replies": [
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red."
+   ]
+  },
+  {
+   "pType": "pipeline",
+   "parallel": 8,
+   "rep": 2,
+   "rounds": [
+    {
+     "tps": 26.540269607442387,
+     "latency_s": 19.2879601418972,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 34.77620484313877,
+     "latency_s": 14.720272809267044,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 39.406363848673344,
+     "latency_s": 12.989596992731094,
+     "tokens": 512,
+     "same_reply": true
+    }
+   ],
+   "differing": 0,
+   "of": 8,
+   "statement_printed": false,
+   "replies": [
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red."
+   ]
+  },
+  {
+   "pType": "tensor",
+   "parallel": 1,
+   "rep": 1,
+   "rounds": [
+    {
+     "tps": 38.00288795833358,
+     "latency_s": 13.296598047018051,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 37.951667569207494,
+     "latency_s": 13.352452903985977,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 37.92808279155076,
+     "latency_s": 13.362265706062317,
+     "tokens": 512,
+     "same_reply": true
+    }
+   ],
+   "differing": 0,
+   "of": 8,
+   "statement_printed": false,
+   "replies": [
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red."
+   ]
+  },
+  {
+   "pType": "tensor",
+   "parallel": 8,
+   "rep": 1,
+   "rounds": [
+    {
+     "tps": 28.84405650695104,
+     "latency_s": 17.746987998485565,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 32.09174396352688,
+     "latency_s": 15.951367378234863,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 32.74879176625514,
+     "latency_s": 15.631300330162048,
+     "tokens": 512,
+     "same_reply": true
+    }
+   ],
+   "differing": 0,
+   "of": 8,
+   "statement_printed": false,
+   "replies": [
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red."
+   ]
+  },
+  {
+   "pType": "tensor",
+   "parallel": 1,
+   "rep": 2,
+   "rounds": [
+    {
+     "tps": 36.85975762108969,
+     "latency_s": 13.689872860908508,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 35.62600338146848,
+     "latency_s": 14.202791035175323,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 34.99846597173879,
+     "latency_s": 14.370603233575821,
+     "tokens": 512,
+     "same_reply": true
+    }
+   ],
+   "differing": 0,
+   "of": 8,
+   "statement_printed": false,
+   "replies": [
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red."
+   ]
+  },
+  {
+   "pType": "tensor",
+   "parallel": 8,
+   "rep": 2,
+   "rounds": [
+    {
+     "tps": 27.905756960564194,
+     "latency_s": 18.344275653362274,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 30.304708907824793,
+     "latency_s": 16.89274299144745,
+     "tokens": 512,
+     "same_reply": true
+    },
+    {
+     "tps": 30.644184884517635,
+     "latency_s": 16.705080062150955,
+     "tokens": 512,
+     "same_reply": true
+    }
+   ],
+   "differing": 0,
+   "of": 8,
+   "statement_printed": false,
+   "replies": [
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red.",
+    "A spider has eight legs.",
+    "The capital of France is Paris.",
+    "Yes, the primary color is red."
+   ]
+  }
+ ],
+ "single": {
+  "pipeline": [
+   "The capital of France is Paris.",
+   "Yes, the primary color is red.",
+   "A spider has eight legs."
+  ],
+  "tensor": [
+   "The capital of France is Paris.",
+   "Yes, the primary color is red.",
+   "A spider has eight legs."
+  ]
+ }
+}

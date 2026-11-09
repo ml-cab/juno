@@ -35,12 +35,13 @@ Module dependency (excerpt):
   node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler, RopePairing,
         Phi2TransformerHandler, Phi2Rope, Phi3TransformerHandler, Phi3Rope, MatVec
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
-        CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
-        DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
+        CudaBindings, CudaAvailability, CudaLibraryLocator, GpuPlatform,
+        RocmBindings, RocmAvailability, DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
         LoraTrainableHandler, LoraMerge, LoraQvInitializer, CpuKernelSelection,
         CpuIntegerKernels, CpuIntegerGemm, CpuIntegerDecodeBatch, CpuIntegerWidth,
         CpuIntegerKernels256, CpuIntegerGemm256, CpuThreads, CpuWorkerPool,
-        CpuDecodeScratch, VectorQuantKernels, SimdThreadPool
+        CpuDecodeScratch, VectorQuantKernels, SimdThreadPool, EmbeddedNodeServer,
+        NodeBindAddress, ParentPipeWatch
         node depends on lora
 
   CpuKernelSelection / CpuIntegerKernels / CpuIntegerGemm (node module): the
@@ -225,7 +226,10 @@ Module dependency (excerpt):
         gap.
         coordinator depends on node
   juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
-        ProcessPipelineClient, TensorParallelPipelineClient
+        ProcessPipelineClient, TensorParallelPipelineClient, TrainingTextFile (the LoRA REPL's
+        /train-file reader: CR LF read as LF, so an editor's line ends never become training tokens),
+        HealthPortOption (--health-port N: the --health sidecar's port and the one forked nodes report
+        to; not a port 1..65535 is refused)
         juno-player depends on coordinator (and transitively on node)
   juno-master — CoordinatorMain standalone executable (production coordinator); also carries
                 ModelLiveRunner (./juno test) over ModelLiveChecks, the ten real-model checks
@@ -255,7 +259,8 @@ Module dependency (excerpt):
               attached; exit 0 whenever the probes ran, whatever they found).
         Detection: HostDetector, DetectionParsers (/proc/cpuinfo, sysctl, Win32_Processor,
               nvidia-smi, rocm-smi, Linux power supplies, pmset, Win32_Battery, nmcli), EnvProbe
-              (child JVM: vector widths, UseAVX, CpuThreads, CudaAvailability, RocmAvailability;
+              (child JVM: vector widths, UseAVX, CpuThreads, CudaAvailability with the CUDA
+              libraries loaded and where from or why CUDA is unavailable, RocmAvailability;
               reports on stdout), HostInfo.
         Choice and estimate: ProbeCatalog (every probe: id, kind CHECK or READING, suites,
               Requirements, models, reference cost, priority, entry class, timeout >= 3x cost,
@@ -283,7 +288,10 @@ Module dependency (excerpt):
               PackedKquantProbe, UnitTestsProbe + SurefireReports, ConsistencyProbe, GrammarProbe,
               ToolsProbe, ContextPolicyProbe, LongPromptProbe, CpuHotPathProbe, QualityProbe +
               QualityRunMain, ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
-              LoraProbe, VisionProbe, LauncherProbe. Helpers: JunoProcess (the launcher's server in
+              LoraProbe, VisionProbe, LauncherProbe (also: no [DBG] lines; on Windows nothing
+              written to the registry, HKCU\Console's last-write time read through FFM by
+              ConsoleRegistryKey), GpuKernelTimingProbe (GpuKernelTimings at a 2048-token window,
+              the slowest launch held to 500 ms against the display-driver watchdog). Helpers: JunoProcess (the launcher's server in
               a child JVM, stopped by typing exit), ConcurrentChats, StreamTiming, JfrEvents,
               NoticeCapture (engine log lines through a java.util.logging handler), HeaderOnlyGguf
               (header-only files declaring unsupported architectures), KitAdapters (one-step LoRA
@@ -454,6 +462,38 @@ Architecture dispatch (node module): ForwardPassHandlerLoader reads general.arch
   ClusterHarness.start() stops the forked node JVMs before rethrowing. Only a node started
   without a model path (stub mode, used by tests) serves fixed stub output.
 
+Local cluster node lifecycle (ClusterHarness, NodeMain): a forked node gets
+  -Dnode.bind=<loopback> and -Djuno.node.exitWithParent=true (ClusterHarness.
+  nodeLifecycleProperties). NodeBindAddress resolves node.bind; EmbeddedNodeServer then
+  listens on that address only (NettyServerBuilder.forAddress), and on every interface
+  when it is unset, as a deployed juno-node does; an address that does not resolve stops
+  NodeMain with one line and exit status 1. The harness dials its nodes at localhost, so
+  loopback is all they need, and Windows' firewall has nothing to ask about.
+  ParentPipeWatch reads the node's standard input to its end on a daemon thread and then
+  calls System.exit(0), so the node stops through its shutdown hooks (gRPC drain, a JFR
+  recording's dump on exit). ClusterHarness.stop() closes every node's standard input, then
+  waits for each (stopNode, NODE_STOP_GRACE_MS 10 s) and destroys only a node still running.
+  Process.destroy() alone is SIGTERM on Linux but a forced termination on Windows, which
+  runs no hook. A coordinator that dies closes the pipes too, so its nodes exit with it.
+
+Launchers (juno, scripts/run.sh; juno.bat, scripts/run.bat): run.bat repeats run.sh by
+  hand, subcommand by subcommand and flag by flag, and passes the same options to the Java
+  entry points. juno-player's LauncherParityTest reads both scripts and fails on a
+  subcommand, an accepted flag, a forwarded option or a jar name that run.bat lacks.
+  WindowsLauncherScriptTest holds the batch files to no [DBG] output, no registry write and
+  cmd.exe's block rule: inside if ... ( ... ) the first closing parenthesis that is neither
+  escaped nor quoted ends the block, so help text lives under its own label (:cluster_help,
+  ...) and echoes inside a block escape their parentheses. Colours on Windows come from
+  AnsiSupport (SetConsoleMode on the process's own console handles); run.bat sets code page
+  65001 only. run.bat's :prepend_cuda_path puts CUDA_PATH's, else CUDA_HOME's, else the
+  installer's default toolkit's bin\x64 and bin on PATH for GPU runs; CudaLibraryLocator
+  searches PATH first and CUDA_PATH itself, so CUDA_HOME and the default folder reach it
+  only through the launcher.
+
+LoraMerge refuses an output that is the model file or the .lora checkpoint (Files.isSameFile,
+  so a case variant on Windows, a link or a ./ spelling counts): the output opens with
+  truncation while the model is still read. LoraMergeMain prints the refusal as one line.
+
 Membership: fixed at cluster launch. ModelRegistry is in-memory (two ConcurrentHashMaps).
   There is no dynamic-membership or distributed-registry service: an earlier design for a
   Hazelcast-backed RegistryService and Hazelcast leader election was never built and has
@@ -512,14 +552,42 @@ GPU FFI (node module — Panama project, JEP 454):
         hostMalloc(deviceIndex, bytes)/hostFree(ptr) — pinned host-staging memory
         (cudaMallocHost/hipHostMalloc + matching free); memGetInfo(deviceIndex) — live
         {free, total} device bytes (cudaMemGetInfo/hipMemGetInfo), advisory sizing only.
-  CudaBindings — Panama FFI downcall handles for libcudart.so.12 and libcublas.so.12.
+  CudaBindings — Panama FFI downcall handles for the CUDA runtime and cuBLAS, found by
+        CudaLibraryLocator (cuBLAS at the runtime's CUDA major version).
         Implements GpuBindings. Singleton; thread-safe; zero per-call Java overhead.
-        Requires JVM flag: --enable-native-access=ALL-UNNAMED.
-  RocmBindings — Panama FFI downcall handles for libamdhip64.so and librocblas.so.
+        Requires JVM flag: --enable-native-access=ALL-UNNAMED. unavailableReason() is the
+        one-line load failure that GpuContext.selectBindings() appends when a forced
+        -Djuno.gpu.backend cannot run. cudaGetDeviceProperties binds the unversioned
+        export where present, else cudaGetDeviceProperties_v2 (name and totalGlobalMem sit
+        at the same offsets in both layouts). Every descriptor here and in
+        CudaDriverBindings matches its C prototype on LP64 and LLP64 alike (no C long).
+  CudaLibraryLocator — where the CUDA driver, runtime and cuBLAS are looked for, per OS.
+        Linux: libcuda.so.1, libcudart.so.12, libcublas.so.12, then the unversioned names.
+        Windows: nvcuda.dll; cudart64_12.dll or cudart64_13.dll and cublas64_12.dll or
+        cublas64_13.dll (12 first) on PATH, in %CUDA_PATH%\bin (12.x layout) and
+        %CUDA_PATH%\bin\x64 (13.x layout), then the system loader; a cuBLAS DLL found in a
+        folder loads its cublasLt64_NN.dll from that folder first. macOS: refused.
+        candidates()/notFoundMessage() are pure functions of the platform, the environment
+        and which files exist (unit-tested per OS on any host); load() applies them.
+        The not-found text names the fix for the OS (LD_LIBRARY_PATH; CUDA_PATH and the
+        runtime per GPU generation; the NVIDIA driver).
+  GpuPlatform — LINUX, WINDOWS, MACOS, OTHER from os.name, and each backend's one-line
+        refusal: CUDA on macOS and other systems, ROCm anywhere but Linux. RocmBindings
+        checks it before loading any library.
+  RocmBindings — Panama FFI downcall handles for libamdhip64.so and librocblas.so (Linux only).
         Implements GpuBindings. Pre-binds hipHostMalloc flags=0 via MethodHandles.insertArguments.
         opTranspose()=112 (rocblas_operation_transpose). hipDeviceProp_t: sizeof=1472, name@0,
         totalGlobalMem@288 (ROCm 7.2.x, Linux x86_64).
   CudaAvailability — detection via CudaBindings.isAvailable(); zero heap allocation.
+        loadedLibraries(): runtime, cublas and driver, each where it was loaded from (a file
+        CudaLibraryLocator found, or the name the system loader resolved); unavailableReason():
+        the one-line reason, null when available.
+  GpuKernelTimings — device time of single launches of the longest kernels at the sweep
+        models' shapes, by a CUDA event pair around each launch: prefill attention over one
+        window (each sweep model's heads), the tiled K-quant GEMM at Mistral 7B's FFN shapes
+        (Q4_K gate/up, Q6_K down), the LM head GEMV at Qwen2.5-3B's 151936x2048 Q6_K. The
+        window's rows are the prompt length (the adaptive GPU window covers a whole prompt).
+        Public for the kit; seeded random weights with finite scales.
   RocmAvailability — detection via RocmBindings.isAvailable(); mirrors CudaAvailability.
   MatVec — the compute-backend contract (CpuMatVec, CudaMatVec, RocmMatVec). Batched form, two
         spellings: sgemm(A, X) allocates and returns Y; sgemmInto(A, X, Y) (one overload per weight
@@ -745,6 +813,38 @@ GPU FFI (node module — Panama project, JEP 454):
         scales cos and sin, so RopeKernel.launchExtSplitHalf repeats that arithmetic step for step
         and the two agree bit for bit (CudaPhi3RopeTest, positions 0 to 4095, a window, a column
         range). Refuses positions Phi3RopeConfig.requirePosition refuses.
+  ResidentBatchDecode — the decode batch device region: N independent decode requests (a static
+        --parallel batch, the continuous schedule's running set), each at its own position over
+        its own KV mirror, through a transformer layer in one batched step. It shares the
+        weights and kernels of ResidentQkvPath (Parts) and runs the layers the single region
+        runs whole. Per layer: one upload of the residual rows (none when the previous layer ran
+        on the region), norm, Q8_1 quantize, the projections by BatchedDecodeKernels.gemvRows,
+        biases or per-head norms, RoPE at each row's position (ResidentRope.applyResidentRows),
+        the KV append into each request's mirror (kv_append_rows), attention, the tail, and one
+        download of k, v and the layer output (one wait). Every row is bit for bit that request's
+        single-request decode (ResidentBatchDecodeTest on random K-quant weights across the
+        plain, Qwen2, Qwen3 and Phi-3 shapes; BatchDecodeRegionHandlerTest greedy over 64 tokens
+        at batches of 2 and 8 on the sweep models). Mirrors are grown first and marked after the
+        host KV write, as the single region's are; a region is taken from a pool
+        (capacity rounded up to multiples of 8) and a card full at open time keeps the batch on
+        the host-driven path, logged once. On by default where the single region runs; off with
+        -DJUNO_BATCH_DECODE_REGION=off (BatchDecodeRegionOptions), for comparison. The LoRA
+        handlers stay out: they apply the adapter on the host and keep the serial default
+        forwardMultiDecode; LoraPlaybackBatchNotice (juno-player) states it at startup when
+        --lora-play meets a batch. A cluster stays out too: ProcessPipelineClient and
+        TensorParallelPipelineClient inherit InferencePipeline.forwardBatch's serial default (the
+        ForwardPass RPC carries one request), so only LocalInferencePipeline calls
+        forwardMultiDecode and a batch reaches each node as single requests; ClusterBatchNotice
+        (coordinator) states it at startup in ConsoleMain's cluster path and in CoordinatorMain.
+  BatchedDecodeKernels — batched_decode.ptx (node/src/main/cuda/batched_decode.cu, kept apart so
+        every other module's PTX stays byte-identical): gemvRows, Q4_K/Q5_K/Q6_K GEMVs over up to
+        8 activation rows per launch (a wider batch takes several launches), which read each
+        weight once for all the rows and reproduce the single-row GEMV's per-lane accumulation and
+        reduction, so every row is bit for bit that row's GEMV (KQuantGemvRowsTest); rope_rows,
+        rope_split_half_rows and rope_ext_split_half_rows, rope.cu's rotations with a per-row
+        position; kv_append_rows, the FP16 cast into each request's mirror. CudaMatVec.sgemvRowsInto
+        (and MatVec.sgemmDecode) is the host-driven entry to the same matmul, used by the batched
+        LM head and, for 2 to 8 rows, sgemmInto(DeviceQ4KMatrix).
   ResidentLayerTail — the rest of a decode layer after attention, issued on the decode region's
         stream: output projection, first residual add (PrefillWindowKernels.addInPlace), FFN RMS norm
         (CudaRmsNorm.normalizeResident, FFN norm weight uploaded once per layer), gate and up

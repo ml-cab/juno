@@ -453,8 +453,8 @@ final class ResidentQkvPath implements AutoCloseable {
 								? "norm, Q/K/V projection, RoPE, the KV append and attention, with the residual row"
 										+ " uploaded and k, v and the attention output downloaded in one copy"
 								: "norm, Q/K/V projection and RoPE with one upload and one download")
-				+ " per layer. Single-sequence decode only; prefill windows and batched decode"
-				+ " (--parallel above 1, continuous schedule) keep the existing path.");
+				+ " per layer. Prefill windows have their own region; a batched decode (--parallel above 1, continuous"
+				+ " schedule) runs in the decode batch region on the layers this one runs whole.");
 		return path;
 	}
 
@@ -470,6 +470,23 @@ final class ResidentQkvPath implements AutoCloseable {
 	 */
 	boolean runsWholeLayer(int li) {
 		return tail != null && eligible(li) && tail.eligible(li);
+	}
+
+	/**
+	 * What {@link ResidentBatchDecode} reads: this path's device weights and kernels,
+	 * shared rather than copied, so a batch costs no extra device memory for them.
+	 */
+	record Parts(GpuContext ctx, Q4KMmqKernel mmq, CudaRmsNorm norm, ResidentRope rope, GqaAttentionKernel attention,
+			PrefillWindowKernels kernels, PrefillWindowKernels biasKernels, int hidden, int kvDim, int numHeads,
+			int headDim, int gqaRatio, float eps, DeviceQ4KMatrix[] wq, DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv,
+			DeviceFloatMatrix[] normWeight, DeviceFloatMatrix[] qNormWeight, DeviceFloatMatrix[] kNormWeight,
+			DeviceFloatMatrix[] qBias, DeviceFloatMatrix[] kBias, DeviceFloatMatrix[] vBias, ResidentLayerTail tail,
+			int[] attentionWindows) {
+	}
+
+	Parts parts() {
+		return new Parts(ctx, mmq, norm, rope, attention, kernels, biasKernels, hidden, kvDim, numHeads, headDim, gqaRatio,
+				eps, wq, wk, wv, normWeight, qNormWeight, kNormWeight, qBias, kBias, vBias, tail, attentionWindows);
 	}
 
 	/**

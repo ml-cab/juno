@@ -32,8 +32,10 @@ import jdk.incubator.vector.FloatVector;
 
 /**
  * What the JVM and Juno see on this machine: the preferred vector widths, the JVM's AVX level, Juno's CPU
- * thread count and its own CUDA and ROCm backend probes. Detection runs it before anything is chosen,
- * and every run records it.
+ * thread count and its own CUDA and ROCm backend probes, with the CUDA libraries Juno loaded and where from
+ * ({@code cudaLibraries}: a file found on {@code PATH} or under {@code CUDA_PATH}, or the name the system
+ * loader resolved), or why CUDA is unavailable ({@code cudaUnavailableReason}). Detection runs it before
+ * anything is chosen, and every run records it.
  */
 final class EnvProbe implements KitProbe {
 
@@ -71,6 +73,16 @@ final class EnvProbe implements KitProbe {
 		}
 		f.put("cuda", cuda);
 		f.put("cudaDevices", cudaDevices);
+		Map<String, String> cudaLibraries = Map.of();
+		try {
+			cudaLibraries = CudaAvailability.loadedLibraries();
+			String reason = CudaAvailability.unavailableReason();
+			if (reason != null)
+				f.put("cudaUnavailableReason", reason);
+		} catch (Throwable t) {
+			f.put("cudaUnavailableReason", t.toString());
+		}
+		f.put("cudaLibraries", cudaLibraries);
 		f.put("rocm", rocm);
 		f.put("rocmDevices", rocmDevices);
 		return new ProbeReport(id, ProbeKind.READING, null, List.of(), List.of(), f);

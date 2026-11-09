@@ -1,0 +1,4 @@
+23:29:43 tinyllama n=9 {"step_ms":43.743252754211426,"tokens_per_s":205.7460164329804} {"wall_ms":41.716553,"device_busy_ms":34.206907,"kernel_ms":33.640538,"copy_ms":0.666358}
+23:31:10 tinyllama n=16 {"step_ms":67.6884651184082,"tokens_per_s":236.377054377153} {"wall_ms":44.102853,"device_busy_ms":36.1133885,"kernel_ms":35.5226995,"copy_ms":0.680078}
+23:33:32 qwen2.5 n=9 {"step_ms":119.96769905090332,"tokens_per_s":75.02019352876997} {"wall_ms":69.041986,"device_busy_ms":59.2598,"kernel_ms":58.391867,"copy_ms":0.837145}
+23:36:51 qwen2.5 n=16 {"step_ms":186.51115894317627,"tokens_per_s":85.78575185881863} {"wall_ms":70.8556875,"device_busy_ms":61.1968995,"kernel_ms":60.3480405,"copy_ms":0.8434265}

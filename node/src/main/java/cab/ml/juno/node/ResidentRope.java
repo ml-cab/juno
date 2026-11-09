@@ -40,6 +40,20 @@ interface ResidentRope extends AutoCloseable {
 	 */
 	boolean applyResidentColumns(ResidentActivation x, int from, int width, int pos);
 
+	/**
+	 * Rotates every valid row of {@code x} in place, row {@code r} at position
+	 * {@code seqLens[r] - 1}, for a decode batch whose rows are different requests at
+	 * their own positions; {@code seqLens} is a device array of one int per row.
+	 * Asynchronous on {@code x}'s chain.
+	 *
+	 * @return {@code false} (doing nothing) if the kernel failed to load
+	 */
+	boolean applyResidentRows(ResidentActivation x, java.lang.foreign.MemorySegment seqLens);
+
+	/** Checks that this rotation can run at {@code pos}, where its table is finite. */
+	default void requirePosition(int pos) {
+	}
+
 	int headDim();
 
 	@Override

@@ -6,19 +6,14 @@ rem Uses pre-built shade jars from target/.
 rem Build first: mvn clean package -DskipTests
 rem Requires: JDK 25+   Mirrors: scripts/run.sh
 rem
-rem NOTE (health mode): the health sidecar / juno-health.jar is intentionally
-rem NOT exposed here. It's a real-network concern (multi-node deployments)
-rem and belongs only in scripts/aws/juno-deploy.sh. Do not re-add a `health`
-rem subcommand or --health / --health-port flags to standalone runners
-rem (run.bat / run.sh) without explicit instruction.
+rem Kept at parity with run.sh by hand: every subcommand, every flag and every
+rem option run.sh passes to Java is repeated here. juno-player's
+rem LauncherParityTest reads both scripts and fails when they differ.
 
 rem Step up from scripts\ to project root
 set "DIR=%~dp0"
-echo [DBG] DIR raw dp0: !DIR!
 if "%DIR:~-1%"=="\" set "DIR=%DIR:~0,-1%"
-echo [DBG] DIR after strip trailing backslash: !DIR!
 for %%I in ("%DIR%\..") do set "DIR=%%~fI"
-echo [DBG] DIR resolved to project root: !DIR!
 
 rem The one JFR settings file every Juno recording is taken under, so two runs
 rem differ by the code under test and not by their instrumentation overhead.
@@ -29,21 +24,22 @@ set "JUNO_VERSION="
 for /f "usebackq tokens=3 delims=<>" %%V in (`findstr /r "<version>[0-9]" "%DIR%\pom.xml"`) do if not defined JUNO_VERSION set "JUNO_VERSION=%%V"
 if "%JUNO_VERSION%"=="" set "JUNO_VERSION=0.1.0"
 set "JUNO_PLAYER_JAR=%DIR%\juno-player\target\juno-player-%JUNO_VERSION%-shaded.jar"
-set "LIVE_JAR=%DIR%\juno-master\target\juno-master-%JUNO_VERSION%.jar"
-echo [DBG] JUNO_PLAYER_JAR=!JUNO_PLAYER_JAR!
-echo [DBG] LIVE_JAR=!LIVE_JAR!
+rem The shaded jars, as run.sh runs them: juno-master-%JUNO_VERSION%.jar is the
+rem thin one, without its dependencies.
+set "LIVE_JAR=%DIR%\juno-master\target\juno-master.jar"
+set "HEALTH_JAR=%DIR%\health\target\juno-health.jar"
 
-rem UTF-8 codepage + ANSI VTP for colours
+rem UTF-8 code page, so the console shows the UTF-8 text Juno writes. Colours
+rem need no setting: the Java entry points turn on virtual-terminal output for
+rem their own console handles (AnsiSupport), and nothing is written to the
+rem registry.
 chcp 65001 >nul 2>&1
-reg add "HKCU\Console" /v VirtualTerminalLevel /t REG_DWORD /d 1 /f >nul 2>&1
 
 call :find_java
 if errorlevel 1 exit /b 1
 
 call :check_java_version
-echo [DBG] back from check_java_version errorlevel=!ERRORLEVEL!
 if errorlevel 1 exit /b 1
-echo [DBG] past errorlevel check
 rem --add-modules jdk.incubator.vector: Vector API is still incubating as of
 rem JDK 25/26 (JEP 508 / JEP 529) -- required at run time for the SIMD CPU
 rem quantized-matmul kernels (VectorQuantKernels). Falls back to scalar
@@ -58,17 +54,15 @@ rem   juno.bat local --model-path ...
 rem to override SimdThreadPool's row-parallel pool size (see node's
 rem SimdThreadPool.java for what that controls).
 if defined JUNO_JVM_OPTS set "JVM_BASE=%JVM_BASE% %JUNO_JVM_OPTS%"
-echo [DBG] JVM_BASE set
-echo [DBG] arg1=%~1
 if "%~1"=="" goto :usage
-echo [DBG] dispatching subcommand
 if /i "%~1"=="cluster" ( shift & goto :cluster )
 if /i "%~1"=="local"   ( shift & goto :local )
 if /i "%~1"=="lora"    ( shift & goto :lora )
 if /i "%~1"=="test"    ( shift & goto :test )
 if /i "%~1"=="merge"   ( shift & goto :merge )
 if /i "%~1"=="lora-import" ( shift & goto :lora_import )
-echo [DBG] no subcommand matched falling to cluster
+if /i "%~1"=="gguf-info" ( shift & goto :gguf_info )
+if /i "%~1"=="health"    ( shift & goto :health )
 goto :cluster
 
 rem ============================================================================
@@ -101,16 +95,35 @@ set "HEAP=%_HFM_G%g"
 echo [INFO] heap=%HEAP% derived from model size (override with --heap SIZE or HEAP=SIZE)
 goto :eof
 
+rem The CUDA toolkit's DLL folders go on PATH, where Juno looks for the CUDA
+rem runtime and cuBLAS first (it also looks under CUDA_PATH itself; CUDA_HOME
+rem and the default location reach it only this way). The toolkit is CUDA_PATH,
+rem else CUDA_HOME, else the last version folder under the installer's default
+rem location; bin\x64 holds the DLLs in the 13.x layout, bin in the 12.x one.
 :prepend_cuda_path
 if /i "%USE_GPU%"=="false" exit /b 0
-if not "%CUDA_PATH%"=="" if exist "%CUDA_PATH%\bin" (
-  set "PATH=%CUDA_PATH%\bin;%PATH%"
-  exit /b 0
-)
-if not "%CUDA_HOME%"=="" if exist "%CUDA_HOME%\bin" (
-  set "PATH=%CUDA_HOME%\bin;%PATH%"
-  exit /b 0
-)
+set "_CUDA_ROOT="
+if not "%CUDA_PATH%"=="" if exist "%CUDA_PATH%\bin" set "_CUDA_ROOT=%CUDA_PATH%"
+if "!_CUDA_ROOT!"=="" if not "%CUDA_HOME%"=="" if exist "%CUDA_HOME%\bin" set "_CUDA_ROOT=%CUDA_HOME%"
+if "!_CUDA_ROOT!"=="" for /f "delims=" %%v in ('dir /b /ad "%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v*" 2^>nul') do set "_CUDA_ROOT=%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\%%v"
+if "!_CUDA_ROOT!"=="" exit /b 0
+set "PATH=!_CUDA_ROOT!\bin;!PATH!"
+if exist "!_CUDA_ROOT!\bin\x64" set "PATH=!_CUDA_ROOT!\bin\x64;!PATH!"
+exit /b 0
+
+rem --------------------------------------------------------------------------
+rem  use_gpu_from_env - the GPU default, from USE_GPU as run.sh reads it
+rem --------------------------------------------------------------------------
+rem false, 0 or no turn the GPU off; anything else, or nothing, leaves it on.
+rem USE_GPU_ENV, the name this launcher read before, is read when USE_GPU is
+rem not set.
+:use_gpu_from_env
+set "_USE_GPU_IN=%USE_GPU%"
+if "%_USE_GPU_IN%"=="" set "_USE_GPU_IN=%USE_GPU_ENV%"
+set "USE_GPU=true"
+if /i "%_USE_GPU_IN%"=="false" set "USE_GPU=false"
+if /i "%_USE_GPU_IN%"=="0" set "USE_GPU=false"
+if /i "%_USE_GPU_IN%"=="no" set "USE_GPU=false"
 exit /b 0
 
 rem ============================================================================
@@ -141,12 +154,14 @@ set "KV_PAGE_SIZE_CLUSTER=%JUNO_KV_PAGE_SIZE%"
 set "PREFILL_BATCH_CLUSTER=%JUNO_PREFILL_BATCH%"
 set "GRAMMAR_FILE_CLUSTER=%JUNO_GRAMMAR_FILE%"
 set "JSON_SCHEMA_FILE_CLUSTER=%JUNO_JSON_SCHEMA_FILE%"
-set "USE_GPU=true"
-if not "%USE_GPU_ENV%"=="" (
-  if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
-  if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
-  if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
-)
+set "EMBEDDINGS_CLUSTER=%JUNO_EMBEDDINGS%"
+set "POOLING_CLUSTER=%JUNO_POOLING%"
+set "PREFILL_MODE_CLUSTER=%PREFILL_MODE%"
+set "GPU_RESIDENCY_CLUSTER=%JUNO_GPU_RESIDENCY%"
+set "HEALTH_CLUSTER=false"
+set "HEALTH_PORT_CLUSTER=%HEALTH_PORT%"
+if "%HEALTH_PORT_CLUSTER%"=="" set "HEALTH_PORT_CLUSTER=8081"
+call :use_gpu_from_env
 
 :cluster_parse
 if "%~1"=="" goto :cluster_done
@@ -175,6 +190,11 @@ if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V_CLUSTER=%~2" & shift & shift &
 if /i "%~1"=="--schedule" ( set "SCHEDULE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--kv-page-size" ( set "KV_PAGE_SIZE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--prefill-batch" ( set "PREFILL_BATCH_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--prefill"       ( set "PREFILL_MODE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--gpu-residency" ( set "GPU_RESIDENCY_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--health"        ( set "HEALTH_CLUSTER=true" & shift & goto :cluster_parse )
+if /i "%~1"=="--health-port"   ( set "HEALTH_PORT_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--context-shift" goto :cluster_context_shift
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :cluster_parse )
@@ -184,53 +204,68 @@ if /i "%~1"=="-v"        ( set "VERBOSE=true"  & shift & goto :cluster_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :cluster_parse )
 if /i "%~1"=="--threads" ( set "JUNO_THREADS=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :cluster_parse )
-if /i "%~1"=="--help" (
-  echo.
-  echo   Usage: run.bat cluster --model-path PATH [flags]
-  echo      or: run.bat cluster --hf REPO[:QUANT] [flags]
-  echo      or: set MODEL_PATH=PATH ^&^& run.bat cluster [flags]
-  echo.
-  echo   --hf REPO[:QUANT] download/resolve a GGUF from the Hugging Face Hub
-  echo                     (or set JUNO_HF env var); no Python dependency
-  echo   --pType pipeline^|tensor  parallelism type (default pipeline)
-  echo     pipeline: contiguous layer blocks, serial activation flow
-  echo     tensor:   weight-matrix slices, all nodes in parallel (AllReduce)
-  echo               Constraint: numHeads %% 3 == 0
-  echo   --dtype FLOAT32^|FLOAT16^|INT8  (default FLOAT16)
-  echo   --float16 / --fp16 / --float32 / --int8
-  echo   --byteOrder BE^|LE    activation codec byte order (default BE)
-  echo                        BE=big-endian (hardware-validated default)
-  echo                        LE=little-endian (native x86 order)
-  echo   --max-tokens N    (default 200)
-  echo   --temperature F   (default 0.7)
-  echo   --top-k N         (default 50)
-  echo   --top-p F         (default 0.9)
-  echo   --grammar-file PATH   GBNF constrained decoding (env JUNO_GRAMMAR_FILE)
-  echo   --json-schema-file PATH  JSON Schema subset (env JUNO_JSON_SCHEMA_FILE)
-  echo   --api-port N      start REST API server on port N
-  echo                     (includes OpenAI-compatible /v1/chat/completions)
-  echo   --embeddings      enable POST /v1/embeddings (default: off; cluster mode
-  echo                     fails closed -- embeddings are local/single-shard only)
-  echo   --pooling mean^|cls^|last  /v1/embeddings pooling (default: mean)
-  echo   --lora-play PATH  apply a .lora file at inference
-  echo   --cache-type-k f16^|q8_0 K cache type (default f16)
-  echo   --cache-type-v f16^|q8_0 V cache type (default f16)
-  echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
-  echo   --kv-page-size N           page size when continuous (default 16)
-  echo   --prefill-batch N          max prompt tokens per prefill window (default 32)
-  echo   --heap SIZE       (default: derived from model size)
-  echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
-  echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
-  echo   --gpu             use GPU when available (default)
-  echo   --cpu             use CPU only
-  echo   --threads N       CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)
-  echo   --verbose / -v
-  goto :eof
-)
+if /i "%~1"=="--help" goto :cluster_help
 if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :cluster_parse )
 echo [ERR] Unknown cluster flag: %~1
 echo       Run: run.bat cluster --help
 exit /b 1
+
+:cluster_context_shift
+rem The cluster pipelines cannot shift a request's KV cache: only an off value
+rem is accepted, as in run.sh.
+for %%S in (off false 0 no) do if /i "%~2"=="%%S" ( shift & shift & goto :cluster_parse )
+echo [ERR] --context-shift is local-mode only: the cluster pipelines cannot shift a request's KV cache. Use: run.bat local
+exit /b 1
+
+:cluster_help
+echo.
+echo   Usage: run.bat cluster --model-path PATH [flags]
+echo      or: run.bat cluster --hf REPO[:QUANT] [flags]
+echo      or: set MODEL_PATH=PATH ^&^& run.bat cluster [flags]
+echo.
+echo   --hf REPO[:QUANT] download/resolve a GGUF from the Hugging Face Hub
+echo                     (or set JUNO_HF env var); no Python dependency
+echo   --pType pipeline^|tensor  parallelism type (default pipeline)
+echo     pipeline: contiguous layer blocks, serial activation flow
+echo     tensor:   weight-matrix slices, all nodes in parallel (AllReduce)
+echo               Constraint: numHeads %% 3 == 0
+echo   --dtype FLOAT32^|FLOAT16^|INT8  (default FLOAT16)
+echo   --float16 / --fp16 / --float32 / --int8
+echo   --byteOrder BE^|LE    activation codec byte order (default BE)
+echo                        BE=big-endian (hardware-validated default)
+echo                        LE=little-endian (native x86 order)
+echo   --max-tokens N    (default 200)
+echo   --temperature F   (default 0.7)
+echo   --top-k N         (default 50)
+echo   --top-p F         (default 0.9)
+echo   --grammar-file PATH   GBNF constrained decoding (env JUNO_GRAMMAR_FILE)
+echo   --json-schema-file PATH  JSON Schema subset (env JUNO_JSON_SCHEMA_FILE)
+echo   --api-port N      start REST API server on port N
+echo                     (includes OpenAI-compatible /v1/chat/completions)
+echo   --embeddings      enable POST /v1/embeddings (default: off; cluster mode
+echo                     fails closed -- embeddings are local/single-shard only)
+echo   --pooling mean^|cls^|last  /v1/embeddings pooling (default: mean)
+echo   --lora-play PATH  apply a .lora file at inference
+echo   --cache-type-k f16^|q8_0 K cache type (default f16)
+echo   --cache-type-v f16^|q8_0 V cache type (default f16)
+echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
+echo   --kv-page-size N           page size when continuous (default 16)
+echo   --prefill-batch N          max prompt tokens per prefill window (default 32)
+echo   --prefill single^|batched  prefill strategy (default batched)
+echo   --gpu-residency on^|off^|auto  device-resident decode region
+echo                     (default auto: on wherever CUDA is present)
+echo   --context-shift off  accepted; any other value is refused: the cluster
+echo                     pipelines cannot shift a request's KV cache (run.bat local can)
+echo   --health          start the health-monitor sidecar in the coordinator JVM
+echo   --health-port N   health sidecar port; the nodes report to it (default 8081, env HEALTH_PORT)
+echo   --heap SIZE       (default: derived from model size)
+echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
+echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
+echo   --gpu             use GPU when available (default)
+echo   --cpu             use CPU only
+echo   --threads N       CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)
+echo   --verbose / -v
+goto :eof
 
 :cluster_done
 if "%MODEL%"=="" if "%HF%"=="" (
@@ -261,7 +296,7 @@ set "JFR_ARG_CLUSTER="
 if not "%JFR_DURATION_CLUSTER%"=="" (
   set "JFR_ARG_CLUSTER=--jfr %JFR_DURATION_CLUSTER%"
   if exist "%JUNO_JFR_SETTINGS%" set "JVM_BASE=!JVM_BASE! -Djuno.jfr.settings=%JUNO_JFR_SETTINGS%"
-  echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  (programmatic recording, metrics auto-printed on exit)
+  echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  ^(programmatic recording, metrics auto-printed on exit^)
 )
 
 set "API_PORT_ARG_CLUSTER="
@@ -270,7 +305,7 @@ if not "%API_PORT_CLUSTER%"=="" set "API_PORT_ARG_CLUSTER=--api-port %API_PORT_C
 set "EMBEDDINGS_ARG_CLUSTER="
 if /i "%EMBEDDINGS_CLUSTER%"=="true" (
   set "EMBEDDINGS_ARG_CLUSTER=--embeddings"
-  echo [WARN] --embeddings requested but /v1/embeddings is local/single-shard only; cluster mode fails closed (HTTP 400)
+  echo [WARN] --embeddings requested but /v1/embeddings is local/single-shard only; cluster mode fails closed ^(HTTP 400^)
 )
 set "POOLING_ARG_CLUSTER="
 if not "%POOLING_CLUSTER%"=="" set "POOLING_ARG_CLUSTER=--pooling %POOLING_CLUSTER%"
@@ -302,11 +337,21 @@ if not "%JSON_SCHEMA_FILE_CLUSTER%"=="" set "JSON_SCHEMA_FILE_ARG_CLUSTER=--json
 set "MODEL_ARG_CLUSTER="
 if not "%MODEL%"=="" set "MODEL_ARG_CLUSTER=--model-path %MODEL%"
 set "HF_ARG_CLUSTER="
-if not "%HF%"=="" ( set "HF_ARG_CLUSTER=--hf %HF%" & echo [WARN] Resolving --hf %HF% (download/cache may take a while)... )
+if not "%HF%"=="" ( set "HF_ARG_CLUSTER=--hf %HF%" & echo [WARN] Resolving --hf %HF% ^(download/cache may take a while^)... )
+
+set "PREFILL_MODE_ARG_CLUSTER="
+if not "%PREFILL_MODE_CLUSTER%"=="" set "PREFILL_MODE_ARG_CLUSTER=--prefill %PREFILL_MODE_CLUSTER%"
+set "GPU_RESIDENCY_ARG_CLUSTER="
+if not "%GPU_RESIDENCY_CLUSTER%"=="" set "GPU_RESIDENCY_ARG_CLUSTER=--gpu-residency %GPU_RESIDENCY_CLUSTER%"
+set "HEALTH_FLAG_CLUSTER="
+if /i "%HEALTH_CLUSTER%"=="true" (
+  set "HEALTH_FLAG_CLUSTER=--health --health-port %HEALTH_PORT_CLUSTER%"
+  echo [WARN] Health sidecar enabled on :!HEALTH_PORT_CLUSTER! -- dashboard at http://localhost:!HEALTH_PORT_CLUSTER!/
+)
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %EMBEDDINGS_ARG_CLUSTER% %POOLING_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %PREFILL_BATCH_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %EMBEDDINGS_ARG_CLUSTER% %POOLING_ARG_CLUSTER% %PREFILL_MODE_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %PREFILL_BATCH_ARG_CLUSTER% %GPU_RESIDENCY_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %HEALTH_FLAG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -330,7 +375,6 @@ set "VERBOSE=false"
 set "JFR_DURATION_LOCAL="
 set "API_PORT_LOCAL=%API_PORT%"
 set "LORA_PLAY=%LORA_PLAY_PATH%"
-set "USE_GPU=true"
 set "MMQ=%JUNO_MMQ%"
 set "CACHE_TYPE_K=%JUNO_CACHE_TYPE_K%"
 set "CACHE_TYPE_V=%JUNO_CACHE_TYPE_V%"
@@ -346,11 +390,16 @@ set "SPEC_NGRAM_M=%JUNO_SPEC_NGRAM_M%"
 set "MODEL_DRAFT=%JUNO_MODEL_DRAFT%"
 set "GRAMMAR_FILE=%JUNO_GRAMMAR_FILE%"
 set "JSON_SCHEMA_FILE=%JUNO_JSON_SCHEMA_FILE%"
-if not "%USE_GPU_ENV%"=="" (
-  if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
-  if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
-  if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
-)
+set "PREFILL_MODE_VAL=%PREFILL_MODE%"
+set "EMBEDDINGS_LOCAL=%JUNO_EMBEDDINGS%"
+set "POOLING_LOCAL=%JUNO_POOLING%"
+set "GPU_ATTENTION=%JUNO_GPU_ATTENTION%"
+set "GPU_RESIDENCY=%JUNO_GPU_RESIDENCY%"
+set "CONTEXT_SHIFT=%JUNO_CONTEXT_SHIFT%"
+set "HEALTH_LOCAL=false"
+set "HEALTH_PORT_LOCAL=%HEALTH_PORT%"
+if "%HEALTH_PORT_LOCAL%"=="" set "HEALTH_PORT_LOCAL=8081"
+call :use_gpu_from_env
 
 :local_parse
 if "%~1"=="" goto :local_done
@@ -389,6 +438,11 @@ if /i "%~1"=="--spec-type" ( set "SPEC_TYPE=%~2" & shift & shift & goto :local_p
 if /i "%~1"=="--spec-ngram-n" ( set "SPEC_NGRAM_N=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--spec-ngram-m" ( set "SPEC_NGRAM_M=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--model-draft" ( set "MODEL_DRAFT=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--gpu-attention" ( set "GPU_ATTENTION=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--gpu-residency" ( set "GPU_RESIDENCY=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--context-shift" ( set "CONTEXT_SHIFT=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--health"        ( set "HEALTH_LOCAL=true" & shift & goto :local_parse )
+if /i "%~1"=="--health-port"   ( set "HEALTH_PORT_LOCAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :local_parse )
@@ -398,66 +452,74 @@ if /i "%~1"=="-v"        ( set "VERBOSE=true"  & shift & goto :local_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :local_parse )
 if /i "%~1"=="--threads" ( set "JUNO_THREADS=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :local_parse )
-if /i "%~1"=="--help" (
-  echo.
-  echo   Usage: run.bat local --model-path PATH [flags]
-  echo      or: run.bat local --hf REPO[:QUANT] [flags]
-  echo      or: set MODEL_PATH=PATH ^&^& run.bat local [flags]
-  echo.
-  echo   --hf REPO[:QUANT] download/resolve a GGUF from the Hugging Face Hub
-  echo                     (or set JUNO_HF env var); no Python dependency
-  echo   --dtype FLOAT32^|FLOAT16^|INT8  (default FLOAT16)
-  echo   --byteOrder BE^|LE    activation codec byte order (default BE)
-  echo                        BE=big-endian (hardware-validated default)
-  echo                        LE=little-endian (native x86 order)
-  echo   --max-tokens N    (default 200)
-  echo   --temperature F   (default 0.7; 0 with --lora-play)
-  echo   --top-k N         (default 50)
-  echo   --top-p F         (default 0.9)
-  echo   --grammar-file PATH   GBNF constrained decoding (env JUNO_GRAMMAR_FILE)
-  echo   --json-schema-file PATH  JSON Schema subset (env JUNO_JSON_SCHEMA_FILE)
-  echo   --nodes N         (default 3)
-  echo   --api-port N      start local REST API server on port N
-  echo                     (includes OpenAI-compatible /v1/chat/completions)
-  echo   --embeddings      enable POST /v1/embeddings (default: off)
-  echo   --pooling mean^|cls^|last  /v1/embeddings pooling (default: mean)
-  echo   --heap SIZE       (default: derived from model size)
-  echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
-  echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
-  echo   --gpu             use GPU when available (default)
-  echo   --cpu             use CPU only
-  echo   --threads N       CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)
-  echo   --mmq on^|off^|auto packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default auto)
-  echo   --cache-type-k f16^|q8_0 K cache type (default f16)
-  echo   --cache-type-v f16^|q8_0 V cache type (default f16)
-  echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
-  echo   --kv-page-size N           page size when continuous (default 16)
-  echo   --gpu-layers N^|all^|auto    GPU-resident transformer layers (default auto)
-  echo   --parallel N               static micro-batch size (default 1)
-  echo   --batch-window-ms M        batch window when parallel^>1 (default 50)
-  echo   --prefill-batch N          max prompt tokens per prefill window (default: sized to
-  echo                              the whole prompt on GPU with --schedule static; 32 otherwise)
-  echo   --spec-type none^|ngram-simple^|draft-simple  speculative decoding (default none)
-  echo   --spec-ngram-n N           ngram order for the draft cache (default 3; ngram-simple only)
-  echo   --spec-ngram-m N           max tokens drafted per verify round (default 4)
-  echo   --model-draft PATH         draft model GGUF for --spec-type draft-simple
-  echo   --verbose / -v
-  echo.
-  echo   --api-port N         start local REST API server on port N
-  echo                        (includes OpenAI-compatible /v1/chat/completions)
-  echo   --prefill single^|batched  Prefill strategy (default: batched)
-  echo                        batched: windowed GEMM -- fixes vision 10-min stall
-  echo                        single:  original per-token loop (escape hatch)
-  echo   --mmproj-path PATH   Path to a separate mmproj GGUF holding the CLIP
-  echo                        vision encoder. Required for /v1/vision/chat --
-  echo                        real LLaVA/Qwen-VL/SmolVLM releases keep the
-  echo                        vision encoder in a file separate from the base LLM.
-  goto :eof
-)
+if /i "%~1"=="--help" goto :local_help
 if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :local_parse )
 echo [ERR] Unknown local flag: %~1
 echo       Run: run.bat local --help
 exit /b 1
+
+:local_help
+echo.
+echo   Usage: run.bat local --model-path PATH [flags]
+echo      or: run.bat local --hf REPO[:QUANT] [flags]
+echo      or: set MODEL_PATH=PATH ^&^& run.bat local [flags]
+echo.
+echo   --hf REPO[:QUANT] download/resolve a GGUF from the Hugging Face Hub
+echo                     (or set JUNO_HF env var); no Python dependency
+echo   --dtype FLOAT32^|FLOAT16^|INT8  (default FLOAT16)
+echo   --byteOrder BE^|LE    activation codec byte order (default BE)
+echo                        BE=big-endian (hardware-validated default)
+echo                        LE=little-endian (native x86 order)
+echo   --max-tokens N    (default 200)
+echo   --temperature F   (default 0.7; 0 with --lora-play)
+echo   --top-k N         (default 50)
+echo   --top-p F         (default 0.9)
+echo   --grammar-file PATH   GBNF constrained decoding (env JUNO_GRAMMAR_FILE)
+echo   --json-schema-file PATH  JSON Schema subset (env JUNO_JSON_SCHEMA_FILE)
+echo   --nodes N         (default 3)
+echo   --api-port N      start local REST API server on port N
+echo                     (includes OpenAI-compatible /v1/chat/completions)
+echo   --embeddings      enable POST /v1/embeddings (default: off)
+echo   --pooling mean^|cls^|last  /v1/embeddings pooling (default: mean)
+echo   --heap SIZE       (default: derived from model size)
+echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
+echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
+echo   --gpu             use GPU when available (default)
+echo   --cpu             use CPU only
+echo   --threads N       CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)
+echo   --mmq on^|off^|auto packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default auto)
+echo   --cache-type-k f16^|q8_0 K cache type (default f16)
+echo   --cache-type-v f16^|q8_0 V cache type (default f16)
+echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
+echo   --kv-page-size N           page size when continuous (default 16)
+echo   --gpu-layers N^|all^|auto    GPU-resident transformer layers (default auto)
+echo   --parallel N               static micro-batch size (default 1)
+echo   --batch-window-ms M        batch window when parallel^>1 (default 50)
+echo   --prefill-batch N          max prompt tokens per prefill window (default: sized to
+echo                              the whole prompt on GPU with --schedule static; 32 otherwise)
+echo   --gpu-attention on^|off^|auto  GPU-resident attention kernel (default auto; CUDA only)
+echo   --gpu-residency on^|off^|auto  device-resident decode region: the whole layer on the GPU
+echo                              (default auto: on wherever CUDA is present)
+echo   --context-shift on^|off     when a request fills the context, drop the oldest tokens after
+echo                              the system prompt and continue instead of failing (default off)
+echo   --health                   start the health-monitor sidecar in this JVM
+echo   --health-port N            health sidecar port (default 8081, env HEALTH_PORT)
+echo   --spec-type none^|ngram-simple^|draft-simple  speculative decoding (default none)
+echo   --spec-ngram-n N           ngram order for the draft cache (default 3; ngram-simple only)
+echo   --spec-ngram-m N           max tokens drafted per verify round (default 4)
+echo   --model-draft PATH         draft model GGUF for --spec-type draft-simple
+echo   --verbose / -v
+echo.
+echo   --api-port N         start local REST API server on port N
+echo                        (includes OpenAI-compatible /v1/chat/completions)
+echo   --prefill single^|batched  Prefill strategy (default: batched)
+echo                        batched: windowed GEMM -- fixes vision 10-min stall
+echo                        single:  original per-token loop (escape hatch)
+echo   --mmproj-path PATH   Path to a separate mmproj GGUF holding the CLIP
+echo                        vision encoder. Required for /v1/vision/chat --
+echo                        real LLaVA/Qwen-VL/SmolVLM releases keep the
+echo                        vision encoder in a file separate from the base LLM.
+goto :eof
 
 :local_done
 if "%MODEL%"=="" if "%HF%"=="" (
@@ -488,7 +550,7 @@ set "JFR_ARG_LOCAL="
 if not "%JFR_DURATION_LOCAL%"=="" (
   set "JFR_ARG_LOCAL=--jfr %JFR_DURATION_LOCAL%"
   if exist "%JUNO_JFR_SETTINGS%" set "JVM_BASE=!JVM_BASE! -Djuno.jfr.settings=%JUNO_JFR_SETTINGS%"
-  echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  (programmatic recording, metrics auto-printed on exit)
+  echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  ^(programmatic recording, metrics auto-printed on exit^)
 )
 
 set "API_PORT_ARG="
@@ -548,11 +610,28 @@ if not "%JSON_SCHEMA_FILE%"=="" set "JSON_SCHEMA_FILE_ARG=--json-schema-file %JS
 set "MODEL_ARG="
 if not "%MODEL%"=="" set "MODEL_ARG=--model-path %MODEL%"
 set "HF_ARG="
-if not "%HF%"=="" ( set "HF_ARG=--hf %HF%" & echo [INFO] Resolving --hf %HF% (download/cache may take a while)... )
+if not "%HF%"=="" ( set "HF_ARG=--hf %HF%" & echo [INFO] Resolving --hf %HF% ^(download/cache may take a while^)... )
+
+set "LORA_PLAY_ARG="
+if not "%LORA_PLAY%"=="" (
+  set "LORA_PLAY_ARG=--lora-play %LORA_PLAY%"
+  echo [WARN] LoRA inference overlay: !LORA_PLAY!
+)
+set "GPU_ATTENTION_ARG="
+if not "%GPU_ATTENTION%"=="" set "GPU_ATTENTION_ARG=--gpu-attention %GPU_ATTENTION%"
+set "GPU_RESIDENCY_ARG="
+if not "%GPU_RESIDENCY%"=="" set "GPU_RESIDENCY_ARG=--gpu-residency %GPU_RESIDENCY%"
+set "CONTEXT_SHIFT_ARG="
+if not "%CONTEXT_SHIFT%"=="" set "CONTEXT_SHIFT_ARG=--context-shift %CONTEXT_SHIFT%"
+set "HEALTH_FLAG_LOCAL="
+if /i "%HEALTH_LOCAL%"=="true" (
+  set "HEALTH_FLAG_LOCAL=--health --health-port %HEALTH_PORT_LOCAL%"
+  echo [WARN] Health sidecar enabled on :!HEALTH_PORT_LOCAL! -- dashboard at http://localhost:!HEALTH_PORT_LOCAL!/
+)
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %EMBEDDINGS_ARG% %POOLING_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GPU_LAYERS_ARG% %PARALLEL_ARG% %BATCH_WINDOW_ARG% %PREFILL_BATCH_ARG% %SPEC_TYPE_ARG% %SPEC_NGRAM_N_ARG% %SPEC_NGRAM_M_ARG% %MODEL_DRAFT_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %EMBEDDINGS_ARG% %POOLING_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GPU_LAYERS_ARG% %PARALLEL_ARG% %BATCH_WINDOW_ARG% %PREFILL_BATCH_ARG% %SPEC_TYPE_ARG% %SPEC_NGRAM_N_ARG% %SPEC_NGRAM_M_ARG% %MODEL_DRAFT_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %LORA_PLAY_ARG% %GPU_ATTENTION_ARG% %GPU_RESIDENCY_ARG% %CONTEXT_SHIFT_ARG% %HEALTH_FLAG_LOCAL% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -597,16 +676,14 @@ if "%TOP_P%"==""       set "TOP_P=0.9"
 rem HEAP left empty on purpose: :heap_for_model derives it from the model file.
 set "VERBOSE=false"
 set "JFR_DURATION_LORA="
-set "USE_GPU=true"
 set "CACHE_TYPE_K=%JUNO_CACHE_TYPE_K%"
 set "CACHE_TYPE_V=%JUNO_CACHE_TYPE_V%"
 set "SCHEDULE=%JUNO_SCHEDULE%"
 set "KV_PAGE_SIZE=%JUNO_KV_PAGE_SIZE%"
-if not "%USE_GPU_ENV%"=="" (
-  if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
-  if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
-  if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
-)
+set "HEALTH_LORA=false"
+set "HEALTH_PORT_LORA=%HEALTH_PORT%"
+if "%HEALTH_PORT_LORA%"=="" set "HEALTH_PORT_LORA=8081"
+call :use_gpu_from_env
 
 :lora_parse
 if "%~1"=="" goto :lora_done
@@ -667,78 +744,84 @@ if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K=%~2" & shift & shift & goto :l
 if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--schedule" ( set "SCHEDULE=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--kv-page-size" ( set "KV_PAGE_SIZE=%~2" & shift & shift & goto :lora_parse )
-if /i "%~1"=="--help" (
-  echo.
-  echo   Usage: run.bat lora --model-path PATH [flags]
-  echo      or: run.bat lora --hf REPO[:QUANT] [flags]
-  echo      or: set MODEL_PATH=PATH ^&^& run.bat lora [flags]
-  echo.
-  echo   Runs a LoRA fine-tuning REPL in a single in-process JVM.
-  echo   Adapter weights are saved to a separate .lora file.
-  echo   The base GGUF is never modified.
-  echo.
-  echo   Required (one of):
-  echo     --model-path PATH       Path to a GGUF model file
-  echo     --hf REPO[:QUANT]       Download/resolve a GGUF from the Hugging Face Hub
-  echo                             (or set JUNO_HF env var); no Python dependency
-  echo.
-  echo   LoRA adapter:
-  echo     --lora-path PATH        Checkpoint file  (default: ^<model^>.lora)
-  echo     --lora-rank N           Low-rank dimension  (default: 8)
-  echo     --lora-alpha F          Scaling alpha  (default = rank)
-  echo     --lora-lr F             Adam learning rate  (default: 1e-4)
-  echo     --lora-max-iters N      Max training passes per /train  (default: 50)
-  echo     --lora-loss-target-text F  Stop /train when loss ^<= F  (default: 1.8)
-  echo     --lora-loss-target-qa F    Stop /train-qa when loss ^<= F  (default: 1.2)
-  echo     --lora-steps N          Alias for --lora-max-iters
-  echo     --lora-steps-qa N       Max passes for /train-qa  (default: 50)
-  echo     --lora-early-stop F     Overfit guard  (default: 0.25)
-  echo.
-  echo   Generation (used for inference):
-  echo     --max-tokens N          (default 200)
-  echo     --temperature F         (default 0.7)
-  echo     --top-k N               (default 50)
-  echo     --top-p F               (default 0.9)
-  echo     --cache-type-k f16^|q8_0 Inference KV K type (default f16)
-  echo     --cache-type-v f16^|q8_0 Inference KV V type (default f16)
-  echo     --schedule static^|continuous  Inference KV layout (train ephemeral float)
-  echo     --kv-page-size N           page size when continuous (default 16)
-  echo.
-  echo   JVM:
-  echo     --heap SIZE             e.g. 4g 8g 16g  (default: derived from model size)
-  echo                             Use at least 2x the model file size.
-  echo.
-  echo   Backend:
-  echo     --gpu                   use GPU when available (default)
-  echo     --cpu                   use CPU only
-  echo     --lora-train-device M   auto^|gpu^|cpu (default: auto)
-  echo     --lora-microbatch N     frozen GEMM width 1..128 (default: 8)
-  echo.
-  echo   REPL commands:
-  echo     /train ^<text^>          Fine-tune on inline text
-  echo     /train-file ^<path^>     Fine-tune on a text file
-  echo     /save                   Save adapter checkpoint
-  echo     /reset                  Reinitialise adapters
-  echo     /status                 Show adapter info
-  echo     /merge-hint             Explain offline weight merge
-  echo     Regular input           Chat with adapter applied
-  echo.
-  echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_MAX_ITERS
-  echo                  LORA_LOSS_TARGET_TEXT LORA_LOSS_TARGET_QA LORA_STEPS (alias)
-  echo                  LORA_TRAIN_DEVICE LORA_MICROBATCH
-  echo                  MAX_TOKENS TEMPERATURE TOP_K TOP_P HEAP USE_GPU
-  echo.
-  echo   Examples:
-  echo     run.bat lora --model-path C:\models\tinyllama.gguf
-  echo     run.bat lora --model-path C:\models\tinyllama.gguf --lora-rank 16 --heap 8g
-  echo     run.bat lora --model-path C:\models\tinyllama.gguf --lora-path my.lora
-  echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat lora
-  goto :eof
-)
+if /i "%~1"=="--health"      ( set "HEALTH_LORA=true" & shift & goto :lora_parse )
+if /i "%~1"=="--health-port" ( set "HEALTH_PORT_LORA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--help" goto :lora_help
 if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :lora_parse )
 echo [ERR] Unknown lora flag: %~1
 echo       Run: run.bat lora --help
 exit /b 1
+
+:lora_help
+echo.
+echo   Usage: run.bat lora --model-path PATH [flags]
+echo      or: run.bat lora --hf REPO[:QUANT] [flags]
+echo      or: set MODEL_PATH=PATH ^&^& run.bat lora [flags]
+echo.
+echo   Runs a LoRA fine-tuning REPL in a single in-process JVM.
+echo   Adapter weights are saved to a separate .lora file.
+echo   The base GGUF is never modified.
+echo.
+echo   Required (one of):
+echo     --model-path PATH       Path to a GGUF model file
+echo     --hf REPO[:QUANT]       Download/resolve a GGUF from the Hugging Face Hub
+echo                             (or set JUNO_HF env var); no Python dependency
+echo.
+echo   LoRA adapter:
+echo     --lora-path PATH        Checkpoint file  (default: ^<model^>.lora)
+echo     --lora-rank N           Low-rank dimension  (default: 8)
+echo     --lora-alpha F          Scaling alpha  (default = rank)
+echo     --lora-lr F             Adam learning rate  (default: 1e-4)
+echo     --lora-max-iters N      Max training passes per /train  (default: 50)
+echo     --lora-loss-target-text F  Stop /train when loss ^<= F  (default: 1.8)
+echo     --lora-loss-target-qa F    Stop /train-qa when loss ^<= F  (default: 1.2)
+echo     --lora-steps N          Alias for --lora-max-iters
+echo     --lora-steps-qa N       Max passes for /train-qa  (default: 50)
+echo     --lora-early-stop F     Overfit guard  (default: 0.25)
+echo.
+echo   Generation (used for inference):
+echo     --max-tokens N          (default 200)
+echo     --temperature F         (default 0.7)
+echo     --top-k N               (default 50)
+echo     --top-p F               (default 0.9)
+echo     --cache-type-k f16^|q8_0 Inference KV K type (default f16)
+echo     --cache-type-v f16^|q8_0 Inference KV V type (default f16)
+echo     --schedule static^|continuous  Inference KV layout (train ephemeral float)
+echo     --kv-page-size N           page size when continuous (default 16)
+echo.
+echo   JVM:
+echo     --heap SIZE             e.g. 4g 8g 16g  (default: derived from model size)
+echo                             Use at least 2x the model file size.
+echo.
+echo   Backend:
+echo     --gpu                   use GPU when available (default)
+echo     --cpu                   use CPU only
+echo     --lora-train-device M   auto^|gpu^|cpu (default: auto)
+echo     --lora-microbatch N     frozen GEMM width 1..128 (default: 8)
+echo.
+echo   REPL commands:
+echo     /train ^<text^>          Fine-tune on inline text
+echo     /train-file ^<path^>     Fine-tune on a text file
+echo     /save                   Save adapter checkpoint
+echo     /reset                  Reinitialise adapters
+echo     /status                 Show adapter info
+echo     /merge-hint             Explain offline weight merge
+echo     Regular input           Chat with adapter applied
+echo.
+echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_MAX_ITERS
+echo                  LORA_LOSS_TARGET_TEXT LORA_LOSS_TARGET_QA LORA_STEPS (alias)
+echo                  LORA_TRAIN_DEVICE LORA_MICROBATCH
+echo                  MAX_TOKENS TEMPERATURE TOP_K TOP_P HEAP USE_GPU
+echo.
+echo   --health                start the health-monitor sidecar in this JVM
+echo   --health-port N         health sidecar port (default 8081, env HEALTH_PORT)
+echo.
+echo   Examples:
+echo     run.bat lora --model-path C:\models\tinyllama.gguf
+echo     run.bat lora --model-path C:\models\tinyllama.gguf --lora-rank 16 --heap 8g
+echo     run.bat lora --model-path C:\models\tinyllama.gguf --lora-path my.lora
+echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat lora
+goto :eof
 
 :lora_done
 if "%MODEL%"=="" if "%HF%"=="" (
@@ -773,7 +856,7 @@ set "JFR_ARG_LORA="
 if "%JFR_DURATION_LORA%"=="" goto :lora_jfr_skip
 set "JFR_ARG_LORA=--jfr %JFR_DURATION_LORA%"
 if exist "%JUNO_JFR_SETTINGS%" set "JVM_BASE=%JVM_BASE% -Djuno.jfr.settings=%JUNO_JFR_SETTINGS%"
-echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  (programmatic recording, metrics auto-printed on exit)
+echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  ^(programmatic recording, metrics auto-printed on exit^)
 :lora_jfr_skip
 
 set "CACHE_TYPE_K_ARG="
@@ -787,11 +870,17 @@ if not "%KV_PAGE_SIZE%"=="" set "KV_PAGE_SIZE_ARG=--kv-page-size %KV_PAGE_SIZE%"
 set "MODEL_ARG="
 if not "%MODEL%"=="" set "MODEL_ARG=--model-path %MODEL%"
 set "HF_ARG="
-if not "%HF%"=="" ( set "HF_ARG=--hf %HF%" & echo [WARN] Resolving --hf %HF% (download/cache may take a while)... )
+if not "%HF%"=="" ( set "HF_ARG=--hf %HF%" & echo [WARN] Resolving --hf %HF% ^(download/cache may take a while^)... )
+
+set "HEALTH_FLAG_LORA="
+if /i "%HEALTH_LORA%"=="true" (
+  set "HEALTH_FLAG_LORA=--health --health-port %HEALTH_PORT_LORA%"
+  echo [WARN] Health sidecar enabled on :!HEALTH_PORT_LORA! -- dashboard at http://localhost:!HEALTH_PORT_LORA!/
+)
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --lora-microbatch %LORA_MICROBATCH% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --lora-microbatch %LORA_MICROBATCH% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %LORA_PATH_FLAG% %GPU_FLAG% %HEALTH_FLAG_LORA% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -811,37 +900,38 @@ if /i "%~1"=="--heap"       ( set "HEAP=%~2"  & shift & shift & goto :test_parse
 if /i "%~1"=="--pType"      ( set "PTYPE=%~2" & shift & shift & goto :test_parse )
 if /i "%~1"=="--ptype"      ( set "PTYPE=%~2" & shift & shift & goto :test_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_TEST=%~2" & shift & shift & goto :test_parse )
-if /i "%~1"=="--help" (
-  echo.
-  echo   Usage: run.bat test --model-path PATH [flags]
-  echo      or: run.bat test PATH
-  echo.
-  echo   Runs ModelLiveRunner - 9 real-model checks, exits 0 or 1.
-  echo.
-  echo   Pipeline-parallel (tests 1-6):
-  echo     1. hello greeting coherence
-  echo     2. no raw SentencePiece markers
-  echo     3. question response is non-empty
-  echo     4. greedy sampling is deterministic
-  echo     5. multi-turn conversation accumulates context
-  echo     6. FLOAT16 pipeline produces non-empty output
-  echo   Tensor-parallel (tests 7-8):
-  echo     7. tensor-parallel generation via AllReduce
-  echo     8. tensor-parallel greedy determinism
-  echo   In-process (test 9, every --pType; on the GPU when one is present):
-  echo     9. a 512-token prompt prefilled as one window, in 32-token chunks and
-  echo        one token at a time gives the same first token
-  echo.
-  echo   --pType pipeline^|tensor^|all   filter cluster tests (default: all)
-  echo   --heap SIZE                    (default: derived from model size)
-  echo   --jfr DURATION                 Java Flight Recording  e.g. 5m 30s 1h
-  echo                                  Records from start, writes juno-^<timestamp^>.jfr on exit
-  goto :eof
-)
+if /i "%~1"=="--help" goto :test_help
 if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :test_parse )
 echo [ERR] Unknown test flag: %~1
 echo       Run: run.bat test --help
 exit /b 1
+
+:test_help
+echo.
+echo   Usage: run.bat test --model-path PATH [flags]
+echo      or: run.bat test PATH
+echo.
+echo   Runs ModelLiveRunner - 9 real-model checks, exits 0 or 1.
+echo.
+echo   Pipeline-parallel (tests 1-6):
+echo     1. hello greeting coherence
+echo     2. no raw SentencePiece markers
+echo     3. question response is non-empty
+echo     4. greedy sampling is deterministic
+echo     5. multi-turn conversation accumulates context
+echo     6. FLOAT16 pipeline produces non-empty output
+echo   Tensor-parallel (tests 7-8):
+echo     7. tensor-parallel generation via AllReduce
+echo     8. tensor-parallel greedy determinism
+echo   In-process (test 9, every --pType; on the GPU when one is present):
+echo     9. a 512-token prompt prefilled as one window, in 32-token chunks and
+echo        one token at a time gives the same first token
+echo.
+echo   --pType pipeline^|tensor^|all   filter cluster tests (default: all)
+echo   --heap SIZE                    (default: derived from model size)
+echo   --jfr DURATION                 Java Flight Recording  e.g. 5m 30s 1h
+echo                                  Records from start, writes juno-^<timestamp^>.jfr on exit
+goto :eof
 
 :test_done
 if "%MODEL%"=="" (
@@ -883,7 +973,10 @@ set "MODEL=%MODEL_PATH%"
 set "LORA_PATH_VAL="
 set "OUTPUT="
 rem HEAP left empty on purpose: :heap_for_model derives it from the model file.
+rem CPU unless JUNO_USE_GPU=true, as in run.sh: the GPU only puts the CUDA
+rem runtime on PATH for the merge.
 set "USE_GPU=false"
+if /i "%JUNO_USE_GPU%"=="true" set "USE_GPU=true"
 
 :merge_parse
 if "%~1"=="" goto :merge_done
@@ -997,6 +1090,123 @@ if not "%ALPHA_VAL%"=="" set "ALPHA_FLAG_IMPORT=--alpha %ALPHA_VAL%"
 goto :eof
 
 rem ============================================================================
+rem  gguf-info -- dump a GGUF's full metadata and tensor layout
+rem ============================================================================
+:gguf_info
+set "MODEL="
+set "MMPROJ="
+
+:gguf_info_parse
+if "%~1"=="" goto :gguf_info_done
+if /i "%~1"=="--model-path"  ( set "MODEL=%~2"  & shift & shift & goto :gguf_info_parse )
+if /i "%~1"=="--mmproj-path" ( set "MMPROJ=%~2" & shift & shift & goto :gguf_info_parse )
+if /i "%~1"=="--help" goto :gguf_info_help
+if /i "%~1"=="-h"     goto :gguf_info_help
+if "%MODEL%"==""  ( set "MODEL=%~1"  & shift & goto :gguf_info_parse )
+if "%MMPROJ%"=="" ( set "MMPROJ=%~1" & shift & goto :gguf_info_parse )
+echo [ERR] Unknown gguf-info argument: %~1
+echo       Run: run.bat gguf-info --help
+exit /b 1
+
+:gguf_info_help
+echo.
+echo   Usage: run.bat gguf-info --model-path PATH [--mmproj-path PATH]
+echo      or: run.bat gguf-info PATH [MMPROJ_PATH]
+echo.
+echo   Dumps a GGUF file's full metadata (all keys, alphabetical) and full
+echo   tensor list (name, shape, quantisation type, declaration order) as
+echo   plain text.
+echo.
+echo   Example:
+echo     run.bat gguf-info --model-path C:\models\llava-v1.5-7b-Q4_K.gguf --mmproj-path C:\models\llava-v1.5-7b-mmproj-Q4_0.gguf
+echo.
+goto :eof
+
+:gguf_info_done
+if "%MODEL%"=="" (
+  echo [ERR] Model path is required.
+  echo       Usage: run.bat gguf-info --model-path PATH [--mmproj-path PATH]
+  exit /b 1
+)
+if not exist "%MODEL%" ( echo [ERR] Model file not found: "%MODEL%" & exit /b 1 )
+if not "%MMPROJ%"=="" if not exist "%MMPROJ%" ( echo [ERR] mmproj file not found: "%MMPROJ%" & exit /b 1 )
+call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
+if errorlevel 1 exit /b 1
+if not "%MMPROJ%"=="" goto :gguf_info_with_mmproj
+"%JAVA%" -cp "%JUNO_PLAYER_JAR%" cab.ml.juno.player.GgufInfoMain "%MODEL%"
+goto :eof
+:gguf_info_with_mmproj
+"%JAVA%" -cp "%JUNO_PLAYER_JAR%" cab.ml.juno.player.GgufInfoMain "%MODEL%" "%MMPROJ%"
+goto :eof
+
+rem ============================================================================
+rem  health -- standalone health-monitor HTTP server (no model required)
+rem ============================================================================
+rem Accepts node health probes via POST /health/probe and serves a cluster
+rem overview via GET /health and per-node circuit states via GET /health/circuits.
+:health
+set "HEALTH_PORT_VAL=%HEALTH_PORT%"
+if "%HEALTH_PORT_VAL%"=="" set "HEALTH_PORT_VAL=8081"
+set "HEALTH_STALE_MS_VAL=%HEALTH_STALE_MS%"
+if "%HEALTH_STALE_MS_VAL%"=="" set "HEALTH_STALE_MS_VAL=15000"
+set "HEALTH_WARN_VAL=%HEALTH_WARN%"
+if "%HEALTH_WARN_VAL%"=="" set "HEALTH_WARN_VAL=0.90"
+set "HEALTH_CRITICAL_VAL=%HEALTH_CRITICAL%"
+if "%HEALTH_CRITICAL_VAL%"=="" set "HEALTH_CRITICAL_VAL=0.98"
+set "HEALTH_HEAP=%HEAP%"
+if "%HEALTH_HEAP%"=="" set "HEALTH_HEAP=512m"
+
+:health_parse
+if "%~1"=="" goto :health_done
+if /i "%~1"=="--port"     ( set "HEALTH_PORT_VAL=%~2"     & shift & shift & goto :health_parse )
+if /i "%~1"=="--stale-ms" ( set "HEALTH_STALE_MS_VAL=%~2" & shift & shift & goto :health_parse )
+if /i "%~1"=="--warn"     ( set "HEALTH_WARN_VAL=%~2"     & shift & shift & goto :health_parse )
+if /i "%~1"=="--critical" ( set "HEALTH_CRITICAL_VAL=%~2" & shift & shift & goto :health_parse )
+if /i "%~1"=="--heap"     ( set "HEALTH_HEAP=%~2"         & shift & shift & goto :health_parse )
+if /i "%~1"=="--help" goto :health_help
+echo [ERR] Unknown health flag: %~1
+echo       Run: run.bat health --help
+exit /b 1
+
+:health_help
+echo.
+echo   Usage: run.bat health [flags]
+echo.
+echo   Starts the Juno health-monitor HTTP server.
+echo   No model file required.  Nodes push probes; the coordinator polls.
+echo.
+echo   API:
+echo     POST /health/probe           Accept a NodeHealth snapshot
+echo     GET  /health                 Cluster overview (status + all nodes)
+echo     GET  /health/nodes/{nodeId}  Single-node detail
+echo     GET  /health/circuits        Per-node circuit-breaker states
+echo.
+echo   Flags:
+echo     --port N          HTTP listen port                (default: 8081)
+echo     --stale-ms N      ms before a node is stale       (default: 15000)
+echo     --warn F          VRAM warning threshold 0-1      (default: 0.90)
+echo     --critical F      VRAM critical threshold 0-1     (default: 0.98)
+echo     --heap SIZE       JVM heap e.g. 256m 512m 1g      (default: 512m)
+echo.
+echo   Environment variable equivalents:
+echo     HEALTH_PORT  HEALTH_STALE_MS  HEALTH_WARN  HEALTH_CRITICAL  HEAP
+echo.
+echo   Examples:
+echo     run.bat health
+echo     run.bat health --port 9090 --stale-ms 30000
+echo     set HEALTH_PORT=9090 ^&^& run.bat health
+echo.
+goto :eof
+
+:health_done
+call :require_jar "%HEALTH_JAR%" "juno-health"
+if errorlevel 1 exit /b 1
+echo [INFO] Starting Juno health server  (port=%HEALTH_PORT_VAL%  stale_ms=%HEALTH_STALE_MS_VAL%  warn=%HEALTH_WARN_VAL%  critical=%HEALTH_CRITICAL_VAL%  heap=%HEALTH_HEAP%)
+echo.
+"%JAVA%" %JVM_BASE% -Xms64m "-Xmx%HEALTH_HEAP%" -jar "%HEALTH_JAR%" --port %HEALTH_PORT_VAL% --stale-ms %HEALTH_STALE_MS_VAL% --warn %HEALTH_WARN_VAL% --critical %HEALTH_CRITICAL_VAL%
+goto :eof
+
+rem ============================================================================
 rem  Usage
 rem ============================================================================
 :usage
@@ -1005,6 +1215,7 @@ echo juno runtime launcher  (Windows, no Maven - uses pre-built jars)
 echo   Java:       %JAVA%
 echo   juno-player jar: %JUNO_PLAYER_JAR%
 echo   juno-master jar: %LIVE_JAR%
+echo   health jar:      %HEALTH_JAR%
 echo.
 echo   Build first (one time):
 echo     mvn clean package -DskipTests
@@ -1016,6 +1227,8 @@ echo   run.bat lora    --model-path PATH    LoRA fine-tuning REPL (adapter kept 
 echo   run.bat test    --model-path PATH    8 smoke checks
 echo   run.bat merge   --model-path PATH    bake a .lora adapter into a new GGUF
 echo   run.bat lora-import --gguf FILE --out x.lora   convert a GGUF LoRA adapter to .lora v2
+echo   run.bat gguf-info --model-path PATH  dump a GGUF's full metadata and tensor layout
+echo   run.bat health                       standalone health-monitor HTTP server
 echo.
 echo   Backend flags (cluster/local/lora):
 echo     --gpu          use GPU when available (default)
@@ -1027,6 +1240,8 @@ echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h  (all commands)
 echo   --api-port N      start REST API server on port N  (cluster, local)
 echo   --embeddings      enable POST /v1/embeddings  (cluster, local; cluster fails closed)
 echo   --pooling mean^|cls^|last  /v1/embeddings pooling  (default: mean)
+echo   --health          start the health-monitor sidecar  (cluster, local, lora)
+echo   --health-port N   health sidecar port  (default: 8081, env HEALTH_PORT)
 echo.
 echo   Run 'run.bat ^<command^> --help' for all flags of that command.
 echo.
@@ -1037,18 +1252,14 @@ rem  Helpers
 rem ============================================================================
 
 :find_java
-echo [DBG] find_java: JAVA_HOME=!JAVA_HOME!
 if "%JAVA_HOME%"=="" goto :find_java_where
-echo [DBG] checking JAVA_HOME path: !JAVA_HOME!\bin\java.exe
 if not exist "%JAVA_HOME%\bin\java.exe" goto :find_java_where
 set "JAVA=%JAVA_HOME%\bin\java.exe"
-echo [DBG] found via JAVA_HOME: !JAVA!
 exit /b 0
 :find_java_where
 for /f "usebackq tokens=* delims=" %%J in (`where java 2^>nul`) do (
   if not defined JAVA set "JAVA=%%J"
 )
-echo [DBG] JAVA after where: !JAVA!
 if not defined JAVA (
   echo [ERR] JDK not found. Install from https://adoptium.net and set JAVA_HOME.
   exit /b 1
@@ -1056,23 +1267,17 @@ if not defined JAVA (
 exit /b 0
 
 :check_java_version
-echo [DBG] check_java_version: JAVA=!JAVA!
 set "JAVAVER_RAW="
 set "_JVER_OUT=%TEMP%\juno_jver_%RANDOM%.txt"
-echo [DBG] version output temp file: !_JVER_OUT!
 "%JAVA%" -version 2>"%_JVER_OUT%"
-echo [DBG] java -version exit code: !ERRORLEVEL!
 for /f "usebackq tokens=3 delims= " %%V in ("%_JVER_OUT%") do if not defined JAVAVER_RAW set "JAVAVER_RAW=%%V"
 del /f /q "%_JVER_OUT%" >nul 2>&1
-echo [DBG] JAVAVER_RAW=!JAVAVER_RAW!
 if not defined JAVAVER_RAW goto :java_ver_unknown
 set "JAVAVER=%JAVAVER_RAW:"=%"
 set "JAVAMAJOR="
 for /f "tokens=1 delims=." %%M in ("%JAVAVER%") do set "JAVAMAJOR=%%M"
-echo [DBG] JAVAVER=!JAVAVER! JAVAMAJOR=!JAVAMAJOR!
 if "%JAVAMAJOR%"=="" goto :java_ver_unknown
 if %JAVAMAJOR% LSS 25 goto :java_ver_old
-echo [DBG] Java version OK
 exit /b 0
 :java_ver_unknown
 echo [WARN] Unable to determine Java version. Continuing.

@@ -29,7 +29,9 @@ import cab.ml.juno.node.EmbeddedNodeServer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.node.LlamaConfig;
+import cab.ml.juno.node.NodeBindAddress;
 import cab.ml.juno.node.NodeMain;
+import cab.ml.juno.node.ParentPipeWatch;
 import cab.ml.juno.registry.ParallelismType;
 
 /**
@@ -62,6 +64,8 @@ public final class ClusterHarness implements AutoCloseable {
 	static final int NODE_1_PORT = 19092;
 	static final int NODE_2_PORT = 19093;
 	static final int NODE_3_PORT = 19094;
+	/** How long a node has to exit through its shutdown hooks once its standard input closes. */
+	static final long NODE_STOP_GRACE_MS = 10_000;
 
 	private static final int VOCAB_SIZE = EmbeddedNodeServer.VOCAB_SIZE;
 	private static final int TOTAL_LAYERS = EmbeddedNodeServer.TOTAL_LAYERS;
@@ -409,10 +413,10 @@ public final class ClusterHarness implements AutoCloseable {
 			pipelineClient.shutdown();
 		if (tensorPipelineClient != null)
 			tensorPipelineClient.shutdown();
-		for (Process proc : processes) {
-			proc.destroy();
-			proc.waitFor(5, TimeUnit.SECONDS);
-		}
+		// Every node is told to stop before any is waited on, so they exit in parallel.
+		processes.forEach(ClusterHarness::closeStdin);
+		for (Process proc : processes)
+			stopNode(proc, NODE_STOP_GRACE_MS);
 		processes.clear();
 		log.info("Cluster stopped (" + parallelismType + " mode)");
 	}
@@ -504,6 +508,7 @@ public final class ClusterHarness implements AutoCloseable {
 		forwardSysProp(cmd, cab.ml.juno.kvcache.KvPageSizeOptions.ENV);
 		forwardSysProp(cmd, cab.ml.juno.node.GpuResidencyOptions.ENV_PROPERTY);
 		forwardSysProp(cmd, cab.ml.juno.node.PrefillRegionOptions.ENV_PROPERTY);
+		forwardSysProp(cmd, cab.ml.juno.node.BatchDecodeRegionOptions.ENV_PROPERTY);
 		// NodeMain's backend switch (default true: the GPU wherever one is usable), so a caller can keep the
 		// forked nodes on the CPU.
 		forwardSysProp(cmd, "JUNO_USE_GPU");
@@ -522,6 +527,8 @@ public final class ClusterHarness implements AutoCloseable {
 			}
 			cmd.add("-Djava.util.logging.config.file=" + q.getAbsolutePath());
 		}
+
+		cmd.addAll(nodeLifecycleProperties());
 
 		cmd.addAll(java.util.List.of("-cp", classpath, NodeMain.class.getName(), nodeId, String.valueOf(port)));
 		if (modelPath != null)
@@ -575,6 +582,46 @@ public final class ClusterHarness implements AutoCloseable {
 			return new String(bytes, java.nio.charset.StandardCharsets.UTF_8).strip();
 		} catch (Exception e) {
 			return "(could not read stderr: " + e.getMessage() + ")";
+		}
+	}
+
+	/**
+	 * The properties every forked node gets: it listens on loopback only ({@link NodeBindAddress}), since this
+	 * harness dials it at {@code localhost}, and it exits through its shutdown hooks when its standard input closes
+	 * ({@link ParentPipeWatch}).
+	 */
+	static List<String> nodeLifecycleProperties() {
+		return List.of("-D" + NodeBindAddress.PROPERTY + "=" + NodeBindAddress.loopback(),
+				"-D" + ParentPipeWatch.PROPERTY + "=true");
+	}
+
+	/**
+	 * Stops one forked node: closes its standard input, which the node takes as the signal to exit through its
+	 * shutdown hooks, and destroys it only if it has not exited within {@code graceMs}. Destroying it first would
+	 * be SIGTERM on Linux but a forced termination on Windows, where the node's hooks (the gRPC drain, its JFR
+	 * recording's dump on exit) never run.
+	 *
+	 * @return the node's exit code, or -1 if it was still running after it was destroyed
+	 */
+	static int stopNode(Process proc, long graceMs) throws InterruptedException {
+		closeStdin(proc);
+		if (!proc.waitFor(graceMs, TimeUnit.MILLISECONDS)) {
+			log.warning("Node PID " + proc.pid() + " did not exit within " + graceMs
+					+ " ms of its standard input closing; destroying it");
+			proc.destroy();
+			if (!proc.waitFor(5, TimeUnit.SECONDS)) {
+				proc.destroyForcibly();
+				proc.waitFor(5, TimeUnit.SECONDS);
+			}
+		}
+		return proc.isAlive() ? -1 : proc.exitValue();
+	}
+
+	private static void closeStdin(Process proc) {
+		try {
+			proc.getOutputStream().close();
+		} catch (IOException e) {
+			// already closed: the node is exiting
 		}
 	}
 

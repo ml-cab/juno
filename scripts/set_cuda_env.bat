@@ -3,11 +3,13 @@ setlocal enabledelayedexpansion
 rem Created by Yevhen Soldatov
 rem Initial implementation: 2026
 rem
-rem Optional: set up PATH for GPU runs so jnicudart.dll can load cudart64_*.dll.
-rem Call before run.bat cluster ... --gpu if CUDA is not already on PATH.
+rem Optional: put the CUDA toolkit's DLL folders on PATH, for running a Juno jar
+rem with java directly. run.bat does the same itself before every GPU run, so it
+rem needs no call to this script. The folders are CUDA_PATH's, else CUDA_HOME's,
+rem else the last version under the installer's default location; bin\x64 holds
+rem the DLLs in the 13.x layout, bin in the 12.x one.
 rem
-rem Usage: call setenv.bat   (then run.bat cluster ... --gpu)
-rem    or: setenv.bat        (sets env in this shell only)
+rem Usage: call scripts\set_cuda_env.bat   (then java ... -jar juno-player-*-shaded.jar ...)
 
 set "CUDA_BIN="
 if not "%CUDA_PATH%"=="" (

@@ -19,6 +19,7 @@ package cab.ml.juno.kit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -38,7 +39,37 @@ class ProbeSelfTests {
 		ProbeReport r = new EnvProbe().run("env", Map.of());
 		assertThat(r.kind()).isEqualTo(ProbeKind.READING);
 		assertThat((Integer) r.facts().get("intVectorBits")).isGreaterThanOrEqualTo(64);
-		assertThat(r.facts()).containsKeys("floatVectorBits", "useAvx", "cuda", "rocm", "cpuThreads");
+		assertThat(r.facts()).containsKeys("floatVectorBits", "useAvx", "cuda", "rocm", "cpuThreads", "cudaLibraries");
+		if (Boolean.TRUE.equals(r.facts().get("cuda")))
+			assertThat(((Map<?, ?>) r.facts().get("cudaLibraries")).keySet()).map(Object::toString)
+					.contains("runtime", "cublas");
+		else
+			assertThat((String) r.facts().get("cudaUnavailableReason")).isNotBlank();
+	}
+
+	/**
+	 * At a 64-row window: on a CUDA host every kernel is timed and the longest is held to the limit; elsewhere the
+	 * check fails with the reason and nothing is read.
+	 */
+	@Test
+	void gpuKernelTimingProbeHoldsTheLongestSingleKernelToTheLimitOrSaysWhyItCannot() {
+		ProbeReport r = new GpuKernelTimingProbe().run("gpu.kernel-timing", Map.of("tokens", "64", "reps", "2"));
+		assertThat(r.kind()).isEqualTo(ProbeKind.CHECK);
+		assertThat(r.checks()).singleElement().satisfies(c -> assertThat(c.name())
+				.isEqualTo("longest single kernel at a 64-token window <= 500 ms (the 2 s display-driver watchdog / 4)"));
+		if (cab.ml.juno.node.CudaAvailability.isAvailable()) {
+			assertThat(r.passed()).as(r.checks().get(0).detail()).isTrue();
+			assertThat(r.readings()).hasSize(7).allSatisfy(rd -> {
+				assertThat(rd.unit()).isEqualTo("ms");
+				assertThat(rd.values()).hasSize(2).allSatisfy(v -> assertThat(v).isPositive());
+				assertThat(rd.higherIsBetter()).isFalse();
+			});
+			assertThat(r.facts()).containsKeys("longestKernel", "longestMs", "tokens");
+		} else {
+			assertThat(r.passed()).isFalse();
+			assertThat(r.checks().get(0).detail()).contains("CUDA");
+			assertThat(r.readings()).isEmpty();
+		}
 	}
 
 	@Test
@@ -145,6 +176,14 @@ class ProbeSelfTests {
 				"static batching, cpu: native streaming joins to the native blocking answer",
 				"continuous: a session request after the same stateless request equals it");
 		assertThat(r.checks()).allSatisfy(c -> assertThat(c.passed()).as(c.name() + ": " + c.detail()).isTrue());
+	}
+
+	@Test
+	void consistencyProbeBatchOfEightFillsABatchFromThePrompts() {
+		assertThat(ConsistencyProbe.batchOfEightOrder()).hasSize(ConsistencyProbe.BATCH_OF_EIGHT).contains(0, 1, 2);
+		List<String> args = ConsistencyProbe.batchOfEightArgs(Path.of("model.gguf"));
+		assertThat(args).containsSequence("--parallel", "8").contains("--gpu");
+		assertThat(String.join(" ", args)).contains("--max-tokens " + ConsistencyProbe.BATCH_MAX_TOKENS);
 	}
 
 	@Test
@@ -395,7 +434,8 @@ class ProbeSelfTests {
 				root.toString(), "serverHeap", "1g", "logDir", dir.toString()));
 		assertThat(r.checks()).extracting(ProbeReport.Check::name).containsExactly(
 				"local mode with --api-port answers a chat request", "the launcher exits cleanly on exit",
-				"lora with --grammar-file warns that constrained decoding is a no-op for LoRA training");
+				"lora with --grammar-file warns that constrained decoding is a no-op for LoRA training",
+				"the launcher prints no [DBG] lines");
 		assertThat(r.checks()).allSatisfy(c -> assertThat(c.passed()).as(c.name() + ": " + c.detail()).isTrue());
 		assertThat(r.facts()).containsKey("launcher");
 	}

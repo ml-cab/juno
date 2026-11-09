@@ -1,0 +1,60 @@
+{
+  "id" : "gpu.kernel-timing",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "longest single kernel at a 2048-token window <= 500 ms (the 2 s display-driver watchdog / 4)",
+    "passed" : true,
+    "detail" : "prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys: slowest of 5 launches 37.37 ms, median 37.04 ms"
+  } ],
+  "readings" : [ {
+    "name" : "prefill attention, tinyllama-1.1b 32/4/64 heads, 2048 rows over up to 2048 keys",
+    "unit" : "ms",
+    "values" : [ 15.987711906433105, 15.859711647033691, 16.245695114135742, 15.779840469360352, 16.8222713470459 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, qwen2.5-3b 16/2/128 heads, 2048 rows over up to 2048 keys",
+    "unit" : "ms",
+    "values" : [ 19.534847259521484, 19.768320083618164, 19.6628475189209, 19.39251136779785, 20.150272369384766 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, phi-3.5-mini 32/32/96 heads, 2048 rows over up to 2048 keys",
+    "unit" : "ms",
+    "values" : [ 34.66611099243164, 34.18316650390625, 34.482177734375, 34.69926452636719, 35.16825485229492 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys",
+    "unit" : "ms",
+    "values" : [ 37.04217529296875, 37.03193664550781, 36.545536041259766, 37.37071990966797, 37.13926315307617 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 2048 rows",
+    "unit" : "ms",
+    "values" : [ 22.908832550048828, 22.64678382873535, 22.65292739868164, 23.022592544555664, 22.90790367126465 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 2048 rows",
+    "unit" : "ms",
+    "values" : [ 24.628223419189453, 25.23539161682129, 24.70809555053711, 25.074687957763672, 24.73574447631836 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "LM head GEMV, qwen2.5-3b output 151936x2048 Q6_K, 1 row",
+    "unit" : "ms",
+    "values" : [ 1.8821120262145996, 1.8851840496063232, 1.9322880506515503, 1.9343359470367432, 1.8862080574035645 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "limitMs" : 500.0,
+    "device" : "NVIDIA GeForce GTX 1080",
+    "longestMs" : 37.37071990966797,
+    "longestKernel" : "prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys",
+    "tokens" : 2048
+  }
+}

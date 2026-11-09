@@ -28,6 +28,8 @@ import cab.ml.juno.health.HealthThresholds;
  * Configuration is read from system properties (no command-line arguments):
  * -Dnode.id=<nodeId> required -Dnode.port=<port> required
  * -Dmodel.path=<modelPath> optional (if missing, runs with dummy handler)
+ * -Dnode.bind=<address> optional address the gRPC server listens on (default:
+ * every interface; the local cluster passes the loopback address)
  * -DJUNO_USE_GPU=<true|false> optional, defaults to true
  * -Djuno.cuda.device=<0..N-1> optional CUDA device index for
  * {@link cab.ml.juno.node.GpuContext#shared(int)}
@@ -120,8 +122,22 @@ public final class NodeMain {
 			log.info("Health reporter started → " + healthUrl);
 		}
 
-		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
+		java.net.InetAddress bindAddress;
+		try {
+			bindAddress = NodeBindAddress.resolve(System.getProperty(NodeBindAddress.PROPERTY));
+		} catch (IllegalArgumentException e) {
+			System.err.println(e.getMessage());
+			System.exit(1);
+			return;
+		}
+
+		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu, bindAddress);
 		server.start();
+
+		// A node the local cluster forked stops when the cluster closes its standard input, through its shutdown
+		// hooks on every OS (destroying the process runs none of them on Windows).
+		if (ParentPipeWatch.enabled())
+			ParentPipeWatch.start(System.in, () -> System.exit(0));
 
 		// Wire throughput reporting into the gRPC handler after server is started
 		if (reporter != null) {

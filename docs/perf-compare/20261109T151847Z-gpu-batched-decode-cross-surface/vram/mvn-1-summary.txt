@@ -1,0 +1,36 @@
+[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 25.94 s <<< FAILURE! -- in cab.ml.juno.node.GpuAttentionHandlerParityTest
+[ERROR] cab.ml.juno.node.GpuAttentionHandlerParityTest.kernel_matches_scalar_attention(String)[1] -- Time elapsed: 15.55 s <<< FAILURE!
+[device memory back to where the test started (weights, KV mirror, kernel scratch and backend scratch all released)] 
+Expecting actual:
+  7287275520L
+to be greater than or equal to:
+  7294812160L
+[ERROR] Tests run: 4, Failures: 2, Errors: 0, Skipped: 0, Time elapsed: 64.87 s <<< FAILURE! -- in cab.ml.juno.node.PrefillRegionHandlerParityTest
+[ERROR] cab.ml.juno.node.PrefillRegionHandlerParityTest.region_matches_hostPath(String)[3] -- Time elapsed: 9.012 s <<< FAILURE!
+[device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7549157376L
+to be greater than or equal to:
+  7595360256L
+[ERROR] cab.ml.juno.node.PrefillRegionHandlerParityTest.region_matches_hostPath(String)[4] -- Time elapsed: 9.672 s <<< FAILURE!
+[device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7502364672L
+to be greater than or equal to:
+  7532052480L
+[ERROR]   GpuAttentionHandlerParityTest.kernel_matches_scalar_attention:187 [device memory back to where the test started (weights, KV mirror, kernel scratch and backend scratch all released)] 
+Expecting actual:
+  7287275520L
+to be greater than or equal to:
+  7294812160L
+[ERROR]   PrefillRegionHandlerParityTest.region_matches_hostPath:138 [device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7549157376L
+to be greater than or equal to:
+  7595360256L
+[ERROR]   PrefillRegionHandlerParityTest.region_matches_hostPath:138 [device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7502364672L
+to be greater than or equal to:
+  7532052480L
+[INFO] BUILD FAILURE

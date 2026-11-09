@@ -1,0 +1,14 @@
+[parallel] start juno parallel=1 sessions=8 max_tokens=64 gpu
+[parallel] warmup round 1/2
+[parallel] warmup round 2/2
+[parallel] parallel=1: agg_tps=53.7702 ok=8/8 wall_ms=9522
+[parallel] done: docs/perf-compare/20261109T005616Z-gpu-batched-decode-parallel/qwen2.5/p1-rep3
+# Multi-session static batch — 20261109T010030Z
+
+Model: `qwen2.5-3b-instruct-q4_k_m.gguf` · sessions=8 · max_tokens=64 · backend=gpu
+
+| parallel | aggregate tg t/s | wall ms | ok/fail |
+|---------:|-----------------:|--------:|--------:|
+| 1 | 53.7702 | 9522 | 8/8 |
+
+Speedup parallel=8 over parallel=1: 

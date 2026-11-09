@@ -42,6 +42,9 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  *   <li>rocBLAS       → {@code librocblas.so}   (used for both FP32 sgemv and FP16 hssgemv)
  * </ul>
  *
+ * <p>Linux only: on any other OS the constructor refuses with
+ * {@link GpuPlatform#rocmRefusal()} before loading anything.
+ *
  * <h3>Key differences from CUDA</h3>
  * <ul>
  *   <li>{@code opTranspose() = 112} ({@code rocblas_operation_transpose}; CUDA uses 1).
@@ -93,6 +96,12 @@ final class RocmBindings implements GpuBindings {
     static boolean isAvailable() { return INSTANCE != null; }
 
     /**
+     * Why the libraries did not load (one line); null when they did. Outside Linux this is
+     * {@link GpuPlatform#rocmRefusal()}: the platform is checked before any library is loaded.
+     */
+    static String unavailableReason() { return INIT_FAILURE == null ? null : INIT_FAILURE.getMessage(); }
+
+    /**
      * Returns the singleton.
      * @throws IllegalStateException if ROCm libraries could not be loaded
      */
@@ -137,6 +146,7 @@ final class RocmBindings implements GpuBindings {
     // ── Construction ──────────────────────────────────────────────────────────
 
     private RocmBindings() {
+        GpuPlatform.current().requireRocm();
         Linker       l   = Linker.nativeLinker();
         SymbolLookup hip = GpuBindings.loadLibrary("libamdhip64.so");
         SymbolLookup rb  = GpuBindings.loadLibrary("librocblas.so");

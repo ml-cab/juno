@@ -1,0 +1,5 @@
+docs/perf-compare/20261108T230602Z-gpu-batched-decode-decomposition/runs/qwen2.5-n9-traced.sqlite: 126 decode intervals, logits 5469696 B, 36 layers
+  wall 133.348 ms  busy 34.141  idle 99.525  (kernel 27.103, copy 7.014)
+  launches 542  copies 1334 (h2d 1045, d2h 289)  per layer: busy 948.4 us, launches 15.1
+  kernels: q4k_gemm_16 17.779, q6k_gemm_16 6.309, gqa_attention_d128 2.030, quantize_q8_1_half 0.776
+  api: cudaStreamSynchronize_v3020 29.136 (254), cudaMemcpy_v3020 12.527 (828), cudaMemcpyAsync_v3020 6.106 (506), cuLaunchKernel 5.335 (542), cudaFree_v3020 0.000 (0), cudaMalloc_v3020 0.000 (0)

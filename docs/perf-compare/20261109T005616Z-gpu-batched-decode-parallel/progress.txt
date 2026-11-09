@@ -1,0 +1,25 @@
+00:56:38 tinyllama p=1 rep1 tps=134.9855 mean_latency_ms=3711.50 wall_ms=3793 failed=0 tokens=512
+00:56:52 tinyllama p=8 rep1 tps=311.6251 mean_latency_ms=1612.62 wall_ms=1643 failed=0 tokens=512
+00:57:07 tinyllama p=8 rep2 tps=313.3415 mean_latency_ms=1602.00 wall_ms=1634 failed=0 tokens=512
+00:57:28 tinyllama p=1 rep2 tps=135.9533 mean_latency_ms=3675.75 wall_ms=3766 failed=0 tokens=512
+00:57:49 tinyllama p=1 rep3 tps=135.2708 mean_latency_ms=3700.50 wall_ms=3785 failed=0 tokens=512
+00:58:03 tinyllama p=8 rep3 tps=318.4080 mean_latency_ms=1578.88 wall_ms=1608 failed=0 tokens=512
+00:58:47 qwen2.5 p=1 rep1 tps=55.2677 mean_latency_ms=9014.00 wall_ms=9264 failed=0 tokens=512
+00:59:16 qwen2.5 p=8 rep1 tps=107.4953 mean_latency_ms=4734.50 wall_ms=4763 failed=0 tokens=512
+00:59:46 qwen2.5 p=8 rep2 tps=107.5404 mean_latency_ms=4733.25 wall_ms=4761 failed=0 tokens=512
+01:00:30 qwen2.5 p=1 rep2 tps=54.4739 mean_latency_ms=9093.75 wall_ms=9399 failed=0 tokens=512
+01:01:14 qwen2.5 p=1 rep3 tps=53.7702 mean_latency_ms=9166.12 wall_ms=9522 failed=0 tokens=512
+01:01:45 qwen2.5 p=8 rep3 tps=103.8540 mean_latency_ms=4903.62 wall_ms=4930 failed=0 tokens=512
+01:02:31 Phi p=1 rep1 tps=50.1077 mean_latency_ms=9925.12 wall_ms=10218 failed=0 tokens=512
+01:03:03 Phi p=8 rep1 tps=96.0060 mean_latency_ms=5291.62 wall_ms=5333 failed=0 tokens=512
+01:03:34 Phi p=8 rep2 tps=95.2204 mean_latency_ms=5333.38 wall_ms=5377 failed=0 tokens=512
+01:04:18 Phi p=1 rep2 tps=49.8831 mean_latency_ms=9851.00 wall_ms=10264 failed=0 tokens=512
+01:05:05 Phi p=1 rep3 tps=50.0831 mean_latency_ms=9929.62 wall_ms=10223 failed=0 tokens=512
+01:05:34 Phi p=8 rep3 tps=97.5982 mean_latency_ms=5204.75 wall_ms=5246 failed=0 tokens=512
+01:06:32 mistral p=1 rep1 tps=34.5642 mean_latency_ms=14373.75 wall_ms=14813 failed=0 tokens=512
+01:07:11 mistral p=8 rep1 tps=58.6483 mean_latency_ms=8694.38 wall_ms=8730 failed=0 tokens=512
+01:07:50 mistral p=8 rep2 tps=59.2730 mean_latency_ms=8599.88 wall_ms=8638 failed=0 tokens=512
+01:08:49 mistral p=1 rep2 tps=33.1972 mean_latency_ms=15002.88 wall_ms=15423 failed=0 tokens=512
+01:09:52 mistral p=1 rep3 tps=32.1043 mean_latency_ms=15745.75 wall_ms=15948 failed=0 tokens=512
+01:10:32 mistral p=8 rep3 tps=56.2143 mean_latency_ms=9078.25 wall_ms=9108 failed=0 tokens=512
+done

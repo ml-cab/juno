@@ -1,0 +1,23 @@
+Juno hardware validation kit 0.1.2, Juno d8012b11f98fbf9ef89addae715b12bd5d832186 (modified tree)
+Suite custom, started 20261106T045718Z, finished 20261106T045806Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+
+env                            DONE     0:01
+gpu.kernel-timing              PASS     0:06, GPU 152 MiB
+    prefill attention, tinyllama-1.1b 32/4/64 heads, 2048 rows over up to 2048 keys median 15.99, min 15.78, max 16.82 ms (n=5)
+    prefill attention, qwen2.5-3b 16/2/128 heads, 2048 rows over up to 2048 keys median 19.66, min 19.39, max 20.15 ms (n=5)
+    prefill attention, phi-3.5-mini 32/32/96 heads, 2048 rows over up to 2048 keys median 34.67, min 34.18, max 35.17 ms (n=5)
+    prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys median 37.04, min 36.55, max 37.37 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 2048 rows median 22.91, min 22.65, max 23.02 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 2048 rows median 24.74, min 24.63, max 25.24 ms (n=5)
+    LM head GEMV, qwen2.5-3b output 151936x2048 Q6_K, 1 row median 1.8862, min 1.8821, max 1.9343 ms (n=5)
+    ok   longest single kernel at a 2048-token window <= 500 ms (the 2 s display-driver watchdog / 4)
+launcher.tinyllama             PASS     0:14
+    ok   local mode with --api-port answers a chat request: HTTP 200: 1. Red
+2. Blue
+
+    ok   the launcher exits cleanly on exit: exit code 0, 0 of its processes still running
+    ok   lora with --grammar-file warns that constrained decoding is a no-op for LoRA training: warned (exit code 0)
+    ok   the launcher prints no [DBG] lines: none in its output

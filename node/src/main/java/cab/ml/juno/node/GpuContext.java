@@ -169,19 +169,21 @@ public final class GpuContext implements AutoCloseable {
         return switch (pref) {
             case "cuda" -> {
                 if (!CudaBindings.isAvailable())
-                    throw new IllegalStateException("juno.gpu.backend=cuda but CUDA not available");
+                    throw new IllegalStateException("juno.gpu.backend=cuda but CUDA not available: "
+                        + CudaBindings.unavailableReason());
                 yield CudaBindings.instance();
             }
             case "rocm" -> {
                 if (!RocmBindings.isAvailable())
-                    throw new IllegalStateException("juno.gpu.backend=rocm but ROCm not available");
+                    throw new IllegalStateException("juno.gpu.backend=rocm but ROCm not available: "
+                        + RocmBindings.unavailableReason());
                 yield RocmBindings.instance();
             }
             default -> {
                 if (CudaBindings.isAvailable()) yield CudaBindings.instance();
                 if (RocmBindings.isAvailable()) yield RocmBindings.instance();
-                throw new IllegalStateException(
-                    "No GPU backend available — CUDA and ROCm libraries not found");
+                throw new IllegalStateException("No GPU backend available. CUDA: "
+                    + CudaBindings.unavailableReason() + " ROCm: " + RocmBindings.unavailableReason());
             }
         };
     }

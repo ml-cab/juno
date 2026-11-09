@@ -27,6 +27,7 @@ yet: the three kit-output defects from the reference run's review are fixed, tes
 drafted from this host's runs. The same day a real download from Hugging Face, interrupted and resumed, met the model
 catalog criterion, and the Linux keep-awake inhibitor was seen held. Every open criterion now waits on
 Windows and macOS runs by testers (owner decision 2026-11-05: CI stays deferred), as each criterion's dated note says.
+By owner decision 2026-11-05 (README rule 1), [Tier 02G](TIER-02G-cuda-on-windows.md) has begun while this tier stays open.
 Gap analysis refs: none — see "Why this tier, why now"
 
 **Added 2026-10-13 (owner decisions, recorded in the execution record below).** This host has one CPU
@@ -1779,3 +1780,47 @@ zip has arrived. CI was deferred the same day ("for now skip github ci").
 **Next for the executor:** `ingest` each tester's zip as it arrives (with the kit at this change or later, against the reference
 run at `80ec949e`), fix what it exposes, record its host in `INVENTORY.md`'s "Borrowed hardware" table, and tick what it meets.
 Then the close: the cross-surface row 14, and the full suite and `mvn verify -pl juno-master` again if code changed.
+
+### 2026-11-05: no tester's zip; Tier 02G begins while this tier stays open (owner decision)
+
+**Plan against code, verified at HEAD `d8012b11`** (the owner's commit of the kit fixes and the 2026-11-05 records; `git status`
+shows only the untracked `.github/`). `check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep or build was
+running. No tester's zip has arrived: the 46 zips under `juno-kit-results/` are all `linux-amd64`, and none is elsewhere under
+the home folder. The code claims of the last two entries hold: `NoiseRule.reason` joins with `"; "`, `IngestReport` writes the
+four-cell row and the **GPU backend** line, `juno-kit.bat` and `juno.bat` exist, and `KeepAwake` has the FFM, `caffeinate` and
+`systemd-inhibit` paths. So no executor work on this host is left in this tier, as the previous entry said.
+
+**Decision for the owner: what runs while the testers' runs are owed.** Execution rule 1 stops [Tier 02G](TIER-02G-cuda-on-windows.md)
+until this tier closes, and this tier cannot close without Windows and macOS runs. Options put: (1) let Tier 02G start with its
+work this host can do (items 1, 2 and 6: library resolution per OS, the binding audit, the fail-closed refusals), this tier's
+criteria staying open; (2) keep waiting; (3) let [Tier 02H](TIER-02H-batched-gpu-decode.md) run first. Recommendation (1): it
+is the next tier in the order, needs no Windows machine, and moves no inference path, so it owes no gate.
+- **Owner decision 2026-11-05: (1).** Recorded under README execution rule 1. This tier's six open criteria stand as written;
+  each closes when its tester run arrives. The 2026-11-05 decision (c) is unchanged: CI stays deferred, and testers build
+  `80ec949e`.
+
+**Exit criteria:** 7 of 13, unchanged.
+
+**Next for the executor:** as in the previous entry, `ingest` each tester's zip as it arrives. Tier 02G's record carries its own
+next step.
+
+### 2026-11-07: a reading note for Windows testers' quality readings at `80ec949e` (found by Tier 02G item 4)
+
+No tester's zip has arrived (`juno-kit-results/` holds `linux-amd64` zips only). [Tier 02G](TIER-02G-cuda-on-windows.md)'s
+audit of Linux-only assumptions found one that reaches this tier's Windows runs. The repository had no `.gitattributes`, and a
+checkout made with Git for Windows' installer default (`core.autocrlf=true`) writes the kit's model-quality text
+(`model-quality-nll.txt`, 77 lines) with CR LF line ends. The `quality.*` probes tokenize the text as checked out, so such a run
+scores a different token sequence from the reference run's. Measured on TinyLlama 1.1B, CPU integer kernels, 2048 predictions,
+the kit jar the reference run's quality code is in: LF 2.45609, CR LF 2.39748 nats, **0.976x**
+(`docs/perf-compare/20261107T070530Z-nll-line-endings/`).
+
+- `ingest`'s bound is one-sided (at most 1.01x the reference), so a CR LF run does not fail it falsely. It passes while scoring
+  a different text, and could hide a numeric regression of up to about 3.5% on that model.
+- The probe's own check (integer kernels at most 1.01x the float-activation kernels on the tester's host) reads one text on both
+  sides and is unaffected; so are every other probe's checks and greedy replies, whose prompts are in the code.
+- When a Windows tester's zip at `80ec949e` is ingested, its mean-NLL rows against the reference are read as not like for like
+  unless the tester's checkout is known to have kept LF (`git config core.autocrlf` printing `false` or `input`, or a ZIP
+  download, which keeps the stored LF). From the commit that adds `.gitattributes` on, every checkout writes LF on every OS.
+- Nothing else here changes: no criterion is ticked or unticked, and testers still build `80ec949e`.
+
+**Exit criteria:** 7 of 13, unchanged.

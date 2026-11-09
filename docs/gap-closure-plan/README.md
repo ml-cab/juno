@@ -21,6 +21,17 @@ before acting on it — both documents are snapshots, not ground truth that stay
    decision, for the hardware validation kit and CUDA on Windows; 02H on 2026-10-31, by owner decision,
    for batched GPU decode).
    Partial, half-wired features are not acceptable stopping points between tiers.
+   *Owner decision 2026-11-05 (recorded in [Tier 02F](TIER-02F-hardware-validation-kit.md) and
+   [Tier 02G](TIER-02G-cuda-on-windows.md)):* Tier 02G begins while Tier 02F is open. Every open Tier 02F criterion
+   waits on testers' Windows and macOS runs, and no executor work on this host is left in it; Tier 02F closes as their
+   zips arrive. Tier 02G starts with the work this host can do (library resolution, the binding audit, the fail-closed
+   refusals). Nothing else in this rule changes: Tier 02H still waits for Tier 02G to close.
+   *Owner decision 2026-11-07 (recorded in [Tier 02G](TIER-02G-cuda-on-windows.md) and
+   [Tier 02H](TIER-02H-batched-gpu-decode.md)):* Tier 02G is postponed until it is run on Windows; Tier 02H begins
+   while Tier 02G is open. Tier 02G's Linux-side work is done (library resolution, the binding audit, the fail-closed
+   refusals, the kit probes, the audit of Linux-only assumptions, the launchers); what is left needs the Windows
+   evaluation installed on this host (its steps 2 and 3). Work resumes on Tier 02G after those Windows runs. Tier 02H's
+   place after Tier 02G was sequencing only: none of its work depends on Tier 02G's.
 2. **No surface left aside.** A tier is not complete until its change has been carried through
    every product surface it touches — see "Cross-surface compatibility checklist" below. If a
    surface can't reasonably support the new feature yet (e.g. continuous schedule doesn't support

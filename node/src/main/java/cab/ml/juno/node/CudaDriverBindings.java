@@ -15,7 +15,6 @@
  */
 package cab.ml.juno.node;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
@@ -32,10 +31,21 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * <p>Used to load PTX modules and launch fused quant kernels alongside the
  * existing cudart/cuBLAS path in {@link CudaBindings}. Relies on the cudart
  * primary context (call {@code cudaSetDevice} / allocate first).
+ *
+ * <p>The library is found by {@link CudaLibraryLocator} ({@code libcuda.so.1} on
+ * Linux, {@code nvcuda.dll} on Windows). ABI: every descriptor matches its C
+ * prototype in the CUDA 12.x {@code cuda.h} on LP64 and LLP64 alike: handles and
+ * pointers, {@code unsigned int} grid, block, shared-memory and flag arguments,
+ * and no C {@code long}. Kernel arguments travel through {@code kernelParams} as
+ * pointers to values whose widths the PTX {@code .param} declarations fix, so they
+ * do not depend on the host OS.
  */
 final class CudaDriverBindings {
 
 	private static final Logger log = Logger.getLogger(CudaDriverBindings.class.getName());
+
+	/** Where the driver library was loaded from ({@link CudaLibraryLocator.Loaded#location()}). */
+	final String location;
 
 	final MethodHandle cuInit;
 	final MethodHandle cuCtxGetCurrent;
@@ -64,6 +74,11 @@ final class CudaDriverBindings {
 		return INSTANCE != null;
 	}
 
+	/** Why the driver library did not load (one line); null when it did. */
+	static String unavailableReason() {
+		return INIT_FAILURE == null ? null : INIT_FAILURE.getMessage();
+	}
+
 	static CudaDriverBindings instance() {
 		if (INSTANCE == null)
 			throw new IllegalStateException(
@@ -73,7 +88,9 @@ final class CudaDriverBindings {
 
 	private CudaDriverBindings() {
 		Linker linker = Linker.nativeLinker();
-		SymbolLookup cuda = loadLibrary("libcuda.so.1", "libcuda.so");
+		CudaLibraryLocator.Loaded driver = CudaLibraryLocator.load(CudaLibraryLocator.Library.DRIVER, 0);
+		SymbolLookup cuda = driver.lookup();
+		location = driver.location();
 
 		cuInit = bind(linker, cuda, "cuInit",
 				FunctionDescriptor.of(JAVA_INT, JAVA_INT));
@@ -97,7 +114,7 @@ final class CudaDriverBindings {
 						ADDRESS)); // extra
 
 		check(callInt(cuInit, 0), "cuInit");
-		log.info("CudaDriverBindings ready — Panama FFI (libcuda)");
+		log.info("CudaDriverBindings ready — Panama FFI (" + driver.location() + ")");
 	}
 
 	static void check(int rc, String what) {
@@ -118,19 +135,5 @@ final class CudaDriverBindings {
 		MemorySegment sym = lookup.find(name)
 				.orElseThrow(() -> new UnsatisfiedLinkError("missing symbol " + name));
 		return linker.downcallHandle(sym, desc);
-	}
-
-	private static SymbolLookup loadLibrary(String... names) {
-		Throwable last = null;
-		for (String name : names) {
-			try {
-				return SymbolLookup.libraryLookup(name, Arena.global());
-			} catch (Throwable t) {
-				last = t;
-			}
-		}
-		throw new UnsatisfiedLinkError(
-				"cannot load CUDA driver library " + String.join("|", names)
-						+ (last == null ? "" : ": " + last.getMessage()));
 	}
 }

@@ -1,0 +1,3 @@
+[lora-perf] benchmark ref=HEAD commit=unknown backend=gpu jfr=10m
+[juno] Set CUDA_PATH or CUDA_HOME to your NVIDIA CUDA install, e.g. /usr/local/cuda
+[lora-perf] done: <scratch>/lora/baseline-1

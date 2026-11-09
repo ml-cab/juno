@@ -319,6 +319,8 @@ public final class JunoPlayer implements AutoCloseable {
 			BatchConfig batch = ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();
 			if (schedule.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.CONTINUOUS)
 				batch = cab.ml.juno.coordinator.ServeSchedulePolicy.runningSetConfig(batch);
+			if (LoraPlaybackBatchNotice.applies(playAdapters != null, batch.isBatchingEnabled()))
+				java.util.logging.Logger.getLogger(JunoPlayer.class.getName()).warning(LoraPlaybackBatchNotice.TEXT);
 			var scheduler = new RequestScheduler(1000, loop, batch, schedule);
 
 			String filename = modelPath.getFileName().toString();

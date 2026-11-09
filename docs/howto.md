@@ -29,6 +29,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `lora-import` | Convert a GGUF LoRA adapter into a Juno `.lora` v2 checkpoint usable with `--lora-play` |
 | `gguf-info` | Dump a GGUF's full metadata + tensor layout (name/shape/quant type) as plain text — for architecture review without guessing |
 | `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail) |
+| `health` | Standalone health-monitor HTTP server (no model): nodes post probes to `POST /health/probe`; `GET /health` and `GET /health/circuits` read them. Flags `--port` (8081), `--stale-ms`, `--warn`, `--critical`, `--heap`; environment `HEALTH_PORT`, `HEALTH_STALE_MS`, `HEALTH_WARN`, `HEALTH_CRITICAL` |
 
 ---
 
@@ -49,6 +50,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--nodes N` | `3` | local | Number of in-process shards |
 | `--pType pipeline\|tensor` | `pipeline` | cluster, test | Parallelism type |
 | `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording (e.g. `30s`, `5m`) |
+| `--health` | off | cluster, local, lora | Start the health-monitor sidecar in the console JVM; a local cluster's nodes report their heap to it |
+| `--health-port N` | `8081` | cluster, local, lora | The sidecar's port, and the one the nodes report to (`HEALTH_PORT`). A value that is not a port from 1 to 65535 is refused |
 | `--verbose` / `-v` | — | cluster, local | Verbose logging |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
 | `--threads N` | all processors | cluster, local, lora | CPU matmul threads per JVM (`JUNO_THREADS`): every CPU matmul (decode, prompt processing, the vision encoder, LoRA training) runs on a pool of exactly `N` threads, the calling thread included. In `cluster` mode the value applies to each node; without it each node takes an even share of the cores. Embedders: `JunoPlayer.Builder.threads(N)`, `CpuThreads.setThreads(N)`, `-Djuno.threads=N` or `JUNO_THREADS`. A value that is not a positive integer is refused at startup. The former `-Djuno.simd.pool.size` is no longer read and is refused with an error naming `--threads`. |
@@ -60,7 +63,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--cache-type-v f16\|q8_0` | `f16` | cluster, local, lora | V-cache element type (`JUNO_CACHE_TYPE_V`). Same semantics as `--cache-type-k`. With the `static` schedule the host KV cache of a finished request is kept for the next one rather than allocated again (on a GPU, a 512-token Phi-3.5-mini prompt window took 21% less time with this and the direct K/V write together), so an idle server holds one request's host KV on the heap, at the capacity that request grew to (the next power of two of its positions; float32 `f16` K and V take 0.79 MB per position on Phi-3.5-mini, so 0.8 GB after a request that ran past 512 positions and 3.2 GB past 2048). The next request reuses it, so the peak does not grow. |
 | `--schedule static\|continuous` | `static` | cluster, local, lora | Serving schedule (`JUNO_SCHEDULE`). `static` = dense KV + static micro-batch (SSE isolated). `continuous` = paged KV + running-set batching (SSE shares steps) on **local / in-process only**. Under continuous, long prompts advance in `--prefill-batch` ubatch chunks mixed into the same engine steps as other requests’ decode; when the step slot budget is full, **decode is preferred** so short replies are not starved. Cluster, TP, and PP launchers **auto-fallback to static** with a startup WARNING. On `juno lora` **training**, continuous is an explicit no-op (ephemeral float KV + REPL WARNING; no running-set engine). Per-request `x_juno_loras` is not wired on any schedule yet and is rejected on both `static` and `continuous` (use process-wide `--lora-play`, which now supports multiple adapters and per-file scales). Prefix KV reuse is **session-scoped** (`x_juno_session_id`); shared system prompts across different sessions do not skip prefill. Under `static` with `--parallel` above 1, a request that is collected into a batch of two or more always prefills its whole prompt (session KV reuse applies to requests dispatched on their own and to the `continuous` schedule). Tools / LoRA play that change the tokenized prefix invalidate cross-turn hits. `--parallel` caps the continuous running set (default cap 8 when parallel is 1). |
 | `--kv-page-size N` | `16` | cluster, local, lora | Tokens per KV page when `schedule=continuous` (`JUNO_KV_PAGE_SIZE`). Ignored under `static` (dense; startup note). |
-| `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching. Requests that arrive within `--batch-window-ms` of a batch's first request decode together, up to N. On the CPU, `8` suits an API server: 8 concurrent clients read 1.08x to 1.17x the aggregate throughput of `1`, at lower mean latency, on a 6-core host. On the GPU keep `1`: a decode batch does not use the device-resident decode region, and 8 concurrent clients read 0.68x to 0.75x batched on a GTX 1080 (`docs/perf-compare/20261031T041246Z-cpu-parallel-window/`, `docs/perf-compare/20261031T040116Z-gpu-parallel-window/`). On the CPU with the default integer kernels, batching does not change a request's output: every request in a decode batch is computed with the arithmetic it gets when it runs alone, bit for bit, so a greedy answer does not depend on what else the server is serving (the continuous schedule's decode steps likewise). GPU-resident layers decode a batch with another kernel than a single request, and their results can differ in the last bits. |
+| `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching. Requests that arrive within `--batch-window-ms` of a batch's first request decode together, up to N. On the CPU, `8` suits an API server: 8 concurrent clients read 1.08x to 1.17x the aggregate throughput of `1`, at lower mean latency, on a 6-core host. On the GPU, `8` suits an API server too: a decode batch runs in the device-resident decode region, and 8 concurrent clients read 1.77x to 2.32x the aggregate throughput of `1`, at 0.43x to 0.58x its mean latency, on a GTX 1080 (`docs/perf-compare/20261031T041246Z-cpu-parallel-window/`, `docs/perf-compare/20261109T005616Z-gpu-batched-decode-parallel/`). On the CPU with the default integer kernels, batching does not change a request's output: every request in a decode batch is computed with the arithmetic it gets when it runs alone, bit for bit, so a greedy answer does not depend on what else the server is serving (the continuous schedule's decode steps likewise). On the GPU, every layer the device region runs whole decodes a batch row for row as it decodes one request, bit for bit, so a greedy answer does not depend on what else is being served; a layer on the host-driven batch path (a handler without the region, or `JUNO_BATCH_DECODE_REGION=off`) can differ from a single request in the last bits. On a cluster keep `1`: a batch decodes one request at a time on each node, because the batched device decode runs in local mode only, and startup says so. Replies do not change, and with 8 concurrent clients `8` read 0.38x (pipeline) and 0.81x (tensor) the aggregate throughput of `1` on TinyLlama on the GPU (`docs/perf-compare/20261109T151847Z-gpu-batched-decode-cross-surface/`). |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`): a static batch dispatches M ms after its first request, or as soon as `--parallel` requests have arrived; a request with no company waits up to M ms. |
 | `--prefill-batch N` | sized to the prompt (GPU + `static` schedule, local mode and the `JunoPlayer` facade); `32` otherwise | cluster, local, master | Max prompt tokens per prefill window (`JUNO_PREFILL_BATCH`). In local mode and in the `JunoPlayer` embedding facade, with `--schedule static` and a GPU backend, the default is the widest window whose device footprint fits half of the free VRAM (queried live after the weights are uploaded, less the room held for one request's attention key/value mirror to grow to 512 positions), which normally covers the whole prompt; the footprint is the prefill window's own buffers and its 8-bit copy, added up over every in-process node (attention keeps no per-window scratch, so the footprint does not grow with the context), and it falls back to `32` when VRAM is tight. Every other surface defaults to `32`, each for a measured reason: on CPU a wider window does not change prefill time; under `--schedule continuous` the chunk is the unit decode steps interleave with, and `32` gives concurrent requests the lowest time to first token (a wider chunk shortens a long prompt's prefill at their expense); in cluster mode and on a standalone coordinator the nodes prefill one token per call, so the chunk size does not change the work; in `juno lora` the LoRA handler's prefill does not speed up with window width. Pass an explicit `N` to override on any surface; use `1` for per-token batched prefill.
 | `--prefill single\|batched` | `batched` | cluster, local | Prefill strategy: windowed GEMM vs per-token sequential loop. |
@@ -69,7 +72,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--spec-ngram-n N` | `3` | local | Ngram order for the speculative draft cache (`JUNO_SPEC_NGRAM_N`) — number of trailing tokens used as the lookup key. Only meaningful with `--spec-type ngram-simple`. |
 | `--spec-ngram-m N` | `4` | local | Max tokens drafted per verify round (`JUNO_SPEC_NGRAM_M`). Applies to both `ngram-simple` and `draft-simple`. |
 | `--model-draft PATH` | — | local | Draft model GGUF for `--spec-type draft-simple` (`JUNO_MODEL_DRAFT`). Loaded as an independent, always-single-shard pipeline sharing the target's GPU backend; must report the same vocabulary size as the target model. |
-| `--lora-play PATH[:SCALE][,PATH[:SCALE]...]` | — | cluster, local | Apply one or more pre-trained `.lora` adapters at inference (read-only, no training). A bare path defaults to scale `1.0` (back-compat with the single-file form); multiple comma-separated `path:scale` entries combine as `sum(scale_i * adapter_i)` — see `LoraPlaybackMerge` for the exact math. QA-LoRA and DoRA checkpoints are only supported as a single file at scale `1.0`; combining them with another adapter or a non-1.0 scale fails closed. In cluster mode the raw spec string is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
+| `--lora-play PATH[:SCALE][,PATH[:SCALE]...]` | — | cluster, local | Apply one or more pre-trained `.lora` adapters at inference (read-only, no training). A bare path defaults to scale `1.0` (back-compat with the single-file form); multiple comma-separated `path:scale` entries combine as `sum(scale_i * adapter_i)` — see `LoraPlaybackMerge` for the exact math. QA-LoRA and DoRA checkpoints are only supported as a single file at scale `1.0`; combining them with another adapter or a non-1.0 scale fails closed. In cluster mode the raw spec string is forwarded as `-Djuno.lora.play.path` to every forked node JVM. A decode batch (`--parallel` above 1, the continuous schedule) runs one request at a time under `--lora-play`, because the adapter is applied on the host, outside the batched decode: replies do not change, batching adds no decode throughput, and startup says so. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
 | `--grammar-file PATH` | — | cluster, local | GBNF file for constrained decoding (REPL and `--api-port`). Env `JUNO_GRAMMAR_FILE`. Mutually exclusive with `--json-schema-file`. Applies to chat completions when the request omits a grammar (`response_format.type=text` stays unconstrained). LoRA **training** ignores the flag (launcher WARNING). |
 | `--json-schema-file PATH` | — | cluster, local | JSON Schema file compiled to GBNF (documented subset below). Env `JUNO_JSON_SCHEMA_FILE`. Unsupported keywords fail closed. |
@@ -92,7 +95,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 |------|---------|-------------|
 | `--model-path PATH` | — | Source GGUF or llamafile (required) |
 | `--lora-path PATH` | `<model>.lora` | Trained adapter checkpoint |
-| `--output PATH` | `<model>-merged.gguf` | Output file (always plain GGUF, even if source is llamafile) |
+| `--output PATH` | `<model>-merged.gguf` | Output file (always plain GGUF, even if source is llamafile). An output that is the model file or the `.lora` checkpoint is refused with one line, also when it names that file another way (a link, a `./` path, or another letter case on Windows) |
 | `--heap SIZE` | derived | JVM heap, sized from the model file when not given — see below |
 
 **Environment overrides:** `MODEL_PATH`, `JUNO_HF`, `JUNO_USE_GPU`, `JUNO_GPU_LAYERS`, `JUNO_MMQ`, `JUNO_CACHE_TYPE_K`, `JUNO_CACHE_TYPE_V`, `JUNO_SCHEDULE`, `JUNO_KV_PAGE_SIZE`, `JUNO_PARALLEL`, `JUNO_BATCH_WINDOW_MS`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
@@ -184,7 +187,7 @@ example `CPU integer kernels: 128-bit lanes (host preferred 256-bit)`. Forcing 2
 # With OpenAI-compatible REST API on port 8080
 ./juno local --model-path /path/to/model.gguf --api-port 8080
 
-# CPU API server with static micro-batching (non-stream requests only; on the GPU keep --parallel 1)
+# API server with static micro-batching (non-stream requests only)
 ./juno local --model-path /path/to/model.gguf --api-port 8080 --parallel 8 --batch-window-ms 50
 
 # With a pre-trained LoRA adapter applied at inference
@@ -235,6 +238,11 @@ When `--api-port` is given, the startup banner shows:
 ### `cluster` — 3-node cluster, default command of juno-player console (forked JVMs, real gRPC)
 
 Forks 3 separate JVM node processes. Each node loads its own shard of the model.
+The nodes listen on the loopback address only (ports 19092 to 19094): the coordinator reaches them
+on this host, so a desktop firewall has nothing to ask about. When the cluster stops it closes each
+node's standard input, and the node exits through its shutdown hooks (its gRPC server drains and,
+with `--jfr`, its recording is written); a node still running 10 s later is ended. A node started on
+its own (`juno-node`, `NodeMain`) listens on every interface unless `-Dnode.bind=<address>` names one.
 Two distribution strategies are available via `--pType`:
 
 - **`pipeline`** (default) — contiguous layer blocks, serial activation flow node-1 -> node-2 -> node-3
@@ -316,7 +324,9 @@ juno.bat lora --model-path models\model.gguf --verbose
 ```
 
 For a full LoRA training guide, REPL commands, rank selection, and common pitfalls see
-[LoRA.md](LoRA.md).
+[`juno-documentation/part4/`](../juno-documentation/part4/): the
+[training guide](../juno-documentation/part4/03-training-guide.md) and the
+[common pitfalls](../juno-documentation/part4/07-common-pitfalls.md).
 
 **Using a trained adapter outside `lora` mode:**
 
@@ -435,8 +445,7 @@ that no amount of reading the base architecture's paper or README can substitute
 ./juno gguf-info /path/to/model.gguf /path/to/mmproj.gguf
 ```
 
-Linux/macOS only for now — `scripts/run.bat` does not currently wire up `gguf-info` (it implements
-`cluster`/`local`/`lora`/`test`/`merge`/`lora-import`).
+On Windows: `juno.bat gguf-info --model-path models\model.gguf`, with the same flags and positional forms.
 
 Two tokenizer keys in that dump decide how a prompt is split, and are worth reading before
 reporting odd tokenization: `tokenizer.ggml.model` (`gpt2` for a byte-level BPE vocabulary,
@@ -1150,6 +1159,13 @@ Llama: out of device memory in the prefill-window device region - this window's 
 
 `-DJUNO_PREFILL_REGION=off` (or the environment variable of the same name) keeps every window on the
 existing path, for comparison; cluster launchers forward it to every node.
+
+A decode step of several requests (`--parallel` above 1, or the continuous schedule) runs on the device
+the same way, on the layers the single-request decode region runs whole: each layer takes one upload of
+the residual rows and one download of K, V and the layer output, and every row is bit for bit what that
+request decodes on its own. Handlers without the region (`phi2`, `qwen3moe`) keep the host-driven batch
+and say so once at startup. `-DJUNO_BATCH_DECODE_REGION=off` (or the environment variable of the same
+name) keeps every batch on the host-driven path, for comparison; cluster launchers forward it too.
 
 ### Heap sizing
 

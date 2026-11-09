@@ -1,0 +1,35 @@
+/*
+ * Copyright 2026 Dmytro Soloviov (soulaway)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package cab.ml.juno.player;
+
+/**
+ * The startup statement for a decode batch under LoRA playback. The LoRA handlers apply
+ * the adapter on the host and keep the serial {@code forwardMultiDecode}, so a batch
+ * decodes one request at a time, outside the device-resident batch region.
+ */
+final class LoraPlaybackBatchNotice {
+
+	static final String TEXT = "--lora-play decodes a batch (--parallel, continuous schedule) one request at a time: "
+			+ "the adapter is applied on the host, outside the batched decode. Replies do not change; "
+			+ "batching adds no decode throughput here";
+
+	private LoraPlaybackBatchNotice() {
+	}
+
+	static boolean applies(boolean loraPlay, boolean batchingEnabled) {
+		return loraPlay && batchingEnabled;
+	}
+}

@@ -1,0 +1,24 @@
+WARNING: CPU IP/backtrace sampling not supported, disabling.
+Try the 'nsys status --environment' command to learn more.
+
+WARNING: CPU context switch tracing not supported, disabling.
+Try the 'nsys status --environment' command to learn more.
+
+Importer error status: The importer binary and its dependencies were not found.
+Unable to retrieve the importer version: skipping importation of the QDSTRM file.
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10680}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10683}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10677}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10685}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10688}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10674}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10684}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10676}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10679}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10678}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10681}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10675}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10672}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10686}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10672}
+{"prompt_tokens":68,"completion_tokens":128,"latency_ms":10672}

@@ -182,6 +182,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * device. Single-sequence decode only.
 	 */
 	private final ResidentQkvPath residentQkv;
+	/** The decode batch device region over {@link #residentQkv}, or null (host-driven batch). */
+	private final ResidentBatchDecode residentBatch;
 
 	/**
 	 * The prefill-window device region: a prefill window's norms, matmuls, SwiGLU,
@@ -320,6 +322,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.gqaGpu = null;
 		this.rmsNormGpu = null;
 		this.residentQkv = null;
+		this.residentBatch = null;
 		this.prefillRegion = null;
 		log.info(kvLayout.policySummary());
 	}
@@ -434,6 +437,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.gqaGpu = gqa;
 		this.rmsNormGpu = rmsNorm;
 		this.residentQkv = GpuResidencyOptions.fromEnv().requested() ? openResidentQkv(backend, L) : null;
+		this.residentBatch = ResidentBatchDecode.open("Llama", this.residentQkv);
 		this.prefillRegion = openPrefillRegion(backend, L, gqa != null);
 	}
 
@@ -517,6 +521,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/** Whether the device-resident decode region ({@code --gpu-residency}) is active for this handler. */
 	boolean gpuResidencyActive() {
 		return residentQkv != null;
+	}
+
+	/** Whether a decode step of several requests runs in the device-resident batch region. */
+	@Override
+	public boolean batchDecodeRegionActive() {
+		return residentBatch != null;
 	}
 
 	/**
@@ -960,7 +970,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public void releaseGpuResources() {
-		// The region holds references to the device matrices below; close it first.
+		// The regions hold references to the device matrices below; close them first.
+		if (residentBatch != null)
+			residentBatch.close();
+		if (residentQkv != null)
+			residentQkv.close();
 		if (prefillRegion != null)
 			prefillRegion.close();
 		prefillRegion = null;
@@ -1499,7 +1513,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		x = runLayersMultiDecode(x, requestIds, positions);
 
 		if (hasOutputProj) {
-			float[][] logits = outputProjectionBatch(x);
+			float[][] logits = outputProjectionDecode(x);
 			return new MultiDecodeForwardResult(logits, null, N, System.nanoTime() - start);
 		}
 
@@ -1556,17 +1570,25 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.intermediateSize(),
 				kvDim, cfg.numHeads(), maxPos + 1, kvLayout.needsAttentionScratch());
 
-		for (int li = 0; li < L; li++) {
-			SessionKvTensor[] kLayers = new SessionKvTensor[N];
-			SessionKvTensor[] vLayers = new SessionKvTensor[N];
-			DeviceKvCache[] devLayers = new DeviceKvCache[N];
-			boolean resident = layerGpuResident(li);
-			for (int i = 0; i < N; i++) {
-				kLayers[i] = kCaches[i][li];
-				vLayers[i] = vCaches[i][li];
-				devLayers[i] = (devCaches[i] != null && resident) ? devCaches[i][li] : null;
+		ResidentBatchDecode.Step step = residentBatch != null ? residentBatch.open(N) : null;
+		try {
+			for (int li = 0; li < L; li++) {
+				SessionKvTensor[] kLayers = new SessionKvTensor[N];
+				SessionKvTensor[] vLayers = new SessionKvTensor[N];
+				DeviceKvCache[] devLayers = new DeviceKvCache[N];
+				boolean resident = layerGpuResident(li);
+				for (int i = 0; i < N; i++) {
+					kLayers[i] = kCaches[i][li];
+					vLayers[i] = vCaches[i][li];
+					devLayers[i] = (devCaches[i] != null && resident) ? devCaches[i][li] : null;
+				}
+				if (step == null || !residentBatch.runLayerIfEligible(step, li, x, positions, kLayers, vLayers, devLayers,
+						ws.k, ws.v))
+					x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws, devLayers);
 			}
-			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws, devLayers);
+		} finally {
+			if (step != null)
+				step.close();
 		}
 
 		if (a != null) {
@@ -2928,6 +2950,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/** Final RMS norm + output projection → float[vocabSize] logits. */
 	private float[] outputProjection(float[] x) {
 		return outputProjectionBatch(new float[][] { x })[0];
+	}
+
+	/** The decode step's LM head: every row bit for bit its single-request logits, at any batch width. */
+	private float[][] outputProjectionDecode(float[][] x) {
+		if (outputProjQ4Dev == null)
+			return outputProjectionBatch(x);
+		float[][] xNorm = new float[x.length][];
+		for (int b = 0; b < x.length; b++)
+			xNorm[b] = rmsNorm(x[b], outputNorm, cfg.rmsNormEps());
+		return backend.sgemmDecode(outputProjQ4Dev, xNorm);
 	}
 
 	/** Batched LM head: one GEMM over N decode streams when the backend supports it. */

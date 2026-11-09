@@ -109,7 +109,13 @@ public final class LoraMergeMain {
 		System.out.println();
 
 		Instant t0 = Instant.now();
-		LoraMerge.Result result = LoraMerge.merge(model, lora, output);
+		LoraMerge.Result result;
+		try {
+			result = LoraMerge.merge(model, lora, output);
+		} catch (IllegalArgumentException e) {
+			err(e.getMessage());
+			return;
+		}
 		long ms = Duration.between(t0, Instant.now()).toMillis();
 
 		System.out.println();

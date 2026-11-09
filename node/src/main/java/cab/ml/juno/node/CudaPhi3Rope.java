@@ -120,6 +120,28 @@ final class CudaPhi3Rope implements ResidentRope {
 	}
 
 	@Override
+	public boolean applyResidentRows(ResidentActivation x, MemorySegment seqLens) {
+		requireOpen();
+		x.requireOpen();
+		if (x.dim() % headDim != 0)
+			throw new IllegalArgumentException(
+					"activation width " + x.dim() + " is not a whole number of " + headDim + "-wide heads");
+		if (x.rows() == 0)
+			throw new IllegalStateException("activation holds no rows to rotate");
+		BatchedDecodeKernels kernels = BatchedDecodeKernels.tryLoad();
+		if (kernels == null)
+			return false;
+		kernels.ropeExtRows(x.devicePointer(), factors, seqLens, x.rows(), x.dim() / headDim, headDim, thetaScale,
+				cfg.freqScale(), cfg.attnFactor(), x.chain().stream());
+		return true;
+	}
+
+	@Override
+	public void requirePosition(int pos) {
+		cfg.requirePosition(pos);
+	}
+
+	@Override
 	public int headDim() {
 		return headDim;
 	}

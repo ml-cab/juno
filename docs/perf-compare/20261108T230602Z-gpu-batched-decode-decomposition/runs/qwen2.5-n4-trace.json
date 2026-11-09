@@ -1,0 +1,37 @@
+{
+ "intervals": 127,
+ "layers": 36,
+ "logit_bytes": 607744,
+ "every": 4,
+ "wall_ms": 162.717454,
+ "device_busy_ms": 58.864828,
+ "device_idle_ms": 103.886824,
+ "kernel_ms": 54.362416,
+ "copy_ms": 4.47792,
+ "launches": 2060,
+ "copies": 2492,
+ "h2d": 1444,
+ "d2h": 1048,
+ "kernels_ms": {
+  "q4k_gemv": 34.24865,
+  "q6k_gemv": 16.938099,
+  "quantize_q8_1": 2.106204,
+  "gqa_attention_d128": 0.985299
+ },
+ "api_ms": {
+  "cudaMemcpyAsync_v3020": 78.516393,
+  "cuLaunchKernel": 18.676967,
+  "cudaMemcpy_v3020": 6.188976,
+  "cudaStreamSynchronize_v3020": 5.648415,
+  "cudaFree_v3020": 0.0,
+  "cudaMalloc_v3020": 0.0
+ },
+ "api_count": {
+  "cuLaunchKernel": 2060,
+  "cudaFree_v3020": 0,
+  "cudaMalloc_v3020": 0,
+  "cudaMemcpyAsync_v3020": 2025,
+  "cudaMemcpy_v3020": 468,
+  "cudaStreamSynchronize_v3020": 1012
+ }
+}

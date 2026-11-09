@@ -1,0 +1,246 @@
+baseline jar sha256: 796de19984b3e9ae
+candidate jar sha256: 789c5204c9af15ab
+=== gpu-ab: baseline 1 (21:53:15)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/gpu-ab-baseline-1.log)
+=== gpu-ab: candidate 1 (21:55:47)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/gpu-ab-candidate-1.log)
+=== gpu-ab: baseline 2 (21:58:21)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/gpu-ab-baseline-2.log)
+=== gpu-ab: candidate 2 (22:00:50)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/gpu-ab-candidate-2.log)
+=== gpu-ab: baseline 3 (22:03:22)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/gpu-ab-baseline-3.log)
+=== gpu-ab: candidate 3 (22:05:54)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/gpu-ab-candidate-3.log)
+
+gpu-ab: clock_pinned across the six runs: true (must be only: true)
+model              pp_A       pp_B  pp_B/A       tg_A     tg_B  tg_B/A    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama       3143.29    3185.06   1.013     149.61   151.26   1.011         558962       554090  0.991       0.0     0.0
+qwen2.5         1253.22    1274.13   1.017      58.06    58.49   1.007        1820417      1548491  0.851       0.0     0.0
+Phi              849.93     834.97   0.982      58.56    58.14   0.993         530710       534087  1.006       0.0     0.0
+mistral          585.70     571.39   0.976      39.51    38.07   0.963         865488       757224  0.875       0.0     0.0
+
+gpu-ab: greedy output (temperature 0), candidate vs baseline per run, and baseline run 1 vs runs 2..3
+  tinyllama: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  qwen2.5: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  Phi: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  mistral: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+=== cpu-ab: baseline 1 (22:08:24)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/cpu-ab-baseline-1.log)
+=== cpu-ab: candidate 1 (22:19:34)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/cpu-ab-candidate-1.log)
+=== cpu-ab: baseline 2 (22:30:46)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/cpu-ab-baseline-2.log)
+=== cpu-ab: candidate 2 (22:42:05)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/cpu-ab-candidate-2.log)
+=== cpu-ab: baseline 3 (22:53:18)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/cpu-ab-baseline-3.log)
+=== cpu-ab: candidate 3 (23:04:27)
+    exit=0  (log: dist/batched-gpu-decode-gate/runs/cpu-ab-candidate-3.log)
+
+cpu-ab: clock_pinned across the six runs: true (must be only: true)
+model              pp_A       pp_B  pp_B/A       tg_A     tg_B  tg_B/A    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama         32.87      33.70   1.025      11.61    11.52   0.992         290367       290132  0.999       0.0     0.0
+qwen2.5           11.86      11.73   0.989       4.16     4.16   1.000        1268119      1289593  1.017       0.0     0.0
+Phi                9.64       9.78   1.014       2.99     2.96   0.988         342520       353856  1.033       0.0     0.0
+mistral            5.17       5.02   0.969       2.08     2.07   0.995         353854       342858  0.969       0.0     0.0
+
+cpu-ab: greedy output (temperature 0), candidate vs baseline per run, and baseline run 1 vs runs 2..3
+  tinyllama: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  qwen2.5: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  Phi: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  mistral: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+
+CPU lane, top 10 hot methods (jdk.ExecutionSample), run 1 of each jar, reported not gated:
+--- tinyllama baseline
+295.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+268.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+165.0	java_util_Objects_checkIndex
+116.0	cab_ml_juno_node_CpuWorkerPool_forEach
+115.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+56.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+55.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+47.0	cab_ml_juno_node_GqaMath_attend
+40.0	cab_ml_juno_node_CpuIntegerGemm_fourRows16
+37.0	cab_ml_juno_node_GgufReader_f16ToF32
+--- tinyllama candidate
+297.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+296.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+173.0	java_util_Objects_checkIndex
+132.0	cab_ml_juno_node_CpuWorkerPool_forEach
+100.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+52.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+51.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+41.0	cab_ml_juno_node_GqaMath_attend
+35.0	cab_ml_juno_node_GgufReader_f16ToF32
+34.0	cab_ml_juno_node_CpuIntegerGemm_fourRows16
+--- qwen2.5 baseline
+913.0	java_util_Objects_checkIndex
+826.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+800.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+322.0	cab_ml_juno_node_CpuWorkerPool_forEach
+144.0	cab_ml_juno_node_GgufReader_f16ToF32
+122.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+112.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+84.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+77.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+74.0	cab_ml_juno_node_GqaMath_attend
+--- qwen2.5 candidate
+893.0	java_util_Objects_checkIndex
+789.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+783.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+293.0	cab_ml_juno_node_CpuWorkerPool_forEach
+136.0	cab_ml_juno_node_GgufReader_f16ToF32
+132.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+99.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+70.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+69.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+62.0	cab_ml_juno_node_GqaMath_attend
+--- Phi baseline
+1245.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+756.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+700.0	cab_ml_juno_node_CpuIntegerKernels_q5kRow
+438.0	cab_ml_juno_node_CpuWorkerPool_forEach
+287.0	java_util_Objects_checkIndex
+283.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecInto_0
+221.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+183.0	cab_ml_juno_node_GgufReader_f16ToF32
+176.0	cab_ml_juno_node_GqaMath_attend
+136.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+--- Phi candidate
+1198.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+711.0	cab_ml_juno_node_CpuIntegerKernels_q5kRow
+710.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+453.0	cab_ml_juno_node_CpuWorkerPool_forEach
+381.0	java_util_Objects_checkIndex
+283.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecInto_0
+201.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+165.0	cab_ml_juno_node_GqaMath_attend
+153.0	cab_ml_juno_node_GgufReader_f16ToF32
+145.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+--- mistral baseline
+3130.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+2094.0	java_util_Objects_checkIndex
+1260.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+562.0	cab_ml_juno_node_CpuWorkerPool_forEach
+340.0	cab_ml_juno_node_GgufReader_f16ToF32
+284.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+195.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+174.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+146.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+94.0	jdk_internal_misc_Unsafe_park
+--- mistral candidate
+2965.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+2097.0	java_util_Objects_checkIndex
+1346.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+588.0	cab_ml_juno_node_CpuWorkerPool_forEach
+376.0	cab_ml_juno_node_GgufReader_f16ToF32
+282.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+186.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+160.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+156.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+106.0	jdk_internal_misc_Unsafe_park
+
+GPU lane, top 10 hot methods (jdk.ExecutionSample), run 1 of each jar, reported not gated:
+--- tinyllama baseline
+3.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	cab_ml_juno_sampler_SampleStep_greedy
+1.0	java_util_concurrent_ConcurrentHashMap_get
+--- tinyllama candidate
+5.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	cab_ml_juno_node_WindowStepEvent_begin
+1.0	com_fasterxml_jackson_core_json_JsonWriteContext_writeFieldName
+1.0	java_lang_StringConcatHelper_stringOf
+--- qwen2.5 baseline
+14.0	cab_ml_juno_sampler_SoftmaxStep_apply
+3.0	cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch
+2.0	jdk_internal_foreign_SegmentFactories_initNativeMemory
+1.0	java_util_stream_IntPipeline__init_
+1.0	jdk_jfr_internal_JVM_getEventWriter
+1.0	jdk_jfr_internal_event_EventWriter_putStackTrace
+--- qwen2.5 candidate
+15.0	cab_ml_juno_sampler_SoftmaxStep_apply
+5.0	cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch
+1.0	cab_ml_juno_node_ResidentQkvPath_runOn
+1.0	cab_ml_juno_node_SwiGluEvent_shouldCommit
+1.0	cab_ml_juno_sampler_SampleStep_greedy
+1.0	java_lang_invoke_MethodHandle_asSpreader
+1.0	java_util_concurrent_ConcurrentHashMap_get
+1.0	jdk_internal_foreign_AbstractMemorySegmentImpl_isAlignedForElement
+1.0	jdk_internal_misc_ScopedMemoryAccess_copyMemoryInternal
+--- Phi baseline
+2.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	cab_ml_juno_kvcache_DenseKvTensor_writeToken
+1.0	cab_ml_juno_node_Q4KMmqKernel_launchPacked
+1.0	java_lang_invoke_DirectMethodHandle_Holder_invokeSpecial
+1.0	jdk_internal_foreign_AbstractMemorySegmentImpl_isAlignedForElement
+--- Phi candidate
+3.0	cab_ml_juno_sampler_SoftmaxStep_apply
+2.0	java_lang_invoke_DirectMethodHandle_allocateInstance
+1.0	cab_ml_juno_sampler_SampleStep_greedy
+--- mistral baseline
+5.0	cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch
+1.0	cab_ml_juno_node_LlamaTransformerHandler_rmsNormInto
+1.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	java_lang_invoke_MethodHandle_asSpreader
+1.0	jdk_internal_foreign_AbstractMemorySegmentImpl_overlaps
+1.0	jdk_internal_foreign_SegmentBulkOperations_copy
+1.0	jdk_internal_foreign_SegmentFactories_initNativeMemory
+1.0	jdk_internal_misc_ScopedMemoryAccess_copyMemoryInternal
+--- mistral candidate
+6.0	cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch
+1.0	cab_ml_juno_node_DeviceScratchPool_release
+1.0	cab_ml_juno_node_ResidentQkvPath_runOn
+1.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	jdk_internal_foreign_abi_DowncallStub_0x0000000088063c00_invoke
+1.0	jdk_internal_misc_ScopedMemoryAccess_copyMemoryInternal
+
+GPU lane, top 10 native methods (jdk.NativeMethodSample), run 1 of each jar, reported not gated:
+--- tinyllama baseline
+16.0	java_io_FileInputStream_readBytes
+16.0	sun_nio_ch_EPoll_wait
+2.0	java_lang_invoke_LambdaForm_MH_0x000000004134d400_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x0000000041345400_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x000000004134cc00_invoke
+--- tinyllama candidate
+15.0	java_io_FileInputStream_readBytes
+15.0	sun_nio_ch_EPoll_wait
+4.0	java_lang_invoke_LambdaForm_MH_0x000000009934d400_invoke
+2.0	java_lang_invoke_LambdaForm_MH_0x0000000099343400_invoke
+--- qwen2.5 baseline
+31.0	java_io_FileInputStream_readBytes
+31.0	sun_nio_ch_EPoll_wait
+10.0	java_lang_invoke_LambdaForm_MH_0x000000000933f400_invoke
+8.0	java_lang_invoke_LambdaForm_MH_0x000000000933f000_invoke
+2.0	java_lang_invoke_LambdaForm_MH_0x000000000933e800_invoke
+--- qwen2.5 candidate
+31.0	sun_nio_ch_EPoll_wait
+30.0	java_io_FileInputStream_readBytes
+9.0	java_lang_invoke_LambdaForm_MH_0x000000003a346400_invoke
+5.0	java_lang_invoke_LambdaForm_MH_0x000000003a345800_invoke
+2.0	java_lang_invoke_LambdaForm_MH_0x000000003a346000_invoke
+--- Phi baseline
+27.0	java_io_FileInputStream_readBytes
+27.0	sun_nio_ch_EPoll_wait
+11.0	java_lang_invoke_LambdaForm_MH_0x000000002634a800_invoke
+5.0	java_lang_invoke_LambdaForm_MH_0x0000000026342000_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x0000000026341400_invoke
+--- Phi candidate
+28.0	java_io_FileInputStream_readBytes
+27.0	sun_nio_ch_EPoll_wait
+14.0	java_lang_invoke_LambdaForm_MH_0x000000006134d800_invoke
+3.0	java_lang_invoke_LambdaForm_MH_0x0000000061344400_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x00000000610a7800_invoke
+--- mistral baseline
+41.0	java_io_FileInputStream_readBytes
+41.0	sun_nio_ch_EPoll_wait
+23.0	java_lang_invoke_LambdaForm_MH_0x0000000052346400_invoke
+6.0	java_lang_invoke_LambdaForm_MH_0x0000000052346000_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x0000000052345800_invoke
+--- mistral candidate
+36.0	java_io_FileInputStream_readBytes
+36.0	sun_nio_ch_EPoll_wait
+24.0	java_lang_invoke_LambdaForm_MH_0x0000000088348800_invoke
+3.0	java_lang_invoke_LambdaForm_MH_0x0000000088345c00_invoke
+3.0	java_lang_invoke_LambdaForm_MH_0x0000000088348400_invoke
+GATES MET

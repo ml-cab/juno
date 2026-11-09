@@ -19,7 +19,10 @@ package cab.ml.juno.node;
 import cab.ml.juno.lora.LoraAdapterSet;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
@@ -40,6 +43,7 @@ import cab.ml.juno.kvcache.LayerRange;
 import cab.ml.juno.registry.ShardAssignment;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 
 /**
@@ -58,6 +62,7 @@ public final class EmbeddedNodeServer {
 
 	private final String nodeId;
 	private final int port;
+	private final InetAddress bindAddress; // null: every interface
 	private final Server grpcServer;
 	private final NodeServiceImpl serviceImpl; // retained so callers can wire optional extras
 
@@ -91,12 +96,36 @@ public final class EmbeddedNodeServer {
 		this(nodeId, port, modelPath, useGpu, ForwardPassHandlerLoader::load);
 	}
 
+	/**
+	 * Real-model mode, listening on one address.
+	 *
+	 * @param modelPath   path to a GGUF file, or null to fall back to stub mode.
+	 * @param useGpu      when true use GPU if available; when false use CPU.
+	 * @param bindAddress the address to listen on, or null for every interface ({@link NodeBindAddress}).
+	 */
+	public EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu, InetAddress bindAddress) {
+		this(nodeId, port, modelPath, useGpu, ForwardPassHandlerLoader::load, bindAddress);
+	}
+
 	/** Real-model mode with the shard loader supplied, so tests can make a load fail in a chosen way. */
 	EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu, ShardLoader loader) {
+		this(nodeId, port, modelPath, useGpu, loader, null);
+	}
+
+	private EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu, ShardLoader loader,
+			InetAddress bindAddress) {
 		this.nodeId = nodeId;
 		this.port = port;
+		this.bindAddress = bindAddress;
 		this.serviceImpl = new NodeServiceImpl(nodeId, modelPath, useGpu, loader);
-		this.grpcServer = ServerBuilder.forPort(port).addService(serviceImpl).build();
+		ServerBuilder<?> builder = bindAddress == null ? ServerBuilder.forPort(port)
+				: NettyServerBuilder.forAddress(new InetSocketAddress(bindAddress, port));
+		this.grpcServer = builder.addService(serviceImpl).build();
+	}
+
+	/** The addresses the started server listens on. */
+	List<InetSocketAddress> listenAddresses() {
+		return grpcServer.getListenSockets().stream().map(InetSocketAddress.class::cast).toList();
 	}
 
 	/** Loads a shard's forward-pass handler; {@link ForwardPassHandlerLoader#load} in production. */
@@ -117,7 +146,8 @@ public final class EmbeddedNodeServer {
 
 	public void start() throws IOException {
 		grpcServer.start();
-		log.info("Node [" + nodeId + "] gRPC server started on port " + port);
+		log.info("Node [" + nodeId + "] gRPC server started on "
+				+ (bindAddress == null ? "every interface" : bindAddress.getHostAddress()) + ", port " + port);
 		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
 			try {
 				stop();

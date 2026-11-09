@@ -1,0 +1,82 @@
+[
+ {
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "differing": 0,
+  "of": 8,
+  "single": [
+   "The capital of France is Paris.",
+   "Red.",
+   "A spider has six legs."
+  ],
+  "batched": [
+   "The capital of France is Paris.",
+   "Red.",
+   "A spider has six legs.",
+   "The capital of France is Paris.",
+   "Red.",
+   "A spider has six legs.",
+   "The capital of France is Paris.",
+   "Red."
+  ]
+ },
+ {
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "differing": 0,
+  "of": 8,
+  "single": [
+   "The capital of France is Paris.",
+   "Red",
+   "A spider has eight legs."
+  ],
+  "batched": [
+   "The capital of France is Paris.",
+   "Red",
+   "A spider has eight legs.",
+   "The capital of France is Paris.",
+   "Red",
+   "A spider has eight legs.",
+   "The capital of France is Paris.",
+   "Red"
+  ]
+ },
+ {
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "differing": 0,
+  "of": 8,
+  "single": [
+   "Paris is the capital of France.",
+   "Red",
+   "Eight legs."
+  ],
+  "batched": [
+   "Paris is the capital of France.",
+   "Red",
+   "Eight legs.",
+   "Paris is the capital of France.",
+   "Red",
+   "Eight legs.",
+   "Paris is the capital of France.",
+   "Red"
+  ]
+ },
+ {
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "differing": 0,
+  "of": 8,
+  "single": [
+   " The capital of France is Paris.",
+   " Red.",
+   " A spider typically has eight legs."
+  ],
+  "batched": [
+   " The capital of France is Paris.",
+   " Red.",
+   " A spider typically has eight legs.",
+   " The capital of France is Paris.",
+   " Red.",
+   " A spider typically has eight legs.",
+   " The capital of France is Paris.",
+   " Red."
+  ]
+ }
+]

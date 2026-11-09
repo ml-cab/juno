@@ -1,0 +1,14 @@
+[parallel] start juno parallel=8 sessions=8 max_tokens=64 gpu
+[parallel] warmup round 1/2
+[parallel] warmup round 2/2
+[parallel] parallel=8: agg_tps=95.2204 ok=8/8 wall_ms=5377
+[parallel] done: docs/perf-compare/20261109T005616Z-gpu-batched-decode-parallel/Phi/p8-rep2
+# Multi-session static batch — 20261109T010303Z
+
+Model: `Phi-3.5-mini-instruct-Q4_K_M.gguf` · sessions=8 · max_tokens=64 · backend=gpu
+
+| parallel | aggregate tg t/s | wall ms | ok/fail |
+|---------:|-----------------:|--------:|--------:|
+| 8 | 95.2204 | 5377 | 8/8 |
+
+Speedup parallel=8 over parallel=1: -

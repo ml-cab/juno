@@ -252,6 +252,15 @@ public interface MatVec {
         SgemmOutput.copy(sgemm(A, X), Y, A.rows());
     }
 
+    /**
+     * {@link #sgemm(DeviceQ4KMatrix, float[][])} for one decode step of several requests:
+     * where a backend has one, a kernel whose rows are bit for bit single-request GEMVs at any
+     * batch width, so a request's reply does not depend on what it is batched with.
+     */
+    default float[][] sgemmDecode(DeviceQ4KMatrix A, float[][] X) {
+        return sgemm(A, X);
+    }
+
     /** {@link #sgemm(DeviceQ4KMatrix, float[][])} into caller-supplied rows. */
     default void sgemmInto(DeviceQ4KMatrix A, float[][] X, float[][] Y) {
         SgemmOutput.require(X, Y, A.rows());

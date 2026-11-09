@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
@@ -110,6 +111,8 @@ public final class LoraMerge {
 	 */
 	public static Result merge(Path modelPath, Path loraPath, Path outputPath, MergeCapability capabilityOverride)
 			throws IOException {
+		refuseOverwrite(outputPath, modelPath, "the model");
+		refuseOverwrite(outputPath, loraPath, "the LoRA checkpoint");
 		long t0 = System.currentTimeMillis();
 		LoraAdapterSet adapters = LoraAdapterSet.load(loraPath);
 		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters, "", "cpu");
@@ -192,6 +195,17 @@ public final class LoraMerge {
 	 * layouts, multiple slots may share one physical tensor at distinct offsets.
 	 */
 	private record AdapterSlot(String loraKey, int rowOffset, int rowCount, int outDim, int inDim) {}
+
+	/**
+	 * The output opens with truncation while the model is still being read, so an output that is an input file
+	 * would destroy it. Files are compared, not path strings: on Windows {@code Model.GGUF} names
+	 * {@code model.gguf}, and on every system a link or a {@code ./} spelling names the same file.
+	 */
+	private static void refuseOverwrite(Path output, Path input, String what) throws IOException {
+		if (Files.exists(output) && Files.exists(input) && Files.isSameFile(output, input))
+			throw new IllegalArgumentException("merge output " + output + " is the same file as " + what
+					+ "; choose a different output path");
+	}
 
 	private static Result mergeLoaded(Path modelPath, LoraAdapterSet adapters, Path outputPath,
 			MergeCapability capabilityOverride) throws IOException {

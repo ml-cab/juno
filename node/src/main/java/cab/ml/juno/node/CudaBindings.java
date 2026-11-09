@@ -21,7 +21,6 @@ import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
-import java.util.Arrays;
 import java.util.logging.Logger;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
@@ -37,9 +36,18 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * thread-safe and carry zero per-call Java overhead beyond argument boxing
  * (which the JIT eliminates for typed {@code invokeExact} call sites).
  *
- * <p>Library names tried in order on Linux: {@code libcudart.so.12},
- * {@code libcudart.so} and the cuBLAS equivalents. The CUDA installation must
- * be on {@code LD_LIBRARY_PATH} (or {@code CUDA_PATH/lib64} via the launcher).
+ * <p>The libraries are found by {@link CudaLibraryLocator}, per operating system
+ * ({@code libcudart.so.12} and {@code libcublas.so.12} on Linux,
+ * {@code cudart64_12.dll} or {@code cudart64_13.dll} and the matching cuBLAS DLL
+ * on Windows); cuBLAS is taken at the runtime's CUDA major version. On macOS the
+ * locator refuses, and this class is unavailable with that reason.
+ *
+ * <p>ABI: every descriptor below matches its C prototype in the CUDA 12.x headers on
+ * both LP64 (Linux) and LLP64 (Windows). The prototypes use {@code int},
+ * {@code unsigned int}, enums (4 bytes on both), {@code float*}, pointers and
+ * opaque handles, {@code size_t} ({@code JAVA_LONG}, 8 bytes on both) and
+ * {@code long long} ({@code JAVA_LONG}); none uses C {@code long}, the one type
+ * whose width differs between the two.
  *
  * <p>Requires JVM flag: {@code --enable-native-access=ALL-UNNAMED}.
  *
@@ -80,8 +88,12 @@ final class CudaBindings implements GpuBindings {
     // ── cudaStream_t non-blocking flag ────────────────────────────────────────
     static final int STREAM_NON_BLOCKING = 0x01;
 
-    // ── cudaDeviceProp layout (CUDA 12.x, Linux x86_64) ──────────────────────
-    /** {@code sizeof(cudaDeviceProp)} */
+    // ── cudaDeviceProp layout (CUDA 12.x, x86_64; the same on Linux and Windows) ──
+    /**
+     * Buffer size for {@code cudaDeviceProp}. The CUDA 12.0 struct is 1032 bytes and the
+     * 11.x layout smaller; the buffer is larger than either. Only {@code name} and
+     * {@code totalGlobalMem} are read, at offsets that agree across 11.x and 12.x.
+     */
     static final int  DEVICE_PROP_BYTES     = 1512;
     /** Byte offset of {@code char name[256]} inside {@code cudaDeviceProp}. */
     static final long PROP_NAME_OFFSET      = 0;
@@ -89,6 +101,10 @@ final class CudaBindings implements GpuBindings {
     static final long PROP_TOTAL_MEM_OFFSET = 288;
 
     // ── cudart handles ────────────────────────────────────────────────────────
+    /** Where the runtime and cuBLAS were loaded from ({@link CudaLibraryLocator.Loaded#location()}). */
+    final String runtimeLocation;
+    final String blasLocation;
+
     final MethodHandle cudaGetDeviceCount;       // int (int*)
     final MethodHandle cudaGetDeviceProperties;  // int (cudaDeviceProp*, int)
     final MethodHandle cudaSetDevice;            // int (int)
@@ -139,6 +155,11 @@ final class CudaBindings implements GpuBindings {
         return INSTANCE != null;
     }
 
+    /** Why the libraries did not load (one line); null when they did. */
+    static String unavailableReason() {
+        return INIT_FAILURE == null ? null : INIT_FAILURE.getMessage();
+    }
+
     /**
      * Returns the singleton instance.
      *
@@ -155,13 +176,25 @@ final class CudaBindings implements GpuBindings {
 
     private CudaBindings() {
         Linker       linker = Linker.nativeLinker();
-        SymbolLookup cudart = loadLibrary("libcudart.so.12", "libcudart.so");
-        SymbolLookup cublas = loadLibrary("libcublas.so.12", "libcublas.so");
+        CudaLibraryLocator.Loaded runtime =
+            CudaLibraryLocator.load(CudaLibraryLocator.Library.RUNTIME, 0);
+        CudaLibraryLocator.Loaded blas =
+            CudaLibraryLocator.load(CudaLibraryLocator.Library.BLAS, runtime.major());
+        SymbolLookup cudart = runtime.lookup();
+        SymbolLookup cublas = blas.lookup();
+        runtimeLocation = runtime.location();
+        blasLocation = blas.location();
 
         cudaGetDeviceCount        = bind(linker, cudart, "cudaGetDeviceCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        cudaGetDeviceProperties   = bind(linker, cudart, "cudaGetDeviceProperties",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+        // The 12.x header maps cudaGetDeviceProperties to cudaGetDeviceProperties_v2; the
+        // unversioned export is kept for binaries built against 11.x and fills the 11.x
+        // layout. Both put name and totalGlobalMem at the offsets read here. The
+        // unversioned name is bound where it is exported (unchanged on Linux 12.x), the
+        // _v2 name where it is not.
+        cudaGetDeviceProperties   = bindFirst(linker, cudart,
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT),
+            "cudaGetDeviceProperties", "cudaGetDeviceProperties_v2");
         cudaSetDevice             = bind(linker, cudart, "cudaSetDevice",
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
         cudaMalloc                = bind(linker, cudart, "cudaMalloc",
@@ -271,7 +304,8 @@ final class CudaBindings implements GpuBindings {
                 JAVA_INT,  // computeType (cublasComputeType_t)
                 JAVA_INT));// algo (cublasGemmAlgo_t)
 
-        log.info("CudaBindings ready — Panama FFI (cudart + cublas)");
+        log.info("CudaBindings ready — Panama FFI (cudart from " + runtime.location()
+            + ", cublas from " + blas.location() + ")");
     }
 
     // ── Device memory helpers (used by DeviceFloatMatrix, DeviceHalfMatrix, CudaMatVec) ──
@@ -373,17 +407,13 @@ final class CudaBindings implements GpuBindings {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private static SymbolLookup loadLibrary(String... candidates) {
-        for (String name : candidates) {
-            try {
-                return SymbolLookup.libraryLookup(name, Arena.global());
-            } catch (IllegalArgumentException ignored) {
-                // try next candidate
-            }
+    private static MethodHandle bindFirst(Linker linker, SymbolLookup lib, FunctionDescriptor desc,
+                                          String... symbols) {
+        for (String symbol : symbols) {
+            java.util.Optional<MemorySegment> addr = lib.find(symbol);
+            if (addr.isPresent()) return linker.downcallHandle(addr.get(), desc);
         }
-        throw new IllegalStateException(
-            "Could not load CUDA library — tried: " + Arrays.toString(candidates)
-            + ". Ensure CUDA 12.x is installed and libcudart.so.12 is on LD_LIBRARY_PATH.");
+        throw new IllegalStateException("CUDA symbol not found: " + String.join(" or ", symbols));
     }
 
     private static MethodHandle bind(Linker linker, SymbolLookup lib, String symbol, FunctionDescriptor desc) {

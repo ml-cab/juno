@@ -101,6 +101,15 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * Whether a decode step of several requests runs in the device-resident batch
+	 * region ({@link ResidentBatchDecode}); a handler that does not override this
+	 * keeps the host-driven batch.
+	 */
+	default boolean batchDecodeRegionActive() {
+		return false;
+	}
+
+	/**
 	 * Device bytes this handler's prefill-window region holds for a window of
 	 * {@code rows} rows that starts the prompt; 0 when its prefill windows do not run
 	 * on the region. The adaptive prefill chunk adds this up over every shard on the

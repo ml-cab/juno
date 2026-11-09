@@ -1,0 +1,8 @@
+23:08:49 tinyllama n=1 {"step_ms":6.917238235473633,"tokens_per_s":144.56636680108917} {"wall_ms":9.265147,"device_busy_ms":5.551621,"kernel_ms":5.48868,"copy_ms":0.061667}
+23:09:53 tinyllama n=2 {"step_ms":28.557300567626953,"tokens_per_s":70.03463073352368} {"wall_ms":38.871909,"device_busy_ms":11.0463275,"kernel_ms":9.9638015,"copy_ms":1.0968425}
+23:11:37 tinyllama n=4 {"step_ms":55.80496788024902,"tokens_per_s":71.67820629488642} {"wall_ms":69.987571,"device_busy_ms":21.434995,"kernel_ms":19.322947,"copy_ms":2.120359}
+23:14:39 tinyllama n=8 {"step_ms":106.25588893890381,"tokens_per_s":75.28994467873615} {"wall_ms":147.162793,"device_busy_ms":43.95083,"kernel_ms":39.737633,"copy_ms":4.238919}
+23:15:34 qwen2.5 n=1 {"step_ms":17.615556716918945,"tokens_per_s":56.76800433105502} {"wall_ms":21.996261,"device_busy_ms":14.701352,"kernel_ms":14.539009,"copy_ms":0.14058}
+23:17:31 qwen2.5 n=2 {"step_ms":65.95766544342041,"tokens_per_s":30.322480132587977} {"wall_ms":83.005922,"device_busy_ms":29.6152575,"kernel_ms":27.308197,"copy_ms":2.2891525}
+23:20:53 qwen2.5 n=4 {"step_ms":130.28180599212646,"tokens_per_s":30.702675400751957} {"wall_ms":162.717454,"device_busy_ms":58.864828,"kernel_ms":54.362416,"copy_ms":4.47792}
+23:27:02 qwen2.5 n=8 {"step_ms":267.3414945602417,"tokens_per_s":29.924273495812717} {"wall_ms":335.563679,"device_busy_ms":122.842152,"kernel_ms":113.671307,"copy_ms":9.142379}

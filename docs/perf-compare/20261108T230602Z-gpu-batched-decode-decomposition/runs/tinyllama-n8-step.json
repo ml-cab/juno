@@ -1,0 +1,27 @@
+{
+ "requests": 8,
+ "n": 8,
+ "window_s": 13.51116132736206,
+ "steps_in_window": 124.0,
+ "step_ms": 106.25588893890381,
+ "tokens_per_s": 75.28994467873615,
+ "per_step_ms": {
+  "juno.MatVec": 81.80088002419437,
+  "juno.RmsNorm": 1.0574527258064415,
+  "juno.Rope": 0.39555478225806584,
+  "juno.ResidualAdd": 0.30825873387096336,
+  "juno.SwiGlu": 12.560387274193584,
+  "juno.Attention": 0.0,
+  "jdk.GCPhasePause": 0.0
+ },
+ "per_step_count": {
+  "juno.MatVec": 1260.0,
+  "juno.RmsNorm": 44.70967741935484,
+  "juno.Rope": 22.35483870967742,
+  "juno.ResidualAdd": 44.70967741935484,
+  "juno.SwiGlu": 22.35483870967742,
+  "juno.Attention": 0.0,
+  "jdk.GCPhasePause": 0.0
+ },
+ "forward_pass_ms": null
+}

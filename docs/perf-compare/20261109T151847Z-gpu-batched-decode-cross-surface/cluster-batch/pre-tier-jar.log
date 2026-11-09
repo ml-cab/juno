@@ -1,0 +1,9 @@
+pipeline-p1-1: median 113.8 t/s, latency 4.46 s, differ 0/8, statement False
+pipeline-p8-1: median 36.3 t/s, latency 14.11 s, differ 0/8, statement False
+pipeline-p1-2: median 112.9 t/s, latency 4.50 s, differ 0/8, statement False
+pipeline-p8-2: median 34.8 t/s, latency 14.72 s, differ 0/8, statement False
+tensor-p1-1: median 38.0 t/s, latency 13.35 s, differ 0/8, statement False
+tensor-p8-1: median 32.1 t/s, latency 15.95 s, differ 0/8, statement False
+tensor-p1-2: median 35.6 t/s, latency 14.20 s, differ 0/8, statement False
+tensor-p8-2: median 30.3 t/s, latency 16.89 s, differ 0/8, statement False
+OK

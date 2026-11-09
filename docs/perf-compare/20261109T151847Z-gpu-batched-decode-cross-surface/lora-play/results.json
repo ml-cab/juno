@@ -1,0 +1,29 @@
+{
+ "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+ "differing": 0,
+ "of": 8,
+ "statement_printed": true,
+ "batched_wall_s": 5.56,
+ "prompts": [
+  "What is the capital of France?",
+  "Name one primary color.",
+  "How many legs does a spider have?",
+  "What is your name?"
+ ],
+ "single": [
+  "The capital of France is Paris.",
+  "Red.",
+  "A spider has 6 legs.",
+  "My name is Juno"
+ ],
+ "batched": [
+  "The capital of France is Paris.",
+  "Red.",
+  "A spider has 6 legs.",
+  "My name is Juno",
+  "The capital of France is Paris.",
+  "Red.",
+  "A spider has 6 legs.",
+  "My name is Juno"
+ ]
+}

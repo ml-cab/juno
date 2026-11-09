@@ -1,0 +1,14 @@
+pipeline A 1: 100.5 108.2 107.8
+pipeline B 1: 106.0 112.0 112.8
+pipeline A 2: 102.6 98.5 106.0
+pipeline B 2: 91.5 101.8 103.0
+pipeline A 3: 102.7 102.5 103.9
+pipeline B 3: 101.0 104.9 102.8
+pipeline: A 102.73 B 102.76 B/A 1.000
+tensor A 1: 34.8 33.7 33.5
+tensor B 1: 34.0 33.5 33.5
+tensor A 2: 33.5 33.5 33.4
+tensor B 2: 33.3 33.0 33.5
+tensor A 3: 33.5 33.5 33.4
+tensor B 3: 33.6 33.4 33.4
+tensor: A 33.48 B 33.44 B/A 0.999

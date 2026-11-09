@@ -17,6 +17,9 @@ package cab.ml.juno.node;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.logging.Logger;
 
 import static java.lang.foreign.ValueLayout.JAVA_INT;
@@ -26,15 +29,17 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * Safe CUDA runtime detection via Panama FFI.
  *
  * Delegates library availability to {@link CudaBindings#isAvailable()}.
- * If the CUDA shared libraries (libcudart.so.12, libcublas.so.12) are not on
- * LD_LIBRARY_PATH, {@link #isAvailable()} returns false without throwing.
+ * If {@link CudaLibraryLocator} finds no CUDA runtime and cuBLAS that load
+ * (or CUDA cannot run on this OS), {@link #isAvailable()} returns false
+ * without throwing.
  *
  * {@link #deviceName} and {@link #vramBytes} allocate a single off-heap
  * cudaDeviceProp struct via a confined arena, read the fields, then release
  * immediately — zero heap allocation during the read.
  *
  * Struct field offsets ({@link CudaBindings#PROP_NAME_OFFSET},
- * {@link CudaBindings#PROP_TOTAL_MEM_OFFSET}) are CUDA 12.x / Linux x86_64.
+ * {@link CudaBindings#PROP_TOTAL_MEM_OFFSET}) are CUDA 12.x on x86_64, the same
+ * on Linux and Windows.
  * Both are also accessible via {@link GpuBindings#propNameOffset()} and
  * {@link GpuBindings#propTotalMemOffset()} for vendor-neutral callers.
  */
@@ -52,6 +57,34 @@ public final class CudaAvailability {
      */
     public static boolean isAvailable() {
         return AVAILABLE;
+    }
+
+    /**
+     * The CUDA libraries this process loaded, by role ({@code runtime}, {@code cublas},
+     * {@code driver}), each with where it was loaded from: the file
+     * {@link CudaLibraryLocator} found on disk (on Windows, on {@code PATH} or under
+     * {@code CUDA_PATH}), or the bare name the system loader resolved. Empty when CUDA is
+     * unavailable; the driver is absent when only the runtime loaded.
+     */
+    public static Map<String, String> loadedLibraries() {
+        if (!AVAILABLE) return Map.of();
+        Map<String, String> m = new LinkedHashMap<>();
+        CudaBindings cuda = CudaBindings.instance();
+        m.put("runtime", cuda.runtimeLocation);
+        m.put("cublas", cuda.blasLocation);
+        if (CudaDriverBindings.isAvailable())
+            m.put("driver", CudaDriverBindings.instance().location);
+        return Collections.unmodifiableMap(m);
+    }
+
+    /**
+     * Why CUDA is unavailable here, in one line: the platform refusal, the library that did
+     * not load, or no device. Null when it is available.
+     */
+    public static String unavailableReason() {
+        if (AVAILABLE) return null;
+        if (!CudaBindings.isAvailable()) return CudaBindings.unavailableReason();
+        return "the CUDA runtime loaded, but it reports no usable device";
     }
 
     /**

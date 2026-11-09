@@ -1,0 +1,206 @@
+Juno hardware validation kit 0.1.2, Juno d8012b11f98fbf9ef89addae715b12bd5d832186 (modified tree)
+Suite custom, started 20261109T153212Z, finished 20261109T170455Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+
+gpu.live.tinyllama             PASS     1:36, GPU 2748 MiB
+    ok   1. hello greeting: "Sure, here's an example of how to use the `"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "The answer is 4."
+    ok   4. greedy determinism: "I'm glad to hear that you" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "I am glad to hear that you found my message"
+    ok   8. tensor-parallel greedy determinism: "I'm glad to hear that you" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.residency.tinyllama        PASS     0:45, GPU 2742 MiB
+    ok   region off: every request answers, the last equals the first, shorter ones are its opening: 4 requests
+    ok   region on: every request answers, the last equals the first, shorter ones are its opening: 4 requests
+    ok   region on: activation or decline reported
+    ok   greedy output identical with the region on and off: identical over 32 tokens
+    ok   device memory does not grow per request
+    ok   pipeline cluster, region on: the forked nodes answer: 150 characters
+    ok   pipeline cluster: no node JVM left: 0 node JVMs left
+    ok   tensor cluster, region on: the forked nodes answer: 150 characters
+    ok   tensor cluster: no node JVM left: 0 node JVMs left
+gpu.live.qwen2.5-3b            PASS     2:27, GPU 6960 MiB
+    ok   1. hello greeting: "Hello! How can I assist you today?"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "2 plus 2 equals 4."
+    ok   4. greedy determinism: "Hello! How can I assist you today" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! How can I assist you today?"
+    ok   8. tensor-parallel greedy determinism: "Hello! How can I assist you today" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.phi-3.5-mini          PASS     3:26, GPU 7494 MiB
+    ok   1. hello greeting: "Hello! I'm Phi, Microsoft's language model. How can I help you today"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "2 plus 2 equals to the sum of these two numbers"
+    ok   4. greedy determinism: "Hello! I'm Phi," twice
+    ok   5. multi-turn context: 76 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! I'm Phi, an A"
+    ok   8. tensor-parallel greedy determinism: "Hello! I'm Phi," twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.mistral-7b            PASS     5:11, GPU 6934 MiB
+    ok   1. hello greeting: "Hello! How can I assist you today?"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "2 plus 2 is equal to 4."
+    ok   4. greedy determinism: "Hi! How can I help you today" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hi! How can I help you today?"
+    ok   8. tensor-parallel greedy determinism: "Hi! How can I help you today" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.qwen3-1.7b            PASS     2:06, GPU 5328 MiB
+    ok   1. hello greeting: "Okay, the user said "hello". I need to respond appropriately. Since they're starting"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "Okay, the user is asking "What is"
+    ok   4. greedy determinism: "Okay, the user said "" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Okay, the user said "hello"."
+    ok   8. tensor-parallel greedy determinism: "Okay, the user said "" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+consistency.tinyllama          PASS     1:40
+    ok   local mode refuses architecture qwen35 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture qwen35, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture qwen35, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture gemma4 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture gemma4, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture gemma4, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture mistral3 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture mistral3, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture mistral3, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture minimax-m2 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture minimax-m2, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture minimax-m2, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode loads a supported model and exits cleanly: exit 0
+    ok   static batching, cpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: OpenAI round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: native round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: OpenAI round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: native round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: a session request after batched stateless traffic equals single-request output: single 'The capital of France is Paris.', session 'The capital of France is Paris.'
+    ok   static batching, cpu: no prefix-cache hit for stateless traffic: 0 hits, 1 lookups
+    ok   static batching, cpu: native streaming joins to the native blocking answer: blocking 'Red.', streamed 'Red.'
+    ok   continuous: a session request after the same stateless request equals it: stateless 'The capital of France is Paris.', session 'The capital of France is Paris.'
+gpu.consistency.tinyllama      PASS     0:19, GPU 936 MiB
+    ok   static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: OpenAI round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: native round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: OpenAI round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: native round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: a session request after batched stateless traffic equals single-request output: single 'The capital of France is Paris.', session 'The capital of France is Paris.'
+    ok   static batching, gpu: no prefix-cache hit for stateless traffic: 0 hits, 1 lookups
+    ok   static batching, gpu: native streaming joins to the native blocking answer: blocking 'Red.', streamed 'Red.'
+    ok   decode batch of 8, gpu, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+parallel.tinyllama             DONE     44:34, 3 attempts, attempt 1 re-run: other processes used 7% of the CPU. attempt 2 re-run: other processes used 6% of the CPU.
+    aggregate t/s, --parallel 1                          median 10.45, min 10.43, max 10.56 t/s (n=3, spread 1.3%)
+    mean request latency, --parallel 1                   median 48919, min 48358, max 48986 ms (n=3)
+    aggregate t/s, --parallel 8                          median 12.19, min 11.96, max 12.26 t/s (n=3, spread 2.5%)
+    mean request latency, --parallel 8                   median 41993, min 41749, max 42806 ms (n=3)
+gpu.parallel.tinyllama         DONE     1:33, GPU 1002 MiB
+    aggregate t/s, --parallel 1                          median 115.99, min 114.27, max 120.95 t/s (n=3, spread 5.8%)
+    mean request latency, --parallel 1                   median 4289, min 4128, max 4394 ms (n=3)
+    aggregate t/s, --parallel 8                          median 309.51, min 307.31, max 310.09 t/s (n=3, spread 0.9%)
+    mean request latency, --parallel 8                   median 1653, min 1651, max 1666 ms (n=3)
+gpu.schedule.tinyllama         PASS     0:38, GPU 1002 MiB
+    static: aggregate t/s                                median 280.89, min 280.89, max 280.89 t/s (n=1, spread 0.0%)
+    static: mean TTFT                                    median 267.04, min 267.04, max 267.04 ms (n=1)
+    static: mean TPOT                                    median 56.85, min 56.85, max 56.85 ms (n=1)
+    static: first turn latency                           median 116.34, min 116.34, max 116.34 ms (n=1)
+    static: mean later turn latency                      median 114.04, min 114.04, max 114.04 ms (n=1)
+    continuous: aggregate t/s                            median 281.19, min 281.19, max 281.19 t/s (n=1, spread 0.0%)
+    continuous: mean TTFT                                median 215.67, min 215.67, max 215.67 ms (n=1)
+    continuous: mean TPOT                                median 26.47, min 26.47, max 26.47 ms (n=1)
+    continuous: first turn latency                       median 343.55, min 343.55, max 343.55 ms (n=1)
+    continuous: mean later turn latency                  median 336.04, min 336.04, max 336.04 ms (n=1)
+    ok   static: the server runs the static schedule: the health endpoint reports 'static'
+    ok   static: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: the server runs the continuous schedule: the health endpoint reports 'continuous'
+    ok   continuous: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: concurrent requests shared decode steps: largest decode batch 8, shared steps 192
+gpu.mixed-prefill.tinyllama    PASS     0:26, GPU 938 MiB
+    mixed: short-request TTFT                            median 609.85, min 609.85, max 609.85 ms (n=1)
+    mixed: short-request TPOT                            median 104.93, min 104.93, max 104.93 ms (n=1)
+    mixed: long-request TTFT                             median 1426, min 1426, max 1426 ms (n=1)
+    admit: short-request TTFT                            median 794.90, min 794.90, max 794.90 ms (n=1)
+    admit: short-request TPOT                            median 75.08, min 75.08, max 75.08 ms (n=1)
+    admit: long-request TTFT                             median 796.65, min 796.65, max 796.65 ms (n=1)
+    ok   mixed: every stream answered: 4 of 4 streams produced text
+    ok   mixed: the long prompt was prefilled in chunks inside decode steps: 12 prefill chunks in 9 steps
+    ok   admit: every stream answered: 4 of 4 streams produced text
+gpu.lora.tinyllama             PASS     1:15, GPU 4066 MiB
+    training time per pass                               median 3018, min 3018, max 3018 ms (n=1)
+    playback t/s, --lora-play                            median 10.52, min 10.52, max 10.52 t/s (n=1)
+    playback t/s, merged model                           median 27.05, min 27.05, max 27.05 t/s (n=1)
+    ok   training reaches the loss target: TARGET_REACHED after 15 passes, loss 1.1797 (target 1.20)
+    ok   --lora-play: the adapter answers with the trained reply: reply 'My name is Juno'
+    ok   the merged model loads and answers: HTTP 200, 15 characters
+    ok   the merged model answers with the trained reply: reply 'My name is Juno'
+gpu.vision.moondream2          PASS     7:35, GPU 118 MiB
+    ok   GPU: a caption for the benchmark prompt
+    ok   GPU: prompt tokens between 700 and 800: 741 prompt tokens
+    ok   GPU: a one-sentence caption within 600 s
+gpu.unit-tests                 FAIL     18:43, GPU 5016 MiB, failed: group gpu on node; GpuAttentionHandlerParityTest.kernel_matches_scalar_attention(String)[2]; PrefillRegionHandlerParityTest.region_matches_hostPath(String)[2]; PrefillRegionHandlerParityTest.region_matches_hostPath(String)[3]; PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance
+    FAIL group gpu on node: 405 tests, 4 failures, 0 errors, 7 skipped; Maven exit 0
+    FAIL GpuAttentionHandlerParityTest.kernel_matches_scalar_attention(String)[2]: failure: java.lang.AssertionError: [device memory back to where the test started (weights, KV mirror, kernel scratch and backend scratch all released)] 
+Expecting actual:
+  7606960128L
+to be greater than or equal to:
+  7662272512L
+
+    FAIL PrefillRegionHandlerParityTest.region_matches_hostPath(String)[2]: failure: java.lang.AssertionError: [device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7523860480L
+to be greater than or equal to:
+  7593394176L
+
+    FAIL PrefillRegionHandlerParityTest.region_matches_hostPath(String)[3]: failure: java.lang.AssertionError: [device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7443972096L
+to be greater than or equal to:
+  7507083264L
+
+    FAIL PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance: failure: java.lang.AssertionError: [free bytes reported with the device full] 
+Expecting actual:
+  89456640L
+to be less than or equal to:
+  67108864L 

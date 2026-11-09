@@ -1,0 +1,16 @@
+WARNING: CPU IP/backtrace sampling not supported, disabling.
+Try the 'nsys status --environment' command to learn more.
+
+WARNING: CPU context switch tracing not supported, disabling.
+Try the 'nsys status --environment' command to learn more.
+
+Importer error status: The importer binary and its dependencies were not found.
+Unable to retrieve the importer version: skipping importation of the QDSTRM file.
+{"prompt_tokens":58,"completion_tokens":128,"latency_ms":44698}
+{"prompt_tokens":58,"completion_tokens":128,"latency_ms":44699}
+{"prompt_tokens":58,"completion_tokens":128,"latency_ms":44698}
+{"prompt_tokens":58,"completion_tokens":128,"latency_ms":44700}
+{"prompt_tokens":58,"completion_tokens":128,"latency_ms":44699}
+{"prompt_tokens":58,"completion_tokens":128,"latency_ms":44699}
+{"prompt_tokens":58,"completion_tokens":128,"latency_ms":44701}
+{"prompt_tokens":58,"completion_tokens":128,"latency_ms":44704}

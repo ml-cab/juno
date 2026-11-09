@@ -1,0 +1,14 @@
+[parallel] start juno parallel=8 sessions=8 max_tokens=64 gpu
+[parallel] warmup round 1/2
+[parallel] warmup round 2/2
+[parallel] parallel=8: agg_tps=23.0475 ok=8/8 wall_ms=22215
+[parallel] done: docs/perf-compare/20261108T032429Z-gpu-parallel-baseline/mistral/p8-rep1
+# Multi-session static batch — 20261108T033853Z
+
+Model: `mistral-7b-instruct-v0.1-q4_k_m.gguf` · sessions=8 · max_tokens=64 · backend=gpu
+
+| parallel | aggregate tg t/s | wall ms | ok/fail |
+|---------:|-----------------:|--------:|--------:|
+| 8 | 23.0475 | 22215 | 8/8 |
+
+Speedup parallel=8 over parallel=1: -

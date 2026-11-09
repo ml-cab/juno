@@ -1,5 +1,116 @@
 ## Status 
 
+**Session 135** - A decode batch on the GPU runs in the device region, and every reply equals its single-request reply
+
+- **A decode step of several requests (`--parallel` above 1, the continuous schedule) runs on the device** the way one
+  request's step does, on the layers the single-request decode region runs whole: each layer takes one upload of the
+  residual rows (none when the previous layer ran there) and one download of K, V and the layer output, and the host
+  waits once per layer. On a GTX 1080, 8 concurrent clients read 1.77x to 2.32x the aggregate throughput of `--parallel 1`
+  on the four sweep models (was 0.65x to 0.77x), at 0.43x to 0.58x its mean latency, so `8` now suits a GPU API server too.
+- **Each weight is read once per layer for the whole batch**, by a new packed K-quant matmul over up to 8 activation rows
+  (wider batches take several launches), against once per row before. It reproduces the single-row kernel's per-lane
+  accumulation, so it runs in the same order and rounds the same.
+- **A request's reply does not depend on what it is batched with, on the GPU as on the CPU.** Every row of a batched step is
+  bit for bit that request's single-request decode (held to it on random Q4_K, Q5_K and Q6_K weights across the LLaMA, Qwen2,
+  Qwen3 and Phi-3 layouts, and on real weights over 64 greedy tokens at batches of 2 and 8); through REST, 0 of 8 batched
+  replies differ on the consistency prompts on every sweep model.
+- **Handlers without the device region** (Phi-2, Qwen3-MoE) keep the host-driven batch and say so once at startup.
+  `JUNO_BATCH_DECODE_REGION=off` keeps every batch on the host-driven path, for comparison; cluster launchers forward it.
+- **`--lora-play` says what a batch does.** With batching on, startup now states that the adapter's decode runs one request
+  at a time, outside the batched decode; replies do not change and batching adds no decode throughput there.
+- **A cluster says what a batch does.** With batching on, a pipeline or tensor-parallel cluster now states at startup that a
+  batch decodes one request at a time on each node, because the batched device decode runs in local mode only. Replies do not
+  change. With 8 concurrent clients on TinyLlama on the GPU, `--parallel 8` read 0.38x (pipeline) and 0.81x (tensor) the
+  aggregate throughput of `--parallel 1`, as it did before this work (0.31x, 0.82x), so `--help` and the howto now recommend
+  `8` for a local server and `1` on a cluster.
+- **`gpu.consistency.tinyllama` (hardware validation kit) now decodes 64 tokens in a batch of 8** and compares each reply with
+  the single-request reply.
+
+**Session 134** - The Windows launchers at parity with the Linux one
+
+- **`juno.bat` takes every subcommand, flag and environment override `./juno` takes**, and passes the same options on.
+  New on Windows: the `gguf-info` and `health` subcommands; `--gpu-attention`, `--gpu-residency`, `--context-shift`,
+  `--prefill` (cluster) and `--health`/`--health-port`; the overrides `USE_GPU`, `JUNO_EMBEDDINGS`, `JUNO_POOLING`,
+  `PREFILL_MODE`, `JUNO_GPU_RESIDENCY`, `JUNO_GPU_ATTENTION`, `JUNO_CONTEXT_SHIFT`, `HEALTH_PORT` and, for `merge`,
+  `JUNO_USE_GPU`. `local --lora-play` was read and not passed on, so no adapter was applied; it is now. `test` ran the
+  thin `juno-master` jar, which lacks its dependencies and stopped at the first node class; it runs the shaded one.
+  A unit test reads both launchers and fails when a subcommand, a flag, a forwarded option or a jar differs.
+- **`juno.bat` prints no debug lines and writes nothing to the registry.** Its 21 `[DBG]` lines are gone, and so is
+  the `HKCU\Console` write that turned on colours for every console program: the entry points that print colour turn
+  on virtual-terminal output for their own process, as they already did.
+- **Help text no longer ends a batch block early.** Inside `if ... ( ... )`, `cmd.exe` ends the block at the first
+  closing parenthesis that is neither escaped nor quoted, so help text such as `(default 50)` ended the `--help` block of
+  `cluster`, `local`, `lora` and `test`, and the `--hf` notices ended their one-line blocks. Each help text is now a
+  label of its own and the notices escape their parentheses; a unit test holds the rule.
+- **`juno.bat` puts the CUDA toolkit on `PATH` from `CUDA_PATH`, `CUDA_HOME` or the installer's default folder**, with
+  `bin\x64` (the 13.x layout) ahead of `bin`, so no call to `set_cuda_env.bat` is needed first.
+- **`--health-port N` sets the health sidecar's port** on every OS. The launchers printed the port while the sidecar
+  listened on 8081 whatever it said; a value that is not a port is refused.
+
+**Session 133** - Same behaviour on every OS: line endings, local cluster nodes, merge output, training files
+
+- **Text is checked out with LF on every OS** (`.gitattributes`), whatever `core.autocrlf` says, and batch files with
+  CR LF. A Windows checkout made with Git's installer default used to write CR LF into the test fixtures, the PTX
+  kernels and the model-quality text the kit's quality probes score. The PTX compiles to the same binary either way;
+  the quality text does not read the same: TinyLlama's mean NLL on it reads 2.397 nats with CR LF against 2.456 with
+  LF. A batch file with LF line ends, which a checkout without that conversion wrote, is misread by `cmd.exe` around
+  its labels.
+- **A local cluster's nodes listen on the loopback address only.** The coordinator reaches them on this host, so a
+  desktop firewall (Windows asks the first time a program listens on a network interface) has nothing to ask about. A
+  node started on its own still listens on every interface; `-Dnode.bind=<address>` names one, and an address that does
+  not resolve stops the node with one line.
+- **A local cluster stops its nodes through their shutdown hooks on every OS.** It closes each node's standard input,
+  and the node exits as it would on a signal: its gRPC server drains and, with `--jfr`, its recording is written. A node
+  still running 10 s later is ended. Ending the process directly runs no hook on Windows, so a node's recording was
+  lost there. A coordinator that dies takes its nodes with it, since their input closes too.
+- **`juno merge` refuses an output that is the model file or the `.lora` checkpoint.** The output was opened empty
+  while the model was still being read, so the model was destroyed. The check compares files, not names: another
+  letter case on Windows, a link or a `./` path counts.
+- **`/train-file` reads CR LF line ends as LF**, so a text saved on Windows trains the same adapter as the same text
+  saved on Linux. Before, every line end added a CR token to the training data. Grammar files (`--grammar-file`)
+  already read the same with either line end; a test now holds that.
+
+**Session 132** - Hardware validation kit: the longest single GPU kernels timed against the display-driver watchdog;
+the CUDA libraries in the environment reading; the launcher's debug lines and registry writes checked
+
+- **A new kit probe, `gpu.kernel-timing`, times the longest single kernels Juno launches** at the standing sweep
+  models' shapes, each launch alone between two CUDA events: prefill attention over one window on each model's heads,
+  the tiled K-quant matmul at Mistral 7B's feed-forward shapes, and the LM head at Qwen2.5-3B's vocabulary. A display
+  driver's watchdog (two seconds by default on Windows, on a GPU that drives a display) stops any single kernel that
+  runs longer, so the probe holds the slowest launch to 500 ms. It runs in the `quick` and `gpu` suites, in about
+  10 s. On the GTX 1080 under Linux the slowest launch at a 2048-token window is Mistral 7B's prefill attention,
+  37.4 ms. Attention time grows with the square of the window: 150 ms at 4096 tokens and 597 ms at 8192. On the GPU
+  one prefill window covers a whole prompt, so a prompt of about 16,000 tokens in one window would reach two seconds
+  on that GPU.
+- **The `env` reading names the CUDA libraries Juno loaded and where from**: a file found on `PATH` or under
+  `CUDA_PATH`, or the name the system loader resolved (`libcudart.so.12`, `libcublas.so.12` and `libcuda.so.1` on
+  Linux). When CUDA is unavailable it gives the one-line reason. `CudaAvailability.loadedLibraries()` and
+  `unavailableReason()` expose both to embedders.
+- **The launcher probe also checks that the launcher prints no `[DBG]` lines**, on every system, and on Windows that
+  it writes nothing to the registry: the last-write time of `HKCU\Console`, read before and after, must not move. On
+  Windows both checks fail on the current `juno.bat` until its debug lines and registry write are removed.
+
+**Session 131** - CUDA libraries found per operating system; CUDA and ROCm refuse in one line where they cannot run
+
+- **The CUDA libraries are looked for per operating system** (`CudaLibraryLocator`). Linux tries the same names as
+  before: `libcuda.so.1`, `libcudart.so.12` and `libcublas.so.12`, then the unversioned names. Windows tries
+  `nvcuda.dll`, then `cudart64_12.dll` or `cudart64_13.dll` and the matching `cublas64_NN.dll`, on `PATH`, in
+  `%CUDA_PATH%\bin` (the CUDA 12.x layout) and in `%CUDA_PATH%\bin\x64` (the 13.x layout), then through the system
+  loader. 12.x is preferred, since it is the last runtime that runs Maxwell, Pascal and Volta GPUs and every newer GPU
+  runs it too, and cuBLAS is always taken at the runtime's major version. A cuBLAS DLL found in a folder loads its
+  `cublasLt64_NN.dll` from the same folder first. Not yet run on a Windows machine: until it has, CUDA on Windows is
+  unverified, and the Windows launchers still lack the CUDA setup.
+- **The error names the fix for the operating system**: `LD_LIBRARY_PATH` on Linux; on Windows, `CUDA_PATH` and which
+  runtime suits which GPU generation; the NVIDIA driver when the driver library is missing. When a DLL is found but does
+  not load, the error names it and says a library it needs may be missing.
+- **CUDA on macOS and ROCm outside Linux refuse with one line** before any library is loaded, for example "ROCm is not
+  supported on Windows: Juno's ROCm backend runs on Linux only. On Windows Juno uses CUDA or the CPU." A backend forced
+  with `-Djuno.gpu.backend` that cannot run now carries that reason, or the library it could not load, in its error.
+- **Every CUDA runtime, cuBLAS and driver binding was checked against its C declaration** for Linux and Windows. None
+  passes a C `long`, the one type whose size differs between the two, so the bindings are the same on both.
+  `cudaGetDeviceProperties` binds its `_v2` name where the unversioned one is not exported; the unversioned one is still
+  bound where it is, as before.
+
 **Session 130** - Hardware validation kit: re-run notes, the perf-compare row and the GPU backend in `ingest`'s draft
 
 - **A re-run's note ends in one full stop.** It read "attempt 1 re-run: other processes used 6% of the CPU;." in

@@ -147,6 +147,30 @@ final class CudaRope implements ResidentRope {
 		return true;
 	}
 
+	/**
+	 * Rotates every valid row of {@code x} in place, row {@code r} at position
+	 * {@code seqLens[r] - 1}: a decode batch. Same arithmetic as
+	 * {@link #applyResident}, row by row. Asynchronous on {@code x}'s chain.
+	 *
+	 * @return {@code false} (doing nothing) if the kernel failed to load
+	 */
+	@Override
+	public boolean applyResidentRows(ResidentActivation x, MemorySegment seqLens) {
+		requireOpen();
+		x.requireOpen();
+		if (x.dim() % headDim != 0)
+			throw new IllegalArgumentException(
+					"activation width " + x.dim() + " is not a whole number of " + headDim + "-wide heads");
+		if (x.rows() == 0)
+			throw new IllegalStateException("activation holds no rows to rotate");
+		BatchedDecodeKernels kernels = BatchedDecodeKernels.tryLoad();
+		if (kernels == null)
+			return false;
+		kernels.ropeRows(x.devicePointer(), invFreq, seqLens, x.rows(), x.dim() / headDim, headDim,
+				pairing == RopePairing.SPLIT_HALF, x.chain().stream());
+		return true;
+	}
+
 	RopePairing pairing() {
 		return pairing;
 	}

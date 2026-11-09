@@ -1,0 +1,5 @@
+docs/perf-compare/20261108T230602Z-gpu-batched-decode-decomposition/runs/tinyllama-n4-traced.sqlite: 130 decode intervals, logits 128000 B, 22 layers
+  wall 69.988 ms  busy 21.435  idle 48.600  (kernel 19.323, copy 2.120)
+  launches 1262  copies 1526 (h2d 884, d2h 642)  per layer: busy 974.3 us, launches 57.4
+  kernels: q4k_gemv 13.065, q6k_gemv 4.424, quantize_q8_1 1.254, gqa_attention_d64 0.608, add_inplace 0.000, q4k_gemm_64 0.000, q6k_gemm_64 0.000, quantize_q8_1_half 0.000, rms_norm_host_order 0.000, rope 0.000
+  api: cudaMemcpyAsync_v3020 30.452 (1241), cuLaunchKernel 10.991 (1262), cudaMemcpy_v3020 3.418 (286), cudaStreamSynchronize_v3020 3.332 (620), cudaFree_v3020 0.000 (0), cudaMalloc_v3020 0.000 (0)

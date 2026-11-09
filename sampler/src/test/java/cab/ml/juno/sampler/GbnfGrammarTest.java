@@ -118,6 +118,19 @@ class GbnfGrammarTest {
 		assertThat(afterA['a']).isFalse();
 	}
 
+	/** A grammar file saved on Windows ends its lines with CR LF; it must mean what the LF file means. */
+	@Test
+	void a_crlf_grammar_file_parses_like_the_lf_file() {
+		String lf = "# a comment\nroot ::= item+ end\nitem ::= \"a\" | \"b\"\nend ::= \"\\n\"\n";
+		GbnfGrammar unix = GbnfGrammar.parse(lf);
+		GbnfGrammar windows = GbnfGrammar.parse(lf.replace("\n", "\r\n"));
+		for (String s : new String[] { "", "a", "ab\n", "ba\n", "a\r\n", "c", "\n" }) {
+			assertThat(windows.acceptsPrefix(bytes(s))).as("prefix %s", s).isEqualTo(unix.acceptsPrefix(bytes(s)));
+			assertThat(windows.isComplete(bytes(s))).as("complete %s", s).isEqualTo(unix.isComplete(bytes(s)));
+		}
+		assertThat(windows.isComplete(bytes("ab\n"))).isTrue();
+	}
+
 	private static byte[] bytes(String s) {
 		return s.getBytes(StandardCharsets.UTF_8);
 	}

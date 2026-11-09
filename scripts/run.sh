@@ -403,7 +403,7 @@ cmd_cluster() {
   [[ -n "$lora_play" ]] && { lora_play_arg="--lora-play $lora_play"; warn "LoRA inference overlay: ${lora_play}"; }
   local health_flag=""
   if [[ "$health" == "true" ]]; then
-    health_flag="--health"
+    health_flag="--health --health-port ${health_port}"
     warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
   fi
   local api_port_arg=""
@@ -703,7 +703,7 @@ cmd_local() {
   [[ -n "$lora_play" ]] && { lora_play_arg="--lora-play $lora_play"; warn "LoRA inference overlay: ${lora_play}"; }
   local health_flag=""
   if [[ "$health" == "true" ]]; then
-    health_flag="--health"
+    health_flag="--health --health-port ${health_port}"
     warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
   fi
   local api_port_arg=""
@@ -1058,7 +1058,7 @@ cmd_lora() {
 
   local health_flag=""
   if [[ "$health" == "true" ]]; then
-    health_flag="--health"
+    health_flag="--health --health-port ${health_port}"
     warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
   fi
 

@@ -178,10 +178,11 @@ public final class CoordinatorMain {
 				cab.ml.juno.coordinator.PrefillMode.BATCHED,
 				PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.COORDINATOR,
 						parseOptionalInt(env("JUNO_PREFILL_BATCH", null)), true, null));
-		var scheduler = new RequestScheduler(maxQueue, loop,
-				ServeBatchOptions.resolve(parseOptionalInt(env("JUNO_PARALLEL", null)),
-						parseOptionalLong(env("JUNO_BATCH_WINDOW_MS", null))).toBatchConfig(),
-				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
+		BatchConfig batch = ServeBatchOptions.resolve(parseOptionalInt(env("JUNO_PARALLEL", null)),
+				parseOptionalLong(env("JUNO_BATCH_WINDOW_MS", null))).toBatchConfig();
+		if (batch.isBatchingEnabled())
+			log.warning(cab.ml.juno.coordinator.ClusterBatchNotice.TEXT);
+		var scheduler = new RequestScheduler(maxQueue, loop, batch, cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 
 		// ── Build ModelRegistry with the model pre-registered as LOADED ───
 		ModelRegistry registry = buildRegistry(config, modelPath);

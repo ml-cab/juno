@@ -1,0 +1,5 @@
+run 1 exit=1
+run 2 exit=1
+run 3 exit=1
+run 4 exit=1
+run 5 exit=0

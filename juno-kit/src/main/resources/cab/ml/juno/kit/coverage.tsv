@@ -5,7 +5,7 @@
 # supported architecture or a cross-surface row has no line. A change that adds one of these adds its line here.
 
 surface:1	CPU inference	cpu.live.*, cpu.throughput.*, cpu.hot-path.*, quality.*, cpu.kernel-width, cpu.unit-tests	the integer kernels by default; the width comparison only on 256-bit integer hosts
-surface:2	CUDA GPU inference	gpu.live.*, gpu.throughput.*, gpu.residency.tinyllama, gpu.packed-kquant.*, gpu.unit-tests
+surface:2	CUDA GPU inference	gpu.live.*, gpu.throughput.*, gpu.residency.tinyllama, gpu.packed-kquant.*, gpu.kernel-timing, gpu.unit-tests
 surface:3	ROCm GPU inference	rocm.unit-tests, gpu.throughput.*, gpu.consistency.tinyllama, gpu.long-prompt.*, gpu.lora.tinyllama	the live, residency, packed K-quant and CUDA unit-test probes need CUDA; the other GPU probes run on the backend that loads
 surface:4	Static schedule	consistency.tinyllama, gpu.consistency.tinyllama, parallel.tinyllama, gpu.parallel.tinyllama, schedule.tinyllama, gpu.schedule.tinyllama, gpu.packed-kquant.tinyllama.static	the default of every other probe
 surface:5	Continuous schedule	schedule.tinyllama, gpu.schedule.tinyllama, mixed-prefill.tinyllama, gpu.mixed-prefill.tinyllama, long-prompt.*, gpu.long-prompt.*, context-policy.*, gpu.context-policy.*, gpu.packed-kquant.tinyllama.continuous
@@ -56,6 +56,7 @@ feature:session-reuse	x_juno_session_id prefix reuse	schedule.tinyllama, gpu.sch
 feature:mixed-prefill	Prefill chunks inside continuous decode steps	mixed-prefill.tinyllama, gpu.mixed-prefill.tinyllama
 feature:prefill-batch	--prefill-batch	prefill-batch.tinyllama, gpu.prefill-batch.tinyllama
 feature:gpu-residency	Device-resident decode	gpu.residency.tinyllama
+feature:batched-gpu-decode	A decode batch runs in the device region: replies equal single requests, the --parallel ratio read	gpu.consistency.tinyllama, gpu.parallel.tinyllama
 feature:packed-kquant	Packed K-quant matmul	gpu.packed-kquant.*
 feature:cpu-integer-kernels	CPU integer kernels and their vector width	cpu.hot-path.*, cpu.kernel-width
 feature:quality	Mean NLL per model	quality.*
@@ -63,3 +64,8 @@ feature:throughput	Prefill and generation throughput, allocation and GC	cpu.thro
 feature:lora-merge	A trained adapter merged into a GGUF and served	lora.tinyllama, gpu.lora.tinyllama
 feature:unit-tests	Every module's unit tests and the GPU test groups	cpu.unit-tests, gpu.unit-tests, rocm.unit-tests
 feature:kit-environment	The host's description and the calibration that scales estimates	env, calibration
+feature:cuda-libraries	The CUDA driver, runtime and cuBLAS found per operating system, and where from	env, gpu.unit-tests	the env reading names each library loaded: a file found on PATH or under CUDA_PATH, or the name the system loader resolved
+feature:gpu-kernel-watchdog	The longest single GPU kernels at the sweep models' shapes, against the display-driver watchdog	gpu.kernel-timing	prefill attention, the tiled K-quant GEMM and the LM head, CUDA events around each launch; held to 500 ms
+feature:line-endings	Text reads the same on every OS: LF checkouts of fixtures, the quality text and the PTX; CR LF grammar and training files	cpu.unit-tests, quality.*	.gitattributes checks text out with LF on every OS and batch files with CR LF; the unit tests read CR LF grammar and training files as LF ones; the quality probes score the text as checked out
+feature:local-cluster-lifecycle	A local cluster's forked nodes listen on loopback and stop through their shutdown hooks	cpu.unit-tests, cpu.live.*, gpu.live.*	the unit tests fork a node and stop it by closing its standard input; the live checks run local clusters end to end
+feature:windows-launcher-parity	juno.bat and scripts/run.bat take every subcommand, flag and environment override run.sh takes and pass the same options on	cpu.unit-tests, launcher.tinyllama	the unit tests read both scripts and compare them, and hold the batch files to cmd.exe's block rule; the launcher probe runs juno.bat local mode on Windows with no [DBG] output and no registry write

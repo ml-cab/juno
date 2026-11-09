@@ -103,6 +103,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	 * not runnable here, and after {@link #releaseGpuResources}.
 	 */
 	private ResidentQkvPath residentQkv;
+	/** The decode batch device region over {@link #residentQkv}, or null (host-driven batch). */
+	private ResidentBatchDecode residentBatch;
 
 	/** Guards {@link #warnPrefillRegionFellBackOnce} so the hot path logs once. */
 	private final java.util.concurrent.atomic.AtomicBoolean prefillRegionFallbackWarned =
@@ -209,6 +211,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 				cfg.gqaRatio());
 		this.prefillRegion = openPrefillRegion(backend, L);
 		this.residentQkv = GpuResidencyOptions.fromEnv().requested() ? openResidentQkv(backend, L) : null;
+		this.residentBatch = ResidentBatchDecode.open("Qwen3", this.residentQkv);
 
 		log.info("Qwen3 shard loaded — " + L + " layers");
 	}
@@ -384,6 +387,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	@Override
 	public void releaseGpuResources() {
 		// The regions hold references to the device matrices below; close them first.
+		if (residentBatch != null)
+			residentBatch.close();
+		residentBatch = null;
 		if (residentQkv != null)
 			residentQkv.close();
 		residentQkv = null;
@@ -425,6 +431,12 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	/** Whether the device-resident decode region ({@code --gpu-residency}) is active for this handler. */
 	boolean gpuResidencyActive() {
 		return residentQkv != null;
+	}
+
+	/** Whether a decode step of several requests runs in the device-resident batch region. */
+	@Override
+	public boolean batchDecodeRegionActive() {
+		return residentBatch != null;
 	}
 
 	/** Whether the decode region runs whole layers: it attends on the device and at least one layer runs whole. */
@@ -733,17 +745,25 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.qDim(), cfg.intermediateSize(),
 				cfg.kvDim(), cfg.numHeads(), maxPos + 1, kvLayout.needsAttentionScratch());
 
-		for (int li = 0; li < L; li++) {
-			SessionKvTensor[] kLayers = new SessionKvTensor[N];
-			SessionKvTensor[] vLayers = new SessionKvTensor[N];
-			DeviceKvCache[] devLayers = new DeviceKvCache[N];
-			boolean onDevice = layerOnDevice(li);
-			for (int i = 0; i < N; i++) {
-				kLayers[i] = kCaches[i][li];
-				vLayers[i] = vCaches[i][li];
-				devLayers[i] = GpuAttentionMirror.layer(mirrors[i], li, onDevice);
+		ResidentBatchDecode.Step step = residentBatch != null ? residentBatch.open(N) : null;
+		try {
+			for (int li = 0; li < L; li++) {
+				SessionKvTensor[] kLayers = new SessionKvTensor[N];
+				SessionKvTensor[] vLayers = new SessionKvTensor[N];
+				DeviceKvCache[] devLayers = new DeviceKvCache[N];
+				boolean onDevice = layerOnDevice(li);
+				for (int i = 0; i < N; i++) {
+					kLayers[i] = kCaches[i][li];
+					vLayers[i] = vCaches[i][li];
+					devLayers[i] = GpuAttentionMirror.layer(mirrors[i], li, onDevice);
+				}
+				if (step == null || !residentBatch.runLayerIfEligible(step, li, x, positions, kLayers, vLayers, devLayers,
+						ws.k, ws.v))
+					x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws, devLayers);
 			}
-			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws, devLayers);
+		} finally {
+			if (step != null)
+				step.close();
 		}
 
 		if (a != null) {

@@ -12,7 +12,9 @@ flow backward through KV-cache entries from earlier positions. This avoids O(seq
 work with negligible effect on LoRA quality.
 
 **Corpus scheduling.** `/train` and `/train-file` keep one document-level `TrainUnit` per
-document, then chunk inside `LoraTrainingLoop.flattenChunks`:
+document, then chunk inside `LoraTrainingLoop.flattenChunks`. `/train-file` reads CR LF line ends
+(a file saved on Windows) as LF, so the same text trains the same adapter whichever editor saved it;
+a CR inside a line is kept.
 
 - `--lora-chunk-tokens N` sets the BPTT window size (default 32).
 - `--lora-max-train-tokens N` / `LORA_MAX_TRAIN_TOKENS` (default 0 = unlimited) applies a

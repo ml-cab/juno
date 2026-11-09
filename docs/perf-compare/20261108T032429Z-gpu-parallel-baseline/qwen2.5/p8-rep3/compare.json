@@ -1,0 +1,17 @@
+{
+  "run_id": "20261108T033128Z",
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "backend": "gpu",
+  "sessions": 8,
+  "max_tokens": 64,
+  "results": [
+    {
+      "parallel": 8,
+      "aggregate_token_gen_tps": 31.2927,
+      "wall_ms": 16106,
+      "sessions_ok": 8,
+      "sessions_failed": 0
+    }
+  ],
+  "speedup_parallel_over_1": null
+}

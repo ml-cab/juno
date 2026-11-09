@@ -109,6 +109,15 @@ final class ResidentLayerTail implements AutoCloseable {
 		return m != null && li < m.length && m[li] != null && m[li].rows() == rows && m[li].cols() == cols;
 	}
 
+	/** The weights {@link ResidentBatchDecode} reads to run this tail for a decode batch. */
+	record Parts(DeviceQ4KMatrix[] wo, DeviceQ4KMatrix[] wGate, DeviceQ4KMatrix[] wUp, DeviceQ4KMatrix[] wDown,
+			DeviceFloatMatrix[] ffnNormWeight, int inter) {
+	}
+
+	Parts parts() {
+		return new Parts(wo, wGate, wUp, wDown, ffnNormWeight, inter);
+	}
+
 	/** Whether layer {@code li} runs its tail on the device. */
 	boolean eligible(int li) {
 		return li >= 0 && li < ffnNormWeight.length && ffnNormWeight[li] != null;

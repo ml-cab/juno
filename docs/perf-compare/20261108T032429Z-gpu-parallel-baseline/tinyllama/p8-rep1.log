@@ -1,0 +1,14 @@
+[parallel] start juno parallel=8 sessions=8 max_tokens=64 gpu
+[parallel] warmup round 1/2
+[parallel] warmup round 2/2
+[parallel] parallel=8: agg_tps=79.2447 ok=8/8 wall_ms=6461
+[parallel] done: docs/perf-compare/20261108T032429Z-gpu-parallel-baseline/tinyllama/p8-rep1
+# Multi-session static batch — 20261108T032455Z
+
+Model: `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf` · sessions=8 · max_tokens=64 · backend=gpu
+
+| parallel | aggregate tg t/s | wall ms | ok/fail |
+|---------:|-----------------:|--------:|--------:|
+| 8 | 79.2447 | 6461 | 8/8 |
+
+Speedup parallel=8 over parallel=1: -

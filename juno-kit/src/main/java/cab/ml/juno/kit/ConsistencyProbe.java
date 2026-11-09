@@ -51,6 +51,9 @@ final class ConsistencyProbe implements KitProbe {
 	static final List<String> PROMPTS = List.of("What is the capital of France?", "Name one primary color.",
 			"How many legs does a spider have?");
 	private static final int MAX_TOKENS = 8;
+	/** Tokens a decode batch of {@link #BATCH_OF_EIGHT} requests runs for: where batched and single replies used to diverge. */
+	static final int BATCH_MAX_TOKENS = 64;
+	static final int BATCH_OF_EIGHT = 8;
 	private static final Duration START = Duration.ofMinutes(10);
 
 	@Override
@@ -73,6 +76,8 @@ final class ConsistencyProbe implements KitProbe {
 					"exit " + r.exit() + (clean ? "" : "; see " + id + "/known-good/" + JunoProcess.LOG)));
 		}
 		staticBatching(work, model, heap, gpu ? "gpu" : "cpu", checks);
+		if (gpu)
+			batchOfEight(work, model, heap, checks);
 		if (!gpu)
 			continuousSession(work, model, heap, checks);
 		Map<String, Object> facts = new LinkedHashMap<>();
@@ -143,6 +148,36 @@ final class ConsistencyProbe implements KitProbe {
 		}
 	}
 
+	/** A decode batch of eight on the device: each 64-token reply must equal the same prompt's single-request reply. */
+	private static void batchOfEight(Path work, Path model, String heap, List<ProbeReport.Check> checks)
+			throws Exception {
+		String label = "decode batch of " + BATCH_OF_EIGHT + ", gpu, " + BATCH_MAX_TOKENS + " tokens: ";
+		try (JunoProcess s = JunoProcess.serve(work.resolve("batch-of-eight"), heap, batchOfEightArgs(model), START)) {
+			JunoHttpClient client = new JunoHttpClient(s.base());
+			String modelId = s.modelId();
+			List<String> baseline = new ArrayList<>();
+			for (String p : PROMPTS)
+				baseline.add(openAi(client, modelId, p, BATCH_MAX_TOKENS));
+			compare(label + "concurrent", batchOfEightOrder(), baseline,
+					i -> openAi(client, modelId, PROMPTS.get(i), BATCH_MAX_TOKENS), checks);
+		}
+	}
+
+	/** The server arguments of {@link #batchOfEight}: batching on, the batch window long enough to fill it. */
+	static List<String> batchOfEightArgs(Path model) {
+		List<String> args = JunoProcess.localArgs(model, BATCH_MAX_TOKENS);
+		args.addAll(List.of("--parallel", String.valueOf(BATCH_OF_EIGHT), "--batch-window-ms", "300", "--gpu"));
+		return args;
+	}
+
+	/** Which prompt each of the eight concurrent requests asks: cycles through {@link #PROMPTS}. */
+	static int[] batchOfEightOrder() {
+		int[] order = new int[BATCH_OF_EIGHT];
+		for (int i = 0; i < order.length; i++)
+			order[i] = i % PROMPTS.size();
+		return order;
+	}
+
 	private static void continuousSession(Path work, Path model, String heap, List<ProbeReport.Check> checks)
 			throws Exception {
 		List<String> args = JunoProcess.localArgs(model, MAX_TOKENS);
@@ -185,8 +220,12 @@ final class ConsistencyProbe implements KitProbe {
 	}
 
 	private static String openAi(JunoHttpClient c, String modelId, String prompt) {
+		return openAi(c, modelId, prompt, MAX_TOKENS);
+	}
+
+	private static String openAi(JunoHttpClient c, String modelId, String prompt, int maxTokens) {
 		try {
-			return c.blockingOpenAiChat(modelId, messages(prompt), MAX_TOKENS, 0f);
+			return c.blockingOpenAiChat(modelId, messages(prompt), maxTokens, 0f);
 		} catch (Exception e) {
 			return "ERROR: " + e.getMessage();
 		}

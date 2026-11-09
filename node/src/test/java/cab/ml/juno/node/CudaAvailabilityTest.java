@@ -49,6 +49,26 @@ class CudaAvailabilityTest {
 		assertThat(CudaAvailability.vramBytes(0)).isEqualTo(0L);
 	}
 
+	@Test
+	@DisplayName("without CUDA, names no library and says why")
+	void no_libraries_and_a_reason_when_no_cuda() {
+		assumeFalse(CudaAvailability.isAvailable(), "Skipping — CUDA is present");
+		assertThat(CudaAvailability.loadedLibraries()).isEmpty();
+		assertThat(CudaAvailability.unavailableReason()).isNotBlank().doesNotContain("\n");
+	}
+
+	@Test
+	@Tag("gpu")
+	@DisplayName("names each CUDA library it loaded and where from; no reason when available")
+	void loaded_libraries_on_cuda_node() {
+		assumeTrue(CudaAvailability.isAvailable(), "No CUDA — skipping");
+		assertThat(CudaAvailability.loadedLibraries()).containsOnlyKeys("runtime", "cublas", "driver");
+		assertThat(CudaAvailability.unavailableReason()).isNull();
+		if (GpuPlatform.current() == GpuPlatform.LINUX)
+			assertThat(CudaAvailability.loadedLibraries()).containsEntry("runtime", "libcudart.so.12")
+					.containsEntry("cublas", "libcublas.so.12").containsEntry("driver", "libcuda.so.1");
+	}
+
 	// ── GPU-tagged: run on AWS / any CUDA machine ─────────────────────────────
 
 	@Test

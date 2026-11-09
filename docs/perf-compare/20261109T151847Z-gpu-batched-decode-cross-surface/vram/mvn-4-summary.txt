@@ -1,0 +1,47 @@
+[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 25.17 s <<< FAILURE! -- in cab.ml.juno.node.GpuAttentionHandlerParityTest
+[ERROR] cab.ml.juno.node.GpuAttentionHandlerParityTest.kernel_matches_scalar_attention(String)[2] -- Time elapsed: 9.743 s <<< FAILURE!
+[device memory back to where the test started (weights, KV mirror, kernel scratch and backend scratch all released)] 
+Expecting actual:
+  7665614848L
+to be greater than or equal to:
+  7667843072L
+[ERROR] Tests run: 4, Failures: 3, Errors: 0, Skipped: 0, Time elapsed: 100.9 s <<< FAILURE! -- in cab.ml.juno.node.PrefillRegionHandlerParityTest
+[ERROR] cab.ml.juno.node.PrefillRegionHandlerParityTest.region_matches_hostPath(String)[1] -- Time elapsed: 3.779 s <<< FAILURE!
+[device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7637172224L
+to be greater than or equal to:
+  7650607104L
+[ERROR] cab.ml.juno.node.PrefillRegionHandlerParityTest.region_matches_hostPath(String)[2] -- Time elapsed: 11.49 s <<< FAILURE!
+[device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7452491776L
+to be greater than or equal to:
+  7620526080L
+[ERROR] cab.ml.juno.node.PrefillRegionHandlerParityTest.region_matches_hostPath(String)[3] -- Time elapsed: 9.351 s <<< FAILURE!
+[device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7291666432L
+to be greater than or equal to:
+  7437615104L
+[ERROR]   GpuAttentionHandlerParityTest.kernel_matches_scalar_attention:187 [device memory back to where the test started (weights, KV mirror, kernel scratch and backend scratch all released)] 
+Expecting actual:
+  7665614848L
+to be greater than or equal to:
+  7667843072L
+[ERROR]   PrefillRegionHandlerParityTest.region_matches_hostPath:138 [device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7637172224L
+to be greater than or equal to:
+  7650607104L
+[ERROR]   PrefillRegionHandlerParityTest.region_matches_hostPath:138 [device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7452491776L
+to be greater than or equal to:
+  7620526080L
+[ERROR]   PrefillRegionHandlerParityTest.region_matches_hostPath:138 [device memory back to where the test started (weights, KV mirror, region buffers and backend scratch all released)] 
+Expecting actual:
+  7291666432L
+to be greater than or equal to:
+  7437615104L
+[INFO] BUILD FAILURE

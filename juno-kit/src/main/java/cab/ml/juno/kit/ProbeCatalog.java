@@ -63,7 +63,8 @@ final class ProbeCatalog {
 			Map.entry("gpu.throughput.mistral-7b.2048", 6300), Map.entry("gpu.parallel.tinyllama", 1002),
 			Map.entry("gpu.schedule.tinyllama", 1002), Map.entry("gpu.mixed-prefill.tinyllama", 936),
 			Map.entry("gpu.prefill-batch.tinyllama", 922), Map.entry("gpu.lora.tinyllama", 4066),
-			Map.entry("gpu.vision.moondream2", 118), Map.entry("gpu.unit-tests", 4144));
+			Map.entry("gpu.vision.moondream2", 118), Map.entry("gpu.unit-tests", 4144),
+			Map.entry("gpu.kernel-timing", 152));
 
 	static long deviceMinimum(int peakMiB) {
 		return (long) ((peakMiB + 511) / 512 * 512) << 20;
@@ -125,6 +126,11 @@ final class ProbeCatalog {
 						"Packed K-quant prefill matmul, TinyLlama, continuous schedule", ProbeKind.CHECK, QUICK_GPU,
 						Requirements.cuda(6L << 30), List.of(tiny.id()), 80, 2, "PackedKquantProbe",
 						Map.of("schedule", "continuous"), 2400, tiny.heap()),
+				new Probe("gpu.kernel-timing",
+						"Longest single GPU kernels at the sweep models' shapes, 2048-token window, against the "
+								+ "display-driver watchdog",
+						ProbeKind.CHECK, QUICK_GPU, Requirements.cuda(4L << 30), List.of(), 10, 1,
+						"GpuKernelTimingProbe", Map.of(), 900, "2g"),
 				live("qwen2.5-3b", "Qwen2.5-3B", false, "16g", 24, 505),
 				live("phi-3.5-mini", "Phi-3.5-mini", false, "8g", 24, 870),
 				live("mistral-7b", "Mistral 7B", false, "24g", 32, 1545),

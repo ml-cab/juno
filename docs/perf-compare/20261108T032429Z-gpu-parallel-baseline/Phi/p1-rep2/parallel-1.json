@@ -1,0 +1,21 @@
+{
+  "run_id": "20261108T033517Z",
+  "tool": "compare-parallel",
+  "status": "success",
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "model_path": "/home/medion/Repo/juno/models/Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "backend": "gpu",
+  "parallel": 1,
+  "batch_window_ms": 50,
+  "sessions": 8,
+  "max_tokens": 64,
+  "wall_ms": 10800,
+  "sessions_ok": 8,
+  "sessions_failed": 0,
+  "total_completion_tokens": 512,
+  "total_prompt_tokens": 168,
+  "aggregate_token_gen_tps": 47.4074,
+  "mean_per_session_latency_ms": 10516.88,
+  "prompt": "could you please write me a short poem about love and war",
+  "log": "docs/perf-compare/20261108T032429Z-gpu-parallel-baseline/Phi/p1-rep2/parallel-1.log"
+}

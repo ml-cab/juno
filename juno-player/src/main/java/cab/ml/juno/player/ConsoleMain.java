@@ -1070,6 +1070,10 @@ public final class ConsoleMain {
 			case "--health":
 				healthMode = true;
 				break;
+			case HealthPortOption.FLAG:
+				if (i + 1 < args.length)
+					healthPort = HealthPortOption.parse(args[++i]);
+				break;
 			case "--api-port":
 				if (i + 1 < args.length)
 					apiPort = parseInt(args[++i], -1);
@@ -1156,8 +1160,8 @@ public final class ConsoleMain {
 		System.out.println("                             Q/K/V, RoPE, KV append and attention with --gpu-attention on, output");
 		System.out.println("                             projection and FFN): one upload per token and one download per layer");
 		System.out.println("                             instead of a round trip per operation (default: auto, on wherever CUDA is present;");
-		System.out.println("                             CUDA, K-quant MMQ weights, LLaMA family (Qwen2 included), Phi-3 and Qwen3, single-sequence");
-		System.out.println("                             decode; elsewhere the existing path, said once only with an explicit on;");
+		System.out.println("                             CUDA, K-quant MMQ weights, LLaMA family (Qwen2 included), Phi-3 and Qwen3, one request or a batch of");
+		System.out.println("                             them (--parallel, continuous schedule); elsewhere the existing path, said once only with an explicit on;");
 		System.out.println("                             off keeps the op-at-a-time path; env JUNO_GPU_RESIDENCY)");
 		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");
 		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
@@ -1170,7 +1174,7 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_KV_PAGE_SIZE; ignored under static (dense)");
 		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled);");
 		System.out.println("                             under continuous, caps the running set (default cap 8 if N=1)");
-		System.out.println("                             env JUNO_PARALLEL; 8 suits a CPU API server, keep 1 on the GPU");
+		System.out.println("                             env JUNO_PARALLEL; 8 suits a local API server, keep 1 on a cluster");
 		System.out.println("  --batch-window-ms M        When parallel>1, a static batch dispatches M ms after its first");
 		System.out.println("                             request, or when full (default: 50); env JUNO_BATCH_WINDOW_MS");
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
@@ -1245,16 +1249,13 @@ public final class ConsoleMain {
 		System.out.println("  --lora-microbatch N     Frozen GEMM width 1..128 (default: 8; 1=FP16 sequential)");
 		System.out.println();
 		System.out.println("Other:");
-		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
-		System.out.println("  --api-port N               Start REST API (local/cluster: chat; lora: train-file-qa)");
+		System.out.println("  --health                   Start the health-monitor HTTP sidecar in this JVM");
+		System.out.println("  --health-port N            Health sidecar port; cluster nodes report to it (default: 8081)");
+		System.out.println("  --api-port N              Start REST API (local/cluster: chat; lora: train-file-qa)");
 		System.out.println("                             lora: POST /v1/lora/train-file-qa , POST /v1/lora/save");
 		System.out.println("  --embeddings               Enable POST /v1/embeddings on the API server (default: off)");
 		System.out.println("                             local/cluster only; disabled server returns 400");
 		System.out.println("  --pooling M                mean|cls|last for /v1/embeddings (default: mean)");
-		System.out.println("    --port N                   Health listen port (default: 8081)");
-		System.out.println("    --stale-ms N               Node stale threshold in ms (default: 15000)");
-		System.out.println("    --warn F                   VRAM warning threshold 0.0-1.0 (default: 0.90)");
-		System.out.println("    --critical F               VRAM critical threshold 0.0-1.0 (default: 0.98)");
 		System.out.println("  --jfr DURATION             Java Flight Recording duration (e.g. 5m)");
 		System.out.println("                             Programmatic recording; on exit extracts");
 		System.out.println("                             target/metrics/metrics.json (local/lora/cluster)");
@@ -1562,7 +1563,7 @@ public final class ConsoleMain {
 				print(Color.RED + "  File not found: " + p + Color.RESET);
 				return;
 			}
-			String text = Files.readString(p);
+			String text = TrainingTextFile.read(p);
 			print(Color.DIM + "  Loaded: " + p.getFileName() + "  (" + text.length() + " chars)" + Color.RESET);
 			trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty);
 		}
@@ -2662,6 +2663,8 @@ public final class ConsoleMain {
 							+ "just no speculative gain there)%s%n",
 					Color.YELLOW, batch.maxBatchSize(), Color.RESET));
 		}
+		if (LoraPlaybackBatchNotice.applies(loraPlayPath != null, batch.isBatchingEnabled()))
+			System.out.println("  " + Color.YELLOW + "WARNING: " + LoraPlaybackBatchNotice.TEXT + Color.RESET);
 		return batch;
 	}
 
@@ -2723,7 +2726,11 @@ public final class ConsoleMain {
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
 				PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.CLUSTER_REPL, prefillBatch, true, null),
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
-		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
+		BatchConfig clusterBatch = resolveBatchConfig();
+		if (clusterBatch.isBatchingEnabled())
+			System.out.println("  " + Color.YELLOW + "WARNING: " + cab.ml.juno.coordinator.ClusterBatchNotice.TEXT
+					+ Color.RESET);
+		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, clusterBatch,
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
