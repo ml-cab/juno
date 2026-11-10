@@ -26,6 +26,10 @@ here is necessarily code-plus-unit-tests-without-hardware, flagged `NEEDS-AMD-HA
 every other ROCm-touching tier. Doing it after Tiers 01-09 means the CUDA-side patterns this tier
 ports to ROCm (residency, tiled GEMM, block-table attention, tensor-parallel slicing) are already
 proven out, so ROCm parity work is porting a known-good design rather than co-developing it blind.
+*(2026-11-10, owner decision recorded in [Tier 03](TIER-03-kv-cache-maturity.md): Tier 03's block-table attention is the CPU
+attention reading the host KV pages, which ROCm runs already, since it attends on the CPU path; there is no device block table
+to port unless [Tier 07](TIER-07-continuous-batching.md) takes its paged device KV candidate. The quantized device KV (Tier 03
+item 7) is the device KV layout this tier ports.)*
 
 ## Scope
 

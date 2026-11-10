@@ -318,6 +318,8 @@ GPU, macOS.
       recorded outputs (step 9).)*
       *(2026-11-09: on a real Windows host the parsers read the right values (i5-1240P, 12 cores, 16 threads, on mains, 100%).
       The zip holds the parsed values, not the commands' raw output, so the fixtures stay as they are. Owed: a macOS run.)*
+      *(2026-11-10: two Windows re-runs read the same host the same way, on mains at 100% and on battery at 95%, discharging.
+      Owed: a macOS run.)*
 - [x] The estimate is shown before the run and refined during it. On this host, the first estimate for the
       `quick` suite is `>= 0.65x` and `<= 1.35x` the actual time.
       *(2026-11-03: read 0.741x, point 1738 s against 2345 s, on the `a1fe7166` catalog
@@ -342,6 +344,10 @@ GPU, macOS.
       kit now logs the result either way. Metered-connection detection exists on Linux only (`"metered" : "unknown"` here), so
       that warning cannot fire on Windows or macOS; recorded, not changed. Owed: the keep-awake line from a Windows re-run, and
       a macOS run.)*
+      *(2026-11-10: Windows observed. Both re-runs log "Keeping this machine awake for the run (SetThreadExecutionState).",
+      which prints only when the call returns a previous state. Probes the noise rule found loaded re-ran and were marked
+      NOISY. `cpu.kernel-width` reads high by construction: the sampler counts each exiting child JVM's last partial second as
+      other programs' CPU (the 2026-11-10 record). Owed: a macOS run.)*
 - [x] The model catalog is pinned by SHA-256, downloads resume, and hashes are verified.
       *(2026-11-05: pinned (step 2) and verified here against `models/`; `ModelStoreTest` replaces a wrong-hash copy and
       refuses a tampered download on a local server. Owed: nothing has been downloaded from Hugging Face by the kit yet;
@@ -364,6 +370,9 @@ GPU, macOS.
       *(2026-11-09: scrubbing worked on real Windows data as far as the zip got (37 files, 158 home paths replaced, no user
       name), but the packer crashed on a code-page log, so that zip has no `SUMMARY.txt` or report. Fixed, test first. Owed:
       a complete zip from a Windows re-run, and a macOS run.)*
+      *(2026-11-10: Windows met. Both re-runs' zips are complete (68 and 69 files, each with `SUMMARY.txt` and `report.html`),
+      scrubbed on the tester's host: no user name, host name, MAC or IP address, 281 and 299 home paths replaced, no JFR
+      recording. Owed: a macOS run.)*
 - [x] `ingest` drafts the `docs/perf-compare/` entry and compares against the owner's reference run; the
       reference run on this host is published.
       *(2026-11-04: the owner's reference run at `80ec949e`, suite `all`, 72 of 72 runnable probes PASS or DONE, is
@@ -375,6 +384,10 @@ GPU, macOS.
       CI is deferred (owner decision 2026-11-03), each ingested (step 9).)*
       *(2026-11-09: a Windows run ran all 12 selected probes and is ingested, but the kit did not finish cleanly: one probe
       failed and packing crashed. Owed: a Windows re-run on the fixes, and a macOS run.)*
+      *(2026-11-10: Windows met. Two re-runs on the fixes ran all 12 probes, finished and packed, and are ingested
+      (`docs/perf-compare/20261110T162530Z-...` and `20261110T162533Z-remote-windows-amd64-12th-gen-core-i5-1240p/`). The
+      second passed whole, 93 of 93 items equal to the reference. The first failed live check 8 once (the 2026-11-10 record).
+      Owed: a macOS run.)*
 - [x] Rule 10 and check 10 are in place (check 10 seen failing first); every open tier file has its **Kit
       probes** section; `INVENTORY.md` has the "Borrowed hardware" table.
       *(2026-10-31, step 7: check 10 failed on all 17 open tier files, then passed once the sections were
@@ -383,11 +396,15 @@ GPU, macOS.
       *(2026-11-05, on `80ec949e` plus the CPU batched matmul change: 12 modules, 2,607 tests, 0 failures, 0 errors,
       53 skipped; then `mvn install -DskipTests` and `mvn verify -pl juno-master`, 13 tests and 20 integration tests,
       0 failures. Re-run at the close if step 9 changes code.)*
-- [ ] Cross-surface checklist fully resolved.
+- [x] Cross-surface checklist fully resolved.
       *(2026-11-05: drafted from this host's runs (the 2026-11-05 step 9 record): rows 1, 2 and 4 to 15 PASS on Linux,
       row 3 NEEDS-AMD-HARDWARE. Owed: row 14's `juno.bat`, which only a Windows tester's run exercises (step 9).)*
       *(2026-11-09: row 14 on Windows: `juno-kit.bat` PASS; `juno.bat` not resolved, since local mode failed on the `run.bat`
       flag defect, now fixed. Owed: the launcher probe's re-run on Windows.)*
+      *(2026-11-10: met. Row 14 PASS on Windows: the launcher probe passed 5 of 5 in both re-runs, so rows 1, 2 and 4 to 15 PASS
+      and row 3 stays NEEDS-AMD-HARDWARE. Row 8 failed once on Windows (live check 8, the first re-run) and passed in the other
+      two Windows runs. That failure is recorded as an engine finding in the 2026-11-10 record. It is not a gap in how the kit
+      exercises the row.)*
 - [x] Docs (`juno-kit/README.md`, `docs/howto.md`, `docs/agent-arch.txt`, `README.md`) updated, in
       Juno-native language only; `CHANGELOG.md` entry added.
       *(2026-11-03, step 10: all five written; a grep of the added text finds no competitor product name, tier number,
@@ -2092,3 +2109,117 @@ rule 1, then Tier 03's step 0.
 
 Left to the owner, optional: GitHub can still serve the old commit by its hash until it is garbage-collected. GitHub Support can purge
 it, and the tester can be told. Still owed: `.gitattributes` in a commit before the Windows re-run, then that re-run and a macOS run.
+
+### 2026-11-10: step 9, the Windows re-runs
+
+**Plan against code, verified at HEAD `9dda5f7d`.** Tier 03's work was uncommitted in the tree, and another session ran the full
+unit suite in it throughout, so this session built and tested nothing. `check-plan-thresholds.sh` passed first (26 tier files).
+`.gitattributes` is in `9dda5f7d`. The kit jar used for `ingest` (`juno-kit/target/`, 2026-11-09) is built from `e16748ad`'s
+`juno-kit`, the last commit to change it.
+
+**What arrived.** `docs/juno-kit-results-2.zip`, untracked: the tester's whole results folder again, 249 files.
+- It holds the first run's folder and partial zip (ingested 2026-11-09), two new runs with the kit's own zips, three build logs
+  and two console transcripts.
+- It is not scrubbed. 139 of its files hold the tester's Windows user name, a transcript's file name looks like a personal name,
+  and it holds 12 JFR recordings. It stays out of the tree. Only the kit's two zips are ingested.
+- Run `20261110T013914Z`: suite `quick`, Juno `f234e90c` on a clean tree, kit jar `a1fab52698c7116f`. On mains at 100%, with
+  3.1 GiB of free disk.
+- Run `20261110T070210Z`: suite `quick`, Juno `f234e90c` on a "modified tree", kit jar `5c2c6155a0a993b4`. On battery at 95%,
+  with 30.3 GiB free. A first try refused at 1318 MiB free.
+- `f234e90c`'s tree equals `e16748ad`'s except for the root results zip, so both runs test the 2026-11-09 fixes as committed.
+  The kit jar's hash changes on every build of one tree (no `project.build.outputTimestamp`), so it does not identify the source.
+- `f234e90c` has no `.gitattributes`, so both checkouts wrote CR LF text.
+- On "modified tree": the kit records git's flag, not which files changed. `f234e90c` tracks that results zip, and deleting or
+  overwriting it sets the flag. The zip cannot confirm that this happened. Every probe's result equals the clean run's.
+
+**Results.** Entries `docs/perf-compare/20261110T162530Z-remote-windows-amd64-12th-gen-core-i5-1240p/` (the clean run) and
+`20261110T162533Z-remote-windows-amd64-12th-gen-core-i5-1240p/` (the second run).
+- Clean run: 12 probes, 4 DONE, 6 PASS, 1 NOISY, 1 FAIL, in 27:27. 92 of 93 items equal the reference (`80ec949e`, Linux).
+- Second run: 12 probes, 4 DONE, 7 PASS, 1 NOISY, in 33:46. **93 of 93 items equal the reference**, every greedy reply
+  byte-equal across OS, CPU and commit.
+- **The first run's three defects are fixed on Windows.** Both zips are complete (68 and 69 files, `SUMMARY.txt` and
+  `report.html` in each), scrubbed (no user name, host name, MAC or IP address; 281 and 299 home paths replaced; no JFR). The
+  launcher probe passed 5 of 5 both times: `juno.bat local --api-port` with `--temperature 0` answered and exited with code 0.
+  Both kit logs read "Keeping this machine awake for the run (SetThreadExecutionState).", which prints only when the call
+  held.
+- Mean NLL 2.397478341905886 in both, the CR LF reading again.
+- Readings, published and not compared, clean run then battery run: calibration 0.478 and 0.588 ms; prefill 55.5 and 49.9 t/s at
+  128 tokens, 53.2 and 50.1 at 512; generation 17.8 and 17.9 at 128, 18.0 and 17.6 at 512. The first run, at 8% to 15% other
+  CPU, read 0.688 ms, 44.6 and 42.1 t/s, 14.6 and 14.9 t/s.
+
+**Finding 1: live check 8 failed once on Windows (engine; cause unknown; not changed).**
+- In the clean run, check 8's second request failed 3 s into prefill with `RuntimeException: Tensor-parallel forward pass
+  failed: UNAVAILABLE: io exception`. The gRPC connection to a node closed. Check 7 and check 8's first request had answered on
+  the same three-node cluster seconds earlier. The other two Windows runs passed check 8, as did all 34 kit runs on this host
+  that ran the live probe.
+- The zip cannot say why, because nothing a dying node leaves reaches it:
+  - `ClusterHarness.launchNode` discards a node's stderr unless `JUNO_VERBOSE` is set.
+  - `waitForReady` closes its reader of the node's stdout once the node prints `READY`.
+  - HotSpot writes its fatal-error file to the working directory, which is the tester's checkout, outside the results folder.
+- Context, not a cause: the probe can use up to 16 GiB of heap (a 4 GiB coordinator and three 4 GiB nodes, `NodeHeapSize`'s
+  floor) on 15 GiB of RAM, with ZGC. This run started with 3.1 GiB of free disk for the page file to grow into. The passing
+  runs started with 5.3 and 30.3 GiB.
+
+**Decision for the owner: finding 1.**
+- (a) Ask the tester for what is on their machine. First, whether `hs_err_pid10932.log`, `hs_err_pid3096.log` or
+  `hs_err_pid18676.log` (the three node PIDs) is in the checkout's root, and if so its first 20 lines only, since the file also
+  holds environment variables and paths. Second, any `java.exe` error in Windows Event Viewer's Application log at 03:45:56 to
+  03:45:59 local time on 2026-11-10.
+- (b) Make a repeat diagnosable on any host. In kit runs, `ClusterHarness` would append each node's stderr to the probe log
+  and point `-XX:ErrorFile` into the run folder, where the scrubber reads it. A kit change, plus a small change in `juno-player`.
+- (c) Re-run `--probes cpu.live.tinyllama` a few times on that laptop with little free disk, to see whether it repeats.
+- **Recommendation: (a) now, since it costs one message, then (b),** so that the next failure on any tester's host carries its
+  own evidence.
+
+**Finding 2: the noise sampler counts part of the probe's own child JVMs as other programs' CPU (kit defect; not yet fixed).**
+- `LoadSampler` samples once a second. It counts as the probe's own CPU the last-seen CPU time of the kit, the probe and the
+  probe's live descendants. A child's CPU between its last sample and its exit is never seen, but that second's system load
+  includes it, so it lands in "other". The class comment's "a short-lived child is not counted as another program" holds only
+  for the CPU time seen at the last sample.
+- `cpu.kernel-width` starts 24 child JVMs per attempt (2 shapes, 2 thread counts, 3 alternations, 2 widths), 12 of them at 16
+  threads. Each 16-thread child loses about half a second at 16 CPUs, about 8 CPU-seconds, so about 100 CPU-seconds per
+  111-second attempt on 16 CPUs: about 6%.
+- Observed, `cpu.kernel-width` against the same run's other probes: 14.4% against 8% to 11% (first run), 15.8% against 3% to 6%
+  (clean run), 8.2% against 3% to 7% (battery run). So it read NOISY in all 9 of its attempts across the three runs.
+- What this costs: two re-runs per run (about 220 s), and a "still noisy" label that hides whether the host was idle. Other
+  probes that start short JVMs (`consistency`, `grammar`) run fewer of them, and their readings do not separate from the
+  throughput probes' across the three runs.
+- **Proposed fix, test first:** leave out of the share any one-second interval in which a process the sampler had counted as
+  the probe's own has exited, so neither that interval's CPU nor its wall time enters. The interval rule is a pure function and
+  can be tested without a real process. No probe or threshold changes.
+- Not done this session: a `juno-kit` build and test would have run beside the other session's suite.
+
+**Found, recorded, not changed.**
+- On this host the first estimate read 0.65x the actual time in both re-runs (0.72x in the first run). Without
+  `cpu.kernel-width`'s re-runs (finding 2) it would read about 0.75x. Criterion 3 scores the reference host's estimate, not a
+  tester's.
+- `ingest`'s coverage table counts a probe's status, not a check's. So check 8 alone marks `surface:6`, `surface:7`,
+  `surface:8` and `feature:local-cluster-lifecycle` as FAIL in the clean run's entry, which says so in its notes.
+
+**Cross-surface, on Windows.** The second run passes rows 1, 4 to 8, 10 and 12 to 15. Row 14's `juno.bat` passed in both
+re-runs. Row 8 failed once (finding 1). Rows 9 and 11 are not in `quick`, and row 2 needs an NVIDIA GPU.
+
+**The 256-bit reading.** 24 more ratios of 128-bit time over 256-bit time read 1.19x to 1.30x, with Q4_K on one thread at 1.20x
+to 1.30x. All 36 ratios from the three runs read 1.14x to 1.30x, against Tier 02E's 1.5x. Owner decision 2026-11-09 stands:
+`auto` stays at 128. Recorded, not scored. Tier 02E's width row carries a dated line.
+
+**Tests.** No code changed, so none was run. `check-plan-thresholds.sh` passes after these edits.
+
+**Docs.** The two entries, their `docs/perf-compare/README.md` rows, and `INVENTORY.md`'s host row. Nothing user-facing changed,
+so `CHANGELOG.md`, `docs/howto.md` and `juno-kit/README.md` are unchanged.
+
+**Out-of-tier changes:** [Tier 02G](TIER-02G-cuda-on-windows.md)'s launcher criterion and kit-probe criterion are ticked, with
+dated notes: the Windows run each waited for has happened. [Tier 02E](TIER-02E-cpu-decode-kernels.md)'s width row gains a dated
+line.
+
+**Exit criteria:** 9 of 13 (criterion 12 ticked). Criteria 2, 4, 7 and 9 now owe only a macOS run.
+
+**Owed to the owner:**
+1. `docs/juno-kit-results-2.zip` is the tester's unscrubbed folder. Keep it out of every commit: delete it, or move it outside
+   the repository. Nothing in `.gitignore` covers it.
+2. Finding 1's decision.
+3. A macOS run.
+4. Commit these records and the two entries.
+
+**Next for the executor:** finding 2's fix, test first, once no suite is running in the tree. Then finding 1 as the owner
+decides. Then `ingest` the macOS zip when it arrives.

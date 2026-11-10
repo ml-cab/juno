@@ -26,6 +26,15 @@ import java.util.List;
  *
  * <p>Maps logical token positions to (blockId, slot). {@link #gather} copies
  * the active prefix into a contiguous float workspace for BLAS attention.
+ *
+ * <p>{@link #sharePrefix} starts a table from this one's first rows without
+ * copying them: both hold the same pages, counted by the pool. A page held by
+ * more than one table is never written; whichever table writes into it first
+ * (an append into a partly filled shared page, an overwrite, a context shift)
+ * takes a copy and drops its hold on the shared page, so neither table ever sees
+ * the other's later rows. A table is used by one thread at a time, and sharing
+ * reads the source table, so it must not overlap a write to that table; tables
+ * that share pages may run on different threads.
  */
 public final class KvPageTable {
 
@@ -37,6 +46,34 @@ public final class KvPageTable {
 		if (pool == null)
 			throw new IllegalArgumentException("pool must not be null");
 		this.pool = pool;
+	}
+
+	/**
+	 * A new table over the same pool whose positions {@code [0, len)} are this
+	 * table's, holding the same pages rather than copies ({@code 0 <= len <= seqLen}).
+	 * Rows either table writes afterwards are its own.
+	 */
+	public KvPageTable sharePrefix(int len) {
+		if (len < 0 || len > seqLen)
+			throw new IllegalArgumentException("len " + len + " outside [0, " + seqLen + "]");
+		KvPageTable shared = new KvPageTable(pool);
+		int pages = (len + pool.pageSize() - 1) / pool.pageSize();
+		for (int i = 0; i < pages; i++) {
+			int id = blockIds.get(i);
+			pool.retain(id);
+			shared.blockIds.add(id);
+		}
+		shared.seqLen = len;
+		return shared;
+	}
+
+	/** The block behind page {@code page}, made this table's alone first if another table holds it. */
+	private int writablePage(int page) {
+		int id = blockIds.get(page);
+		int own = pool.exclusive(id);
+		if (own != id)
+			blockIds.set(page, own);
+		return own;
 	}
 
 	public int seqLen() {
@@ -97,15 +134,18 @@ public final class KvPageTable {
 		int pageSize = pool.pageSize();
 		if (pos == seqLen) {
 			int slot = seqLen % pageSize;
-			if (slot == 0)
-				blockIds.add(pool.allocate());
-			pool.writeToken(blockIds.get(blockIds.size() - 1), slot, src, srcOff);
+			int block;
+			if (slot == 0) {
+				block = pool.allocate();
+				blockIds.add(block);
+			} else {
+				block = writablePage(blockIds.size() - 1);
+			}
+			pool.writeToken(block, slot, src, srcOff);
 			seqLen++;
 			return;
 		}
-		int page = pos / pageSize;
-		int slot = pos % pageSize;
-		pool.writeToken(blockIds.get(page), slot, src, srcOff);
+		pool.writeToken(writablePage(pos / pageSize), pos % pageSize, src, srcOff);
 	}
 
 	/**
@@ -175,12 +215,13 @@ public final class KvPageTable {
 		int pageSize = pool.pageSize();
 		for (int dst = keep; dst + discard < seqLen; dst++) {
 			int src = dst + discard;
-			pool.copyToken(blockIds.get(src / pageSize), src % pageSize, blockIds.get(dst / pageSize), dst % pageSize);
+			int dstBlock = writablePage(dst / pageSize);
+			pool.copyToken(blockIds.get(src / pageSize), src % pageSize, dstBlock, dst % pageSize);
 		}
 		truncate(seqLen - discard);
 	}
 
-	/** Keep positions {@code [0, len)} and return every page past them to the pool. */
+	/** Keep positions {@code [0, len)} and drop this table's hold on every page past them. */
 	public void truncate(int len) {
 		if (len < 0 || len > seqLen)
 			throw new IllegalArgumentException("len " + len + " outside [0, " + seqLen + "]");
@@ -190,7 +231,7 @@ public final class KvPageTable {
 		seqLen = len;
 	}
 
-	/** Free all pages back to the pool and reset. */
+	/** Drop this table's hold on every page (a page returns to the pool with its last holder) and reset. */
 	public void release() {
 		for (int id : blockIds)
 			pool.free(id);

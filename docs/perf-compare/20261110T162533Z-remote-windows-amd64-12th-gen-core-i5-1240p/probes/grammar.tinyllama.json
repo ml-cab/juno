@@ -1,0 +1,66 @@
+{
+  "id" : "grammar.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "CLI: an unsupported JSON Schema keyword fails closed",
+    "passed" : true,
+    "detail" : "exit 1"
+  }, {
+    "name" : "CLI: --grammar-file and --json-schema-file together fail closed",
+    "passed" : true,
+    "detail" : "exit 1"
+  }, {
+    "name" : "OpenAI: json_schema answer is parseable JSON with a boolean ok",
+    "passed" : true,
+    "detail" : "HTTP 200: {\n  \"ok\": true}"
+  }, {
+    "name" : "OpenAI: json_object answer is a parseable JSON object",
+    "passed" : true,
+    "detail" : "HTTP 200: {\n  \"booleaan\": true,\n  \"ok\": true,\n  \"message\": \"Successfully retrieved data from the API.\"}"
+  }, {
+    "name" : "OpenAI: x_juno_grammar answers yes or no",
+    "passed" : true,
+    "detail" : "HTTP 200: yes"
+  }, {
+    "name" : "OpenAI: x_juno_grammar with response_format is HTTP 400 naming x_juno_grammar",
+    "passed" : true,
+    "detail" : "HTTP 400: {\"error\":{\"message\":\"x_juno_grammar cannot be combined with response_format.type=json_object\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request\"}}"
+  }, {
+    "name" : "OpenAI: an unsupported JSON Schema keyword is HTTP 400 naming it",
+    "passed" : true,
+    "detail" : "HTTP 400: {\"error\":{\"message\":\"unsupported JSON Schema keyword 'pattern'\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request\"}}"
+  }, {
+    "name" : "JFR: at least 3 constrained requests, response_format server",
+    "passed" : true,
+    "detail" : "3 events in 1 recordings"
+  }, {
+    "name" : "--grammar-file: an unconstrained request answers yes or no",
+    "passed" : true,
+    "detail" : "HTTP 200: yes"
+  }, {
+    "name" : "JFR: at least 1 constrained request, --grammar-file server",
+    "passed" : true,
+    "detail" : "1 events in 1 recordings"
+  }, {
+    "name" : "--json-schema-file: an unconstrained request is parseable JSON with a boolean ok",
+    "passed" : true,
+    "detail" : "HTTP 200: {\n  \"ok\": true}"
+  }, {
+    "name" : "JFR: at least 1 constrained request, --json-schema-file server",
+    "passed" : true,
+    "detail" : "1 events in 1 recordings"
+  }, {
+    "name" : "LoRA overlay with 2 parallel: both json_schema answers parseable",
+    "passed" : true,
+    "detail" : "HTTP 200: {\n  \"ok\": true} / HTTP 200: {\n  \"ok\": true}"
+  }, {
+    "name" : "JFR: at least 2 constrained requests, LoRA overlay with 2 parallel",
+    "passed" : true,
+    "detail" : "2 events in 1 recordings"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "loraLogMentionsOverlay" : true
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "schemaVersion" : 1,
+  "suite" : "quick",
+  "selected" : [ "env", "calibration", "cpu.kernel-width", "cpu.live.tinyllama", "cpu.throughput.tinyllama.128", "cpu.throughput.tinyllama.512", "consistency.tinyllama", "grammar.tinyllama", "long-prompt.tinyllama", "cpu.hot-path.tinyllama-1.1b", "quality.tinyllama-1.1b", "launcher.tinyllama" ],
+  "done" : [ {
+    "id" : "calibration",
+    "status" : "DONE",
+    "wallMillis" : 9406,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.03174933271168827,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "env",
+    "status" : "DONE",
+    "wallMillis" : 512,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.0,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.kernel-width",
+    "status" : "NOISY",
+    "wallMillis" : 333119,
+    "attempts" : 3,
+    "note" : "attempt 1 re-run: Q4_K 14336x4096 threads 1 256-bit spread 18% > 15%; other processes used 8% of the CPU. attempt 2 re-run: other processes used 9% of the CPU. still: Q4_K 14336x4096 threads 16 256-bit spread 16% > 15%; Q6_K 4096x14336 threads 1 128-bit spread 19% > 15%; other processes used 16% of the CPU",
+    "otherCpuShare" : 0.15784962507349856,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.live.tinyllama",
+    "status" : "FAIL",
+    "wallMillis" : 188243,
+    "attempts" : 1,
+    "note" : "failed: 8. tensor-parallel greedy determinism",
+    "otherCpuShare" : 0.08386317737516041,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.tinyllama.128",
+    "status" : "DONE",
+    "wallMillis" : 44705,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.03771699097112686,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.throughput.tinyllama.512",
+    "status" : "DONE",
+    "wallMillis" : 88994,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.03811317567755229,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "consistency.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 77529,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.040488403241809225,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "grammar.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 76838,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.03242683058459904,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "long-prompt.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 440819,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.040846593077070295,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "cpu.hot-path.tinyllama-1.1b",
+    "status" : "PASS",
+    "wallMillis" : 75218,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.031216945193559647,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "quality.tinyllama-1.1b",
+    "status" : "PASS",
+    "wallMillis" : 296601,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.03592732270319098,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  }, {
+    "id" : "launcher.tinyllama",
+    "status" : "PASS",
+    "wallMillis" : 14686,
+    "attempts" : 1,
+    "note" : "",
+    "otherCpuShare" : 0.05656556095226677,
+    "ownGpuPeakMiB" : 0,
+    "gpuBusy" : false
+  } ],
+  "args" : [ "--suite", "quick", "--yes" ],
+  "startedUtc" : "20261110T013914Z"
+}

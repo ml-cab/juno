@@ -563,7 +563,9 @@ A file that declares no window computes exactly what it did before.
   2047` carries it. Over a 3,000-token text, teacher-forced NLL past position 2,047 reads 2.63 with the
   window and 10.5 without it, on the CPU and on CUDA alike; before position 2,047 the two are identical.
   Some conversions of the same model omit the key, and Juno then applies no window: past 2,047 tokens such
-  a file computes the no-window reading above. `./juno gguf-info` shows whether a file declares it.
+  a file computes the no-window reading above. `./juno gguf-info` shows whether a file declares it. A
+  `phi3` file with a 4,096-token context and no window key is named in a warning at load, on every surface
+  that loads it; Juno still applies no window to it, since it does not infer one.
 - **Every path.** CPU and CUDA attention (prefill, single-token decode, `--parallel` multi-stream decode,
   the device-resident decode and prefill regions), dense and paged KV (`--schedule static` and
   `continuous`), every handler family, `--lora-play`, and LoRA training, whose backward pass gives the

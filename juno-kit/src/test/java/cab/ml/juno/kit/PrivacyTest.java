@@ -81,6 +81,34 @@ class PrivacyTest {
 		assertThat(linux.scrub("inet addr:192.168.1.23  Bcast:192.168.1.255")).startsWith("inet addr:<ip>");
 	}
 
+	/**
+	 * A JVM error file lists environment variables, and {@code JAVA_TOOL_OPTIONS} or {@code _JAVA_OPTIONS} can hold
+	 * a proxy password. The block is left out; the rest of the file is scrubbed as usual and kept.
+	 */
+	@Test
+	void aJvmErrorFilesEnvironmentBlockIsLeftOut() {
+		String in = """
+				Command Line: -Xmx4g -XX:ErrorFile=C:\\Users\\Bob\\juno\\nodes\\hs_err_pid%p.log cab.ml.juno.node.NodeMain
+				Host: Intel(R) Core(TM) i5-1240P, 16 cores, 15G,  Windows 10 , 64 bit Build 19041
+
+				Environment Variables:
+				JAVA_TOOL_OPTIONS=-Dhttp.proxyPassword=s3cret
+				PATH=C:\\Users\\Bob\\.jdks\\jdk-25\\bin;C:\\Windows\\system32
+				USERNAME=Bob
+				PROCESSOR_IDENTIFIER=Intel64 Family 6 Model 154 Stepping 3, GenuineIntel
+
+				---------------  S Y S T E M  ---------------
+				Memory: 4k page, system-wide physical 16108M (1210M free)
+				""";
+		String out = windows.scrub(in);
+		assertThat(out).doesNotContain("s3cret", "PROCESSOR_IDENTIFIER", "USERNAME", "Bob");
+		assertThat(out).contains("-XX:ErrorFile=<home>\\juno\\nodes\\hs_err_pid%p.log",
+				"Host: Intel(R) Core(TM) i5-1240P", "Environment Variables: (left out by the kit)\n\n",
+				"---------------  S Y S T E M  ---------------", "system-wide physical 16108M (1210M free)");
+		assertThat(windows.scrub(in.replace("\n", "\r\n"))).doesNotContain("s3cret", "PROCESSOR_IDENTIFIER")
+				.contains("S Y S T E M");
+	}
+
 	@Test
 	void aShortUserNameIsReplacedInPathsOnlyNotInsideOrdinaryWords() {
 		KitBootstrap.Privacy shortName = new KitBootstrap.Privacy("al", "/home/al", List.of("box1"));

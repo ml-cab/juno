@@ -52,6 +52,16 @@ gate is measured on Tier 02H's batched region.
      about 130 sessions and Qwen2.5-3B about 60 by memory, so the scheduler binds; Mistral 7B about 9
      and Phi-3.5-mini about 5 at FP16, about 17 and 10 with Tier 03's `q8_0` device KV. The thresholds
      below are set inside those figures.
+   - *Candidate, added 2026-11-10 by owner decision (Tier 03 decision 1, option (d)): a paged device KV.* Tier 03's
+     block-table attention reads the host KV pages; on a GPU run each request keeps its own dense device copy
+     (`DeviceKvCache`), which grows by doubling from 64 positions and is never shared, so sessions that share a prompt
+     prefix (Tier 03 item 2) each hold that prefix on the card. A device page pool with a block table read by the
+     GPU attention kernels would share it and remove the doubling slack. Take it only if this tier's capacity sweep or
+     admission work shows the device KV binds where these two cheaper levers do not: allocating each request's device
+     copy once at its admitted size (prompt plus `max_tokens`, which admission already computes), and Tier 03 item 7's
+     quantized device KV. Taking it means its own scope text, a device-memory threshold, kit probes and the
+     out-of-pages policy, which is this item's admission rule. Tier 03 item 7 computes every device KV address in one
+     place so that this change stays local to that place and the tables the host passes.
 3. Re-run the exact multi-session throughput benchmark that produced the 0.86x finding
    (`docs/performance.md:177`) after every other change in this tier lands, as the tier's go/no-go
    checkpoint — continuous must beat static before this tier is called complete, or the tier

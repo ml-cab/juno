@@ -1,0 +1,28 @@
+[ {
+  "id" : "gpu.live.tinyllama",
+  "reason" : "CUDA: Juno found no usable NVIDIA GPU"
+}, {
+  "id" : "gpu.throughput.tinyllama.512",
+  "reason" : "GPU: Juno found no usable NVIDIA or AMD GPU"
+}, {
+  "id" : "gpu.throughput.tinyllama.2048",
+  "reason" : "GPU: Juno found no usable NVIDIA or AMD GPU"
+}, {
+  "id" : "gpu.residency.tinyllama",
+  "reason" : "CUDA: Juno found no usable NVIDIA GPU"
+}, {
+  "id" : "gpu.packed-kquant.tinyllama.static",
+  "reason" : "CUDA: Juno found no usable NVIDIA GPU"
+}, {
+  "id" : "gpu.packed-kquant.tinyllama.continuous",
+  "reason" : "CUDA: Juno found no usable NVIDIA GPU"
+}, {
+  "id" : "gpu.kernel-timing",
+  "reason" : "CUDA: Juno found no usable NVIDIA GPU"
+}, {
+  "id" : "gpu.consistency.tinyllama",
+  "reason" : "GPU: Juno found no usable NVIDIA or AMD GPU"
+}, {
+  "id" : "gpu.long-prompt.tinyllama",
+  "reason" : "GPU: Juno found no usable NVIDIA or AMD GPU"
+} ]

@@ -57,6 +57,26 @@ class ProbeRunnerTest {
 				"model.qwen2.5-3b=/m/q.gguf", "model.tinyllama-1.1b=/m/t.gguf", "logDir=/run/p");
 	}
 
+	/**
+	 * A forked cluster node's stderr and a crashed JVM's error file would otherwise go nowhere the kit packs: the
+	 * harness discards node stderr, and HotSpot writes its error file to the working directory, the checkout.
+	 */
+	@Test
+	void aProbesNodesAndItsJvmWriteTheirErrorOutputIntoTheRunFolder(@TempDir Path runDir) throws Exception {
+		Path probes = runDir.resolve("probes");
+		ProcessBuilder pb = ProbeRunner.probeProcess(List.of("java"), probes.resolve("cpu.live.tinyllama.log"),
+				ProbeRunner.nodeLogDir(probes, "cpu.live.tinyllama"));
+		assertThat(pb.environment()).containsEntry(cab.ml.juno.player.ClusterHarness.NODE_LOG_DIR_ENV,
+				probes.resolve("cpu.live.tinyllama").resolve("nodes").toString());
+		assertThat(ProbeRunner.errorFileOption(probes, "cpu.live.tinyllama"))
+				.isEqualTo("-XX:ErrorFile=" + probes.resolve("cpu.live.tinyllama.hs_err_pid%p.log"));
+
+		new ProbeRunner(Map.of()).execute(probe("env", ProbeKind.READING, "EnvProbe", Map.of(), 120), runDir);
+		assertThat(Files.readString(probes.resolve("env.log")))
+				.contains(ProbeRunner.errorFileOption(probes, "env"))
+				.contains(cab.ml.juno.player.ClusterHarness.NODE_LOG_DIR_ENV + "=" + ProbeRunner.nodeLogDir(probes, "env"));
+	}
+
 	@Test
 	void aCrashIsRecordedAndDoesNotThrow(@TempDir Path runDir) throws Exception {
 		ProbeOutcome o = new ProbeRunner(Map.of())

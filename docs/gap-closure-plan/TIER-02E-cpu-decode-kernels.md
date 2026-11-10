@@ -223,7 +223,9 @@ Tier 04.
     the 256-bit Q4_K kernel read 1.16x to 1.27x the 128-bit kernel on one thread over three attempts, each marked NOISY
     for other programs' CPU use. A reading, not a score: a remote host scores a threshold only by an owner decision recorded
     here. The row stays `NEEDS-AVX2-HARDWARE`. Owner decision 2026-11-09, on this reading: `auto` stays at 128, so owner decision 4
-    stands (Tier 02F's record of that day).*
+    stands (Tier 02F's record of that day).* *2026-11-10: two more runs on the same host (`20261110T162530Z-...` and
+    `20261110T162533Z-remote-windows-amd64-12th-gen-core-i5-1240p/`) read the Q4_K one-thread ratio at 1.20x to 1.30x. All 36
+    ratios of the three runs read 1.14x to 1.30x. Recorded, not scored; the row and the owner decision stand.*
   - Every throughput number is a median of at least three runs with min/max published.
 
 ## Models needed

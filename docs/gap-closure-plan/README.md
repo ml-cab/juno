@@ -38,6 +38,14 @@ before acting on it — both documents are snapshots, not ground truth that stay
    executor work on this host, and Tier 03's work depends on neither. One ordering holds between them: Tier 02G's item 3 choice
    (bounded attention launches, its 2026-11-06 finding) is due before Tier 03's step 3, the block-table kernel, since both change
    how prefill attention is launched and how it reads the KV. Nothing else in this rule changes.
+   *Owner decisions 2026-11-10 (recorded in [Tier 03](TIER-03-kv-cache-maturity.md), [Tier 02G](TIER-02G-cuda-on-windows.md),
+   [Tier 02H](TIER-02H-batched-gpu-decode.md), [Tier 07](TIER-07-continuous-batching.md) and
+   [Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md)):* Tier 03's block-table attention is the CPU attention reading the host
+   KV pages; the GPU keeps its per-request dense device copy, and paging that copy is a candidate for Tier 07, taken only if
+   Tier 07's measurements need it. So Tier 03's step 3 no longer changes a GPU kernel, and the ordering above moves: Tier
+   02G's item 3 is decided, option (a) (bounded launches on every OS), and lands in Tier 03 before its step 6 (item 7, the
+   first step that changes how the GPU attention kernels read the KV), recorded there under rule 9. Its measurement against
+   the Windows watchdog stays in Tier 02G.
 2. **No surface left aside.** A tier is not complete until its change has been carried through
    every product surface it touches — see "Cross-surface compatibility checklist" below. If a
    surface can't reasonably support the new feature yet (e.g. continuous schedule doesn't support

@@ -13,6 +13,18 @@ Module dependency (excerpt):
         handlers dual-path via SessionKvLayout; manager may hold a shared
         PagedKvArena; adapter flushes dense or paged blobs; gather-tax gate
         PASS — see docs/performance.md / perf-compare/*-gather-tax.md).
+        KvBlockPool counts holders per page: allocate holds once, retain adds a
+        holder, free drops one and recycles the page with its last holder;
+        liveBlocks/allocatedBytes count distinct pages. A page with more than
+        one holder is read-only (writeToken/copyToken refuse it); exclusive(id)
+        returns the page itself to a sole holder, else a byte-for-byte copy,
+        dropping the caller's hold on the shared page (atomic under the pool
+        lock). KvPageTable.sharePrefix(len) starts a table holding this table's
+        first pages, no copy; every write (append into a partly filled page,
+        overwrite, compact's destination) goes through writablePage, so a table
+        writing into a shared page first takes its own copy (copy-on-write).
+        Nothing shares pages across sessions yet: PrefixCache wiring is the
+        cross-session sharing step.
         Dense host KV is reused across requests: SessionKvLayout.retireKLayers/retireVLayers
         hand an evicted request's dense layers to a DenseKvRecycler (one set per side, the
         larger capacity kept), and newKLayers/newVLayers take them before allocating; paged
@@ -656,6 +668,10 @@ GPU FFI (node module — Panama project, JEP 454):
         GqaAttentionKernel.launch. LoRA training's inline attention starts at the same first key, so
         attnW stays 0 outside the window and the backward pass sends those keys no gradient. KV storage
         is unchanged (every row kept). testOverride (tests only) forces a window on a real file.
+        A file that declares no window but has the shape of a model trained with one gets a
+        warning from forShard (UndeclaredWindowNotice: arch phi3, phi3.context_length 4096, no
+        phi3.attention.sliding_window key, the shape of Phi-3-mini-4k, trained with 2047), and still
+        no window; a declared key at any width, 0 included, gets none.
   DeviceKvCache — device-resident FP16 KV mirror kept alongside the host SessionKvTensor
         (dual-write); grow-and-preserve via D2D copy; lifecycle tied to
         LlamaTransformerHandler.evict(). CUDA only. appendToken writes one row (decode);

@@ -75,6 +75,10 @@ once per layer. Static `--parallel 8` then reads above `--parallel 1` on the GPU
 
 - The continuous scheduler's policy (token budget, admission, concurrency ceiling): Tier 07.
 - The device KV layout (block table, quantized device KV): Tier 03, which carries this region through it.
+  *(2026-11-10, owner decision recorded in [Tier 03](TIER-03-kv-cache-maturity.md): Tier 03's block-table read is the CPU
+  attention's, over the host pages, so this region's device KV stays a dense copy per request; Tier 03 carries it through item
+  7's quantized device KV only. A paged device KV is a candidate in [Tier 07](TIER-07-continuous-batching.md). The same holds
+  for "the block-table read path" in "Why after Tier 02G and before Tier 03" above.)*
 - Prefill: the prefill window is already in the region.
 - ROCm kernels beyond what `GpuBindings` already dispatches: verified through the kit on AMD hardware
   (NEEDS-AMD-HARDWARE on this host).

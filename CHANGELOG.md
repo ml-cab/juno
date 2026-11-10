@@ -1,5 +1,27 @@
 ## Status 
 
+**Session 139** - A warning for Phi-3 files without their window, and KV pages that can be shared
+
+- **A `phi3` file with a 4,096-token context and no `phi3.attention.sliding_window` key is named in a warning at load**, on
+  every surface that loads it. Phi-3-mini-4k was trained with a 2,047-token window, and a conversion that omits the key runs
+  without it, so its output degrades past 2,047 tokens with nothing else saying so. Juno still applies no window to such a
+  file: it does not infer one.
+- **The paged KV pool counts the holders of each page, and a page table can start from another table's prefix without
+  copying it.** A page held twice is read-only; a table that writes into one first takes a copy of its own, so neither
+  table sees the other's later rows. This is groundwork for sharing a prompt prefix across sessions; nothing shares pages
+  yet, so apart from the warning no runtime behaviour changed.
+
+**Session 138** - An oracle for paged KV attention
+
+- **Attention over paged KV is now held, bit for bit, to attention over dense KV holding the same rows.** At the attention
+  level, every CPU form (single decode, decode batch, prefill window with and without the vector head) is checked over shared,
+  recycled and partly filled pages, both cache types, several head shapes and windows, every context length, and after a context
+  shift. At the handler level, the continuous schedule's logits equal the static schedule's on LLaMA, Phi-3, Phi-2, Qwen3,
+  Qwen3-MoE and the three handlers `--lora-play` serves on, through prefill, chunked prefill, decode across a page boundary and a
+  decode batch. Both were shown failing on a deliberately misread page.
+- New tests: `PagedKvAttentionOracleTest`, `PagedKvHandlerOracleTest`, with random-weight synthetic models
+  (`RandomWeightGgufs`) so a test's logits depend on what attention reads. No runtime behaviour changed.
+
 **Session 137** - Sliding-window attention validated on a model trained with a window
 
 - **Phi-3-mini-4k's 2,047-token window is applied where the model expects it.** On a GGUF conversion that declares

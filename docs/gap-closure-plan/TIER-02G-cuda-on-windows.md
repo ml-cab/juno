@@ -75,6 +75,12 @@ message.
    - Check Windows' free-memory accounting against `--gpu-layers auto`, the prefill reserve and the
      device-wide free-memory tests. Each is made correct on Windows, or documented with a fail-closed
      limit.
+
+   *(2026-11-10, owner decision: option (a) of the 2026-11-06 finding. Every launch's work is bounded on every OS: a prefill
+   window's attention splits into launches whose rows times keys stay under a budget, and the GEMM into launches of at most so
+   many rows, with `gpu.kernel-timing` extended to the longest window the device holds. It lands in
+   [Tier 03](TIER-03-kv-cache-maturity.md) before that tier's step 6, recorded there under README rule 9; the timing against
+   the watchdog on Windows stays here. See the 2026-11-10 entry.)*
 4. **The rest of Juno on Windows**, as the kit's CPU suites find it. Following README rule 8, the audit is
    repo-wide:
    - file paths, and file locking on open model files;
@@ -216,7 +222,7 @@ exercise the CUDA 13.x layout; it is welcome, not required.
       measured number.
 - [ ] Watchdog, launch overhead and free-memory behaviour recorded; each device-wide test is correct on
       Windows or fails closed with a stated limit.
-- [ ] `juno.bat` and `scripts/run.bat` are at parity with `run.sh`, with no `[DBG]` output and no registry
+- [x] `juno.bat` and `scripts/run.bat` are at parity with `run.sh`, with no `[DBG]` output and no registry
       write.
       *(2026-11-07: holds as read, by `LauncherParityTest` and `WindowsLauncherScriptTest` (execution record of that day,
       item 5). Owed: the launcher probe on Windows.)*
@@ -225,6 +231,10 @@ exercise the CUDA 13.x layout; it is welcome, not required.
       and `LauncherParityTest` reads flag text, so it passed. Fixed, with `WindowsLauncherScriptTest`'s glued-comparison check.
       The same run passed the other three Windows launcher checks (LoRA grammar warning, no `[DBG]`, registry untouched).
       Owed: the probe's re-run on Windows, for local mode's request and clean exit. See Tier 02F's record of that day.)*
+      *(2026-11-10: met. The launcher probe passed 5 of 5 in both of the tester's Windows re-runs, at `f234e90c` (the same code as
+      `e16748ad`). `juno.bat local --api-port` with `--temperature 0` answered a chat request and exited with code 0, leaving none
+      of its processes running. It printed no `[DBG]` line, and `HKCU\Console`'s last-write time was unchanged. See Tier 02F's
+      record of that day.)*
 - [ ] ROCm on Windows and CUDA on macOS fail closed, tested.
 - [ ] Every Linux-only assumption reachable on Windows is fixed or fails closed (repo-wide, README rule 8).
       *(2026-11-07: the repo-wide audit as far as this host reads it is recorded, with five fixes (execution record of that
@@ -233,12 +243,15 @@ exercise the CUDA 13.x layout; it is welcome, not required.
       the machine's code page, which stopped the kit's packing. Both fixed. It also confirmed that a checkout without
       `.gitattributes` writes CR LF text: its quality reading equals this host's CR LF reading to all 16 digits. Still owed:
       the `cpu` and `all` suites, which `quick` does not cover.)*
-- [ ] Kit probes for this tier's behaviour are added: the kernel-timing probe, and the launcher probe on
+- [x] Kit probes for this tier's behaviour are added: the kernel-timing probe, and the launcher probe on
       Windows.
       *(2026-11-06: both added and run on Linux (`docs/perf-compare/20261106T045718Z-gpu-kernel-timing/`; the launcher's
       `[DBG]` check passes on `juno`). Owed: the launcher probe's Windows checks have run nowhere; ticked when a Windows
       run shows them, which on the current `juno.bat` should fail both (its 21 `[DBG]` lines and the `reg add`) until
       item 5's edits land.)*
+      *(2026-11-10: met. A Windows run shows the launcher probe's checks: all five passed in both of a tester's re-runs
+      (`docs/perf-compare/20261110T162530Z-...` and `20261110T162533Z-remote-windows-amd64-12th-gen-core-i5-1240p/`). The
+      kernel-timing probe needs an NVIDIA GPU and has run on Linux. Its Windows reading belongs to item 3's watchdog row.)*
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Docs (the `docs/howto.md` Windows section, `README.md`, `docs/agent-arch.txt`) updated, in
       Juno-native language only; `CHANGELOG.md` entry added.
@@ -767,3 +780,30 @@ execution rule 1: [Tier 03](TIER-03-kv-cache-maturity.md) begins while this tier
 - When this tier resumes, its standing gate names which build is its pre-tier jar if Tier 03's work is in the tree by then. Its
   pre-tier kit record at `80ec949e` is unaffected.
 - Nothing else here changes.
+
+### 2026-11-10: item 3 decided (owner decision); it lands in Tier 03
+
+**Owner decision 2026-11-10: option (a)** of the 2026-11-06 finding: bound every launch's work on every OS. Recorded with Tier
+03's decision 1 (option (d)), which makes Tier 03's block-table attention the CPU attention's read of the host pages, so Tier
+03's step 3 changes no GPU kernel.
+- The split (prefill attention in launches whose rows times keys stay under a budget, the GEMM in launches of bounded rows) lands
+  in [Tier 03](TIER-03-kv-cache-maturity.md) before its step 6, item 7, the first step that changes how the GPU attention
+  kernels read the KV. It is recorded there under README execution rule 9, with `gpu.kernel-timing` extended to the longest
+  window and the standing throughput gate applied to it.
+- This tier keeps the Windows half of item 3: the longest single kernel timed against the watchdog on Windows, launch overhead,
+  and the free-memory accounting. Those wait on the Windows runs, as before.
+- The 2026-11-09 note above ("due before Tier 03's step 3") is superseded: the choice is made, and the work is due before Tier
+  03's step 6. README execution rule 1 carries the same note.
+- Nothing else here changes.
+
+### 2026-11-10: the launcher on Windows, from a tester's re-runs (recorded in Tier 02F)
+
+A tester ran the kit's `quick` suite twice on Windows 10 at `f234e90c`, whose code is `e16748ad`'s, after the 2026-11-09
+`run.bat` fix. The launcher probe passed 5 of 5 in both runs. [Tier 02F](TIER-02F-hardware-validation-kit.md)'s record of
+this date has the details.
+- Two criteria are ticked, with dated notes: launcher parity (`juno.bat local` answered and exited cleanly; no `[DBG]` line; the
+  registry untouched) and the kit-probe criterion, whose launcher half waited for a Windows run.
+- The same runs found one failure on a three-node tensor-parallel cluster on the CPU (Tier 02F's finding 1). It concerns item 4
+  (the rest of Juno on Windows) only if its cause turns out to be Windows-specific. Nothing is recorded against an item here
+  until that cause is known.
+- **Exit criteria:** 2 of 10. Steps 2 and 3 are still the owner's.

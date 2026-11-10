@@ -3,7 +3,13 @@
 Status: in progress (begun 2026-11-09 by owner decision while Tiers 02F and 02G stay open; README execution rule 1). Step 0
 done 2026-11-09: on `Phi-3.1-mini-4k-instruct-Q4_K_M.gguf` (window 2047, every layer) the KV oracle passes at 3,000 tokens on
 CPU and CUDA under both schedules, and teacher-forced NLL past position 2047 reads 2.634 with the window against 10.529 without
-it (CPU; CUDA 2.634 against 10.524). Exit criterion 1 ticked (1 of 15). Next: step 1, the gather-based attention oracle tests.
+it (CPU; CUDA 2.634 against 10.524). Exit criterion 1 ticked (1 of 15). Step 1 done 2026-11-10 (tests only): the gather oracle,
+kernel level (`PagedKvAttentionOracleTest`) and handler level on all 8 handler classes that read host KV
+(`PagedKvHandlerOracleTest`), bit for bit, shown failing on deliberate gather defects. Owner decisions 2026-11-10: item 1's
+block-table read is the CPU attention's, the GPU's per-request copy staying dense (paging it is a Tier 07 candidate); step 0's
+Phi-3 question, option 2 (a load-time warning, done); Tier 02G's item 3, option (a), landing here before step 6. Step 2 done
+2026-11-10: `KvBlockPool` counts holders per page, `KvPageTable.sharePrefix` shares pages with copy-on-write, unit-tested and
+shown failing on deliberate defects; no runtime behaviour changed. Next: step 3, the CPU attention reading the pages in place.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -43,7 +49,9 @@ ordering note both withdraw.)*
    gguf-info` before relying on it. *(2026-11-09, step 0: one does, `bartowski/Phi-3.1-mini-4k-instruct-GGUF`'s Q4_K_M, window
    2047, read from its header; three other conversions do not. See the execution record. `./juno gguf-info` confirms it once the
    file is on disk.)* *(2026-11-09, later: on disk, `gguf-info` confirms it, and the validation below passes on CPU and CUDA; see
-   the execution record.)* At the start of this tier, ask the owner for the file (README rule 3,
+   the execution record.)* *(2026-11-10, owner decision on step 0's question, option 2: a `phi3` file with a 4096-token context
+   and no window key is named in a warning at load, and still gets no window; done, see the execution record.)* At the start of
+   this tier, ask the owner for the file (README rule 3,
    [`INVENTORY.md`](INVENTORY.md)). If it declares the window, run `SlidingWindowLiveCheck` on it at a
    3,000-token prompt on CPU and GPU, both schedules, and add a teacher-forced NLL comparison over a
    3,000-token text with the window on against off: the windowed run must read **lower** NLL past token
@@ -56,6 +64,15 @@ ordering note both withdraw.)*
    Tier 02's tiling isn't ready" — under execution rule 1 that state cannot exist, since Tier 02's
    exit criteria require the tiled kernel before this tier starts. If Tier 02 ended partial-complete,
    that is an escalation, not a fallback path to take quietly.)
+   *(2026-11-10, step 1: drift, raised with the owner. Tier 02's tiled kernel reads `DeviceKvCache`, a dense per-request FP16
+   device copy, never `KvPageTable`'s pages, which are Java heap arrays; the gather tax is the host copy before CPU attention.)*
+   *(Corrected 2026-11-10 by owner decision, option (d) of that entry's decision 1: the block-table read is the **CPU**
+   attention's. Every CPU attention call site (single decode, decode batch, prefill window and its fallback, in every handler
+   that reads host KV, the LoRA handlers included) reads K and V rows through `KvPageTable` in place, `F16` rows from the page
+   bytes and `Q8_0` rows decoded inside the attention loop, so `needsAttentionScratch()` is `false` for both types and the
+   prefill window's per-row gather goes with it. The oracle is step 1's (`PagedKvAttentionOracleTest`,
+   `PagedKvHandlerOracleTest`). The GPU keeps its per-request dense device copy, which item 7 quantizes; paging it is out of
+   scope here and a candidate in [Tier 07](TIER-07-continuous-batching.md).)*
 2. **Cross-session prefix sharing**: allow `PrefixCache`'s trie to be consulted and populated across
    sessions when the leading tokens genuinely match, with correct reference counting so that KV
    pages backing a shared prefix are not freed while any session still references them (this is the
@@ -105,6 +122,13 @@ ordering note both withdraw.)*
    size, and Tier 07 item 2's admission budget reads the same figure. A handler or backend whose attention
    kernel does not read the quantized layout keeps FP16 and says so at startup, never silently. ROCm has no
    GPU attention kernel until Tier 10, so it is N/A there.
+   *(2026-11-10, owner decisions: item 1 no longer has a GPU kernel, so the kernels this item changes are the decode-width,
+   batched decode and tiled prefill reads of `DeviceKvCache`, and the kernels that write it. They compute every device KV address
+   in one place (request, row, then the element within the row), so that a paged device KV, if
+   [Tier 07](TIER-07-continuous-batching.md) takes that candidate, changes that place and the tables the host passes rather than
+   each kernel. Before this item, [Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3, option (a), lands here under README rule 9:
+   prefill attention and the tiled GEMM split into launches of bounded work, with `gpu.kernel-timing` extended to the longest
+   window the device holds.)*
 
 ### Out of scope
 
@@ -112,14 +136,17 @@ ordering note both withdraw.)*
 - Extending cross-session prefix sharing across cluster nodes (single-process only this tier;
   cluster-aware prefix sharing is a `continuous`+cluster question, deferred alongside Tier 07's
   cluster-fallback work if it's ever revisited).
+- Paging the GPU's KV copy *(added 2026-11-10, owner decision 1 (d))*. `DeviceKvCache` stays one dense copy per request,
+  so sessions sharing a prefix through item 2 share host pages and skip that prefill, but each keeps its own device rows. A
+  device page pool is a candidate in [Tier 07](TIER-07-continuous-batching.md) item 2, taken only if its measurements need it.
 
 ## Cross-surface compatibility checklist
 
 | # | Surface | Notes |
 |---|---|---|
-| 1 | CPU inference | block-table attention and defrag must work without a GPU; only the *kernel* reading pages directly is GPU-specific, the page-table/refcounting logic is shared |
-| 2 | CUDA GPU inference | primary target for the block-table-aware kernel |
-| 3 | ROCm GPU inference | FAIL-CLOSED/NEEDS-AMD-HARDWARE for the kernel path; page-table refcounting/defrag/disk persistence are backend-agnostic and must work on ROCm too; item 7 is N/A (no ROCm attention kernel until Tier 10), and a quantized `--cache-type` on ROCm keeps the host-side meaning only, stated at startup |
+| 1 | CPU inference | block-table attention and defrag must work without a GPU. *(2026-11-10, owner decision 1 (d): the block-table read is the CPU attention's, so this is item 1's primary surface; the page-table and reference-counting logic is shared by every backend.)* |
+| 2 | CUDA GPU inference | *(Restated 2026-11-10, owner decision 1 (d); it read "primary target for the block-table-aware kernel".)* GPU attention keeps reading its per-request device copy; item 1 reaches CUDA runs on the layers and fallbacks that attend on the CPU (partial `--gpu-layers`, a failed device dispatch). Item 7 is CUDA's KV change. |
+| 3 | ROCm GPU inference | page-table refcounting/defrag/disk persistence are backend-agnostic and must work on ROCm too; item 1 applies as on the CPU, since ROCm attends on the CPU path *(2026-11-10, owner decision 1 (d); this read "FAIL-CLOSED/NEEDS-AMD-HARDWARE for the kernel path")*; item 7 is N/A (no ROCm attention kernel until Tier 10), and a quantized `--cache-type` on ROCm keeps the host-side meaning only, stated at startup |
 | 4 | Static schedule | cross-session sharing must respect `generateBatch()`'s existing (Tier-00-fixed) session gating — sharing is now allowed *safely*, not by removing the gate |
 | 5 | Continuous schedule | `ContinuousBatchEngine`'s slot admission/retirement must correctly increment/decrement shared-page refcounts |
 | 6 | Single-node local mode | primary dev/test surface, including session save/restore round-trip in a single process |
@@ -139,12 +166,14 @@ ordering note both withdraw.)*
 1. Write correctness tests for the current gather-based attention as the oracle.
 2. Add page refcounting to `KvBlockPool`/`KvPageTable`, unit-tested in isolation before touching
    the attention kernel.
-3. Build the block-table-aware kernel read path; validate against the oracle.
+3. Build the block-table-aware kernel read path; validate against the oracle. *(2026-11-10, owner decision 1 (d): the CPU
+   attention's read through the page table, on every call site; no GPU kernel changes in this step.)*
 4. Wire cross-session prefix sharing through `PrefixCache`, using the new refcounting so a page is
    only freed when its last referencing session evicts.
 5. Add defragmentation as a background/on-demand compaction pass over `KvBlockPool`.
 6. Add the Q4_0 KV codec, then item 7: the quantized device KV layout, the attention kernels' read
-   path for it, and its accounting in `DeviceScratchBudget`.
+   path for it, and its accounting in `DeviceScratchBudget`. *(2026-11-10, owner decisions: first, before the device layout
+   changes, [Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3, option (a), bounded launches, recorded under README rule 9.)*
 7. Add disk-backed session save/restore, scoped to explicit save/restore calls only.
 8. Run the full smoke matrix, with particular attention to the static-batch cross-session sharing
    case that Tier 00 deliberately did *not* fix by sharing (Tier 00 fixed it by gating; this tier
@@ -240,7 +269,8 @@ in `models/`.)*
       keeping the obligation. *(2026-11-09: validated on Phi-3-mini-4k, window 2047, CPU and CUDA, both
       schedules; see the execution record. Tier 08 keeps Gemma's patterned window.)*
 - [ ] Block-table attention kernel in place; `needsAttentionScratch()` false on every path, asserted by
-      unit test.
+      unit test. *(2026-11-10, owner decision 1 (d): the CPU attention's read through the page table on every call site, equal
+      to step 1's oracle; the GPU's device copy is out of scope.)*
 - [ ] Cross-session prefix sharing works safely (refcounted) for non-vision, non-LoRA-play sessions
       in both schedules.
 - [ ] Defragmentation reclaims fragmented pages without corrupting live sessions.
@@ -423,3 +453,246 @@ item 0 met the uniform-window half of the obligation; Gemma's patterned window s
 
 **Next for the executor:** step 1, the correctness tests for the current gather-based attention as the oracle, with option 2 first if the
 owner chooses it. [Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3 choice is still due before step 3.
+
+### 2026-11-10: step 1, the gather oracle (tests only); item 1's device half raised with the owner
+
+**Plan against code, verified at HEAD `9dda5f7d`** (the owner's commit of step 0, with `.gitattributes`). `check-plan-thresholds.sh`
+passed first (26 tier files). No gate, sweep or build was running. `git status`: `report1.qdstrm` deleted and `.github/` untracked,
+neither this session's. The owner's answer to step 0's decision (the Phi-3 startup notice) is not recorded anywhere yet; step 1 does
+not depend on it.
+- `PagedKvTensor.needsAttentionScratch()` returns `true`; `KvBlockPool` has `allocate` and `free` and no reference count;
+  `KvElementType` is `F16` and `Q8_0`. Unchanged since the first 2026-11-09 entry.
+- **Where the gather happens.** Every CPU attention call site reads host KV through `SessionKvTensor.viewForAttention(seqLen,
+  scratch)`. On paged KV that is `KvPageTable.gather`: whole pages copied out of the page bytes for `F16`, one row decoded at a
+  time for `Q8_0`. There are 18 K/V call-site pairs in 8 handler classes:
+  - `LlamaTransformerHandler` (LLaMA, Mistral, Qwen2): single decode, decode batch, prefill window, and the prefill window's
+    fallback when a device attention dispatch fails;
+  - `Phi3TransformerHandler`, `Qwen3TransformerHandler`: single decode, decode batch, prefill window (`Qwen3MoeTransformerHandler`
+    shares Qwen3's single-decode site and has a decode-batch site of its own);
+  - `Phi2TransformerHandler`: the same three;
+  - the LoRA handlers the loader returns whenever adapters are given, so `--lora-play` serves on them, on either schedule:
+    `LoraTrainableHandler` (decode and prefill window), `Phi3LoraTrainableHandler` and `Qwen3LoraTrainableHandler` (decode).
+- **The prefill window gathers once per row**: row `b` calls `viewForAttention(startPos + b + 1)`, so a `W`-row window over `S`
+  stored positions copies about `W * S` rows per layer for each of K and V. The gather-tax microbenchmark measures decode-shaped
+  calls only (one query per session). Noted for step 3's design; nothing here measures it.
+- **GPU attention never reads the pages.** The decode-width kernel and Tier 02's tiled prefill kernel read `DeviceKvCache`, a
+  per-request, per-layer, dense FP16 device copy that grows by doubling, written alongside the host KV. `KvPageTable`'s pages are
+  Java heap `byte[]` arrays. On a GPU run the host gather happens only where attention falls back to the CPU.
+
+**Drift: item 1 names a kernel that does not read the pages.** Item 1 says "extend the Tier 02 tiled attention kernel to read
+`KvPageTable`'s pages directly, removing `PagedKvTensor.needsAttentionScratch()`'s unconditional `true` and the gather tax". The
+gather tax is a host cost (the gap analysis §1.3 and the microbenchmark both measure the host copy before CPU attention), and the
+kernel item 1 names reads a separate device copy that is not paged. Removing the gather means the CPU attention reads rows through
+the page table. A block-table read on the device would need the device KV itself paged, which no item scopes. This changes step 3's
+scope, so it is the owner's decision (below); step 1 needs a CPU gather oracle under either reading, and the device side already has
+its oracle (`GqaAttentionKernelParityTest`, GPU attention against `GqaMath` over the same rows).
+
+**Tests added** (test scope only; no main code changed). Both are regression tests over code that exists: they passed on their first
+run, except for two defects in the tests themselves, found and fixed as described below.
+- `PagedKvAttentionOracleTest` (33 cases, kernel level). Over the same rows, a `PagedKvTensor`'s gathered view equals a
+  `DenseKvTensor`'s view, and every CPU attention form gives the same output bits over both: `GqaMath.attend` (decode),
+  `attendPooledAsSerial` (decode batch) and `attendPooled` with the scalar and the vector head (prefill window).
+  - Paged side laid out as a server lays it out: K and V pools shared with a neighbour session written in between, so a session's
+    pages are not consecutive blocks; pages recycled from a freed session, so a page's slots past the written length hold large
+    stale rows; page sizes 1, 3, 4 and 16, so the last page is often partly filled.
+  - Both cache types; shapes 4q/4kv/8 (no grouping), 8q/2kv/16 and 16q/2kv/32; windows 0, 1, 5 (starts mid-page) and 64; every
+    context length from 1 to 37 read as a prefix of the stored rows, as the prefill window reads them.
+  - The same after a context shift with a rejected draft dropped (and generation continued past another page boundary), and with a
+    first write at position 7 (zero rows before it on both sides).
+  - One check that the inputs can see a wrong page: a page read twice in place of another changes the output, and so does a swap of
+    two pages under a window, while a swap before the window does not.
+- `PagedKvHandlerOracleTest` (18 cases, handler level). The continuous schedule's paged KV gives the static schedule's dense-KV logits
+  bit for bit, at `f16` and `q8_0`, on 9 families: LLaMA (the test instance, and again with a 5-token window on every layer),
+  Phi-3, Phi-2, Qwen3, Qwen3-MoE, and the three LoRA handlers (LLaMA, Phi-3, Qwen3, loaded with an adapter set as `--lora-play`
+  loads them). Pages of 4 tokens. Each family runs ten steps: an 11-token prefill window (3 pages, the last partly filled); a 5-token
+  one; an 11-token prompt prefilled in two chunks of 6 and 5, so the second chunk attends over pages the first wrote; two single
+  decodes crossing the page boundary at 12; a decode batch of three requests at lengths 13, 5 and 11; and an 11-token prompt with
+  the first prompt's last token and a different context. The CPU oracle reaches 17 of the 18 call-site pairs; the 18th, LLaMA's
+  prefill fallback after a failed device dispatch, runs only on a GPU.
+  - Before comparing, it checks that the model's logits depend on the context: the first and last prompts end on the same token
+    at the same position, and their logits must differ by more than 1e-4. That check exists because of the second defect below.
+- `RandomWeightGgufs`: synthetic LLaMA, Phi-3, Phi-2 and Qwen3-MoE GGUF files with random F32 weights (Gaussian, standard
+  deviation 0.05; norm weights 1), in the tensor layouts the zero-weight builders use. Qwen3 uses the existing random builder in
+  `Qwen3LoraTrainableHandlerTest`.
+
+**Defects in the tests, found while writing them.**
+1. The first version of the wrong-page check swapped the first two pages with no window and expected a different output; it read
+   5.96e-8. Attention with no window is a sum over (key, value) pairs and does not see their order, so a swap is invisible there.
+   The check now uses a page read twice (visible without a window) and keeps the swap under a window.
+2. The first version of the handler oracle used the existing synthetic files for Phi-3, Phi-2, Qwen3 and Qwen3-MoE, whose weights
+   are all zero, so their logits are the same whatever attention reads. A deliberate defect (below) passed on those four. They now
+   load random-weight files, and the context check above fails any model whose logits ignore attention.
+
+**Shown able to fail.** Two deliberate defects were put into `KvPageTable.gather` one at a time, each test class run against it, and
+the line restored (`git diff -- kvcache/` empty after each):
+
+| Defect | Kernel level (33) | Handler level |
+|---|---|---|
+| `F16` bulk copy reads the partly filled last page from page 0 | 11 fail: every `F16` case with pages of 3, 4 or 16 tokens, except the zero-row case at 16, whose 16 rows fill one page | 6 of 12 fail: every family at `f16` (run before the LoRA families were added; Phi-3, Phi-2, Qwen3 and Qwen3-MoE passed until they had random weights) |
+| `Q8_0` row loop reads the partly filled last page from page 0 | 11 fail: the same cases at `q8_0` | 6 of 12 fail: every family at `q8_0` |
+| Both at once | not run | 18 of 18 fail, the three LoRA families included |
+
+**Tests run.**
+- `PagedKvAttentionOracleTest`: 33 run, 33 pass. `PagedKvHandlerOracleTest`: 18 run, 18 pass (`mvn test -pl node -am -Dtest=...`).
+- `mvn test -pl node -am` (every test of `api`, `registry`, `lora`, `kvcache`, `health` and `node`, the GPU groups on the GTX 1080;
+  48 min, with the oracle classes as they stood before the LoRA families): `registry` 93, `lora` 116, `kvcache` 105 and `health`
+  23 pass (`api` has none); `node` 1,363 run, **1 failure**, 0 errors, 55 skipped.
+  - The failure: `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`, 92,995,584 bytes reported free with
+    the device full against <= 67,108,864. Re-run alone three times: 91,488,256, 91,488,256 and 91,422,720. This is the device-wide
+    reading [Tier 02G](TIER-02G-cuda-on-windows.md)'s 2026-11-07 entry records (80 to 87 MiB on that tree and on a clean build of
+    `d8012b11` alike; the driver's holdback moves with the desktop's GPU state). This change adds test classes only and does not
+    touch the class or anything it runs. The bound is not loosened.
+- After the LoRA families were added, on the restored `KvPageTable`: `PagedKvAttentionOracleTest` 33 of 33,
+  `PagedKvHandlerOracleTest` 18 of 18, `LlamaTransformerHandlerScheduleParityTest` 1 of 1, `LlamaTransformerHandlerSlidingWindowTest`
+  7 of 7, `KvPageTableTest` 3 of 3, `PagedKvTensorTest` 3 of 3.
+- `check-plan-thresholds.sh`: ok.
+
+**Kit probes.** None added: step 1 adds no feature, flag or threshold. The oracle runs in `mvn test`, which the `cpu.unit-tests` probe
+runs.
+
+**Out-of-tier changes:** none.
+
+**Exit criteria:** 1 of 15, unchanged. Step 1 is the oracle exit criterion 2 is scored against.
+
+**Decisions for the owner.**
+1. **Item 1: which attention reads the block table** (new, above).
+   - (a) **Recommended:** the CPU attention reads K and V rows through the page table on all 18 call-site pairs (`F16` rows straight
+     from the page bytes, `Q8_0` rows decoded in the attention loop), so `PagedKvTensor.needsAttentionScratch()` is `false` for both
+     types, and the prefill window's per-row gather goes with it. The GPU keeps its per-request dense device copy, which item 7
+     quantizes. The gate stays as written: `paged_vs_dense%` is a host measurement. Item 1's text is corrected to say so, and the
+     device copy staying per request is stated under "Out of scope".
+   - (b) The same, and the device KV paged as well: a device page pool with a block table that the decode-width and tiled prefill
+     kernels read. That is a new device allocator, both attention kernels changed, and it meets item 7's quantized layout and Tier
+     02G's item 3 (bounded attention launches) in the same kernels. It needs its own scope item, thresholds and kit probes.
+   - (c) Keep item 1's wording. Not recommended: it reads as (b) but scores as (a).
+2. **The Phi-3 startup notice** (step 0's decision, 2026-11-09): still open. Recommendation unchanged, option 2.
+3. **[Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3 choice** is still due before step 3.
+
+**Owed to the owner:** the decisions above. Nothing to run.
+
+**Next for the executor:** step 2, page reference counting in `KvBlockPool`/`KvPageTable`, unit-tested in isolation. It depends on none
+of the decisions above. Step 3 waits on decisions 1 and 3.
+
+### 2026-11-10, later: owner decisions; the Phi-3 warning; step 2, page reference counting
+
+**Owner decisions 2026-11-10**, on the three put in the entry above:
+1. **Item 1: option (d).** The block-table read is the CPU attention's, on every call site; the GPU keeps its per-request
+   dense device copy. Paging that copy is a candidate in [Tier 07](TIER-07-continuous-batching.md) item 2, taken only if
+   Tier 07's measurements need it, with item 7 computing every device KV address in one place so that change stays local.
+   Recorded in item 1, item 7, "Out of scope", cross-surface rows 1 to 3, steps 3 and 6 and exit criterion 2 (each with a
+   dated note), and out of tier (README rule 9) in README execution rule 1, [Tier 02H](TIER-02H-batched-gpu-decode.md)'s
+   "Out of scope", [Tier 07](TIER-07-continuous-batching.md) item 2 and [Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md)'s
+   "Why this tier", whose text assumed a device block table. Gate unchanged: `paged_vs_dense%` is a host reading.
+2. **Step 0's question: option 2**, a warning at load for a `phi3` file with a 4096-token context and no window key. Done
+   below.
+3. **[Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3: option (a)**, bounded launches on every OS. With decision 1, step 3
+   changes no GPU kernel, so the work is due before step 6 (item 7), not step 3; it lands in this tier then, under README
+   rule 9, and the Windows timing stays in Tier 02G (its 2026-11-10 entry). The owner's reply named (a) without a timing;
+   this follows the recommendation given with it, landing here before step 6.
+
+**Plan against code.** HEAD `9dda5f7d`, unchanged since the entry above. `check-plan-thresholds.sh` passed after the plan
+edits, before any code (26 tier files). No gate, sweep or build was running; the runs below ran one at a time.
+
+**The Phi-3 warning (decision 2), tests first.**
+- `UndeclaredWindowNotice` (new, node): `forFile(GgufReader)` returns the warning for architecture `phi3`,
+  `phi3.context_length` 4096 and no `phi3.attention.sliding_window` key, else `null`. A declared key at any width, 0
+  included, gets none, as do Phi-3.5-mini and the 128k files (context 131072) and every other architecture.
+- `SlidingWindow.forShard`, which every handler calls once at load (the LoRA handlers and pipeline shards included), logs it
+  as a warning when the file declares no window. The file still gets no window.
+- The text: "This phi3 file has a 4096-token context and declares no phi3.attention.sliding_window, so attention runs without
+  a window. Phi-3-mini-4k was trained with a 2047-token window: on that model, output degrades past 2047 tokens of context. A
+  conversion that declares the key applies it; ./juno gguf-info shows the key." It does not say this file was trained with the
+  window: the April release's degradation is unmeasured (step 0's entry).
+- `UndeclaredWindowNoticeTest` (4 cases, synthetic metadata): the shape gets the warning, one line naming the key, 2047 and
+  `gguf-info`; a declared key, other contexts and other architectures get none; `forShard` logs it once at `WARNING` and still
+  returns no window, and logs no warning for a declared window.
+- Shown able to fail, each defect put in and taken out (`cmp` against a copy afterwards): the warning never produced (2 of 4
+  fail), produced and not logged (1 of 4), the key check dropped (1 of 4).
+- Docs: `docs/howto.md` ("Sliding-window attention"), `docs/agent-arch.txt` (`SlidingWindow`), `CHANGELOG.md`.
+
+**Step 2: page reference counting, tests first.**
+- `KvBlockPool`: a holder count per page replaces the live bit. `allocate` holds once; `retain` adds a holder; `free` drops
+  one and returns the page to the free list with its last holder; `liveBlocks` and `allocatedBytes` count distinct pages. A
+  page with more than one holder is read-only: `writeToken` and `copyToken` refuse to write into it (`IllegalStateException`).
+  `exclusive(id)` returns the page itself to a sole holder, otherwise a byte-for-byte copy with the caller's hold on the
+  shared page dropped, atomically under the pool's lock. `retain`, `refCount` and `exclusive` are package-private.
+- `KvPageTable.sharePrefix(len)` (public): a new table over the same pool whose positions `[0, len)` are this table's, holding
+  its first pages without copying. Every write (an append into a partly filled page, an overwrite below `seqLen`, a context
+  shift's destination) goes through one private step that makes the page the table's own first, so a table writing into a
+  shared page takes a copy (copy-on-write) and neither table sees the other's later rows. `truncate` and `release` drop holds.
+  A table is used by one thread at a time; tables sharing pages may run on different threads.
+- Nothing calls `sharePrefix` yet: step 4 wires it through `PrefixCache`. With every page held once, the pool and the table
+  behave as before, so no runtime behaviour changed.
+- Tests, written first and failing to compile against the old classes (`refCount`, `retain`, `exclusive`, `sharePrefix`
+  missing):
+  - `KvBlockPoolTest` (4 new cases, 7 runs): a retained page stays live and is not handed out again until its last holder
+    frees it, then a further free or retain is refused; a shared page refuses writes and copies into it while reads still work,
+    and `exclusive` gives a byte-for-byte copy and leaves the other holder's page untouched (both cache types); 8 holders
+    calling `exclusive` at once each end with a page of their own, all with the same bytes; 8 threads retaining and freeing 16
+    pages 300 times keep every count.
+  - `KvPageTableTest` (6 new cases, 10 runs), every expected content a table written with the same rows and no sharing,
+    compared bit for bit, both cache types: sharing a prefix (whole, and ending mid-page) copies no page; after sharing, each
+    table's appends are its own, whichever side writes first into the partly shared page, with the page count checked; a page
+    returns to the pool only when the last table holding it lets go (release and truncate, across a chain of two shares); a
+    context shift and an in-place overwrite on a sharer leave the source's rows intact; an empty share holds no page and a
+    share past the written rows is refused; two sessions sharing a prefix whose last page is partly filled append 200 rows each
+    on two threads, checking their contents every 10 rows, while a third thread reads the source 2,000 times, and every page
+    returns to the pool at the end.
+- Shown able to fail, each defect put in and taken out (`cmp` against a copy afterwards):
+
+  | Defect | `KvBlockPoolTest` (10) | `KvPageTableTest` (13) |
+  |---|---|---|
+  | `free` drops every holder at once | 2 fail | 5 fail |
+  | no copy-on-write: the table writes into the shared page, and the pool's refusal removed | 2 fail | 5 fail |
+  | `exclusive` hands out a copy without the page's bytes | 3 fail | 5 fail |
+
+- Docs: `docs/agent-arch.txt` (the `KvBlockPool` / `KvPageTable` paragraph), `CHANGELOG.md`. Not user-facing yet, so not in
+  `docs/howto.md`.
+
+**Row-write cost** (the one hot-path change: a write into an existing page asks the pool whether the page is shared, one
+uncontended lock). `compare-lora.sh` runs the default `static` schedule, whose dense KV never reaches `KvBlockPool`, so it
+cannot see this change and was not run; the tier's perf gate stands at its close. Measured directly instead: HEAD's `kvcache`
+sources (`git show`) against this tree's, each compiled on its own, appending 2,048 rows into 32 layer tables, 15 warm-up and
+25 timed trials, median per row, three rounds alternating the two builds (unpinned, this host, nothing else running):
+
+| Shape | HEAD, ns per row (3 rounds) | This tree | Medians |
+|---|---|---|---|
+| `f16`, kvDim 1024, page 16 | 475.5 / 469.0 / 478.9 | 482.2 / 480.7 / 477.9 | +1.1% |
+| `q8_0`, kvDim 1024, page 16 | 3,767.6 / 3,792.2 / 3,921.5 | 3,978.7 / 3,957.3 / 3,942.5 | +4.4% (HEAD's own spread 4.1%) |
+| `f16`, kvDim 256, page 4 | 224.6 / 228.6 / 233.8 | 241.7 / 236.1 / 242.3 | +5.7% |
+
+That is 5 to 13 ns per `f16` row, and at most about 0.2 µs per `q8_0` row, inside HEAD's own spread. A decode token writes 2
+rows per layer, 64 on a 32-layer model: under 15 µs per token in the worst reading, against tens of milliseconds per CPU
+decode token. Not optimized further (a lock-free path for pages never shared is possible, and not worth its complexity at
+this size).
+
+**Tests run.**
+- Focused, `mvn test -pl node -am -Dtest=...`: `UndeclaredWindowNoticeTest` 4, `SlidingWindowTest` 9,
+  `PagedKvAttentionOracleTest` 33, `PagedKvHandlerOracleTest` 18, `LlamaTransformerHandlerScheduleParityTest` 1,
+  `LlamaTransformerHandlerSlidingWindowTest` 7, `KvBlockPoolTest` 10, `KvPageTableTest` 13, `PagedKvTensorTest` 3,
+  `PagedKvArenaManagerTest` 2, `SessionKvReuseTest` 5, `KvContextShiftTest` 17: 122 run, 122 pass. Step 1's oracle passes on
+  the reference-counted pool.
+- The unit suite (`mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player`,
+  GPU groups on the GTX 1080, 50 min): `registry` 93, `lora` 116, `kvcache` 120 and `health` 23 pass; `node` 1,373 run,
+  **1 failure**, 55 skipped. The failure is `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`
+  again: 71,892,992 bytes free with the device full against <= 67,108,864, the device-wide driver holdback recorded in the
+  entry above and in Tier 02G's 2026-11-07 entry. The test uses `CudaMatVec` and the device allocator and nothing this change
+  touches. Bound not loosened.
+- The modules after `node`, which that failure stopped, resumed with the tree in the reactor and `node`'s suite filtered out
+  (`mvn test -pl tokenizer,sampler,coordinator,vision,metrics,juno-player -am -Dsurefire.failIfNoSpecifiedTests=false
+  -Dtest='**/tokenizer/**,**/sampler/**,**/coordinator/**,**/vision/**,**/metrics/**,**/player/**'`, 19 min): `tokenizer`
+  109 (2 skipped), `sampler` 90, `coordinator` 402 (1 skipped), `vision` 97, `metrics` 86, `juno-player` 153 (2 skipped),
+  0 failures. `coordinator` runs the continuous engine on the paged KV.
+- `check-plan-thresholds.sh`: ok.
+
+**Kit probes.** None added. The warning is a log line; step 2 adds no feature, flag or threshold that a run can see. Their
+tests run in `cpu.unit-tests`. `coverage.tsv` needs no line: neither is a probe, script, architecture or cross-surface row.
+
+**Out-of-tier changes (README rule 9):** the plan notes listed under decision 1 and 3 above; no code outside this tier's scope.
+
+**Exit criteria:** 1 of 15, unchanged. Step 2 is the reference counting criterion 3 (cross-session sharing) is built on.
+
+**Owed to the owner:** nothing to run, nothing to decide.
+
+**Next for the executor:** step 3, the CPU attention reading the pages in place on every call site, held to step 1's oracle,
+with `needsAttentionScratch()` `false` for both types.

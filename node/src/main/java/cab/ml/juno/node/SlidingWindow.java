@@ -111,15 +111,22 @@ final class SlidingWindow {
 
 	/**
 	 * The file's window for the layers {@code shard} holds ({@link #forShard}),
-	 * logged once when it declares one: what a handler reads at load.
+	 * logged once when it declares one: what a handler reads at load. A file with
+	 * the shape of a model trained with a window it does not declare gets a
+	 * warning instead ({@link UndeclaredWindowNotice}), and still no window.
 	 *
 	 * @throws UnsupportedModelException naming the key when a window key is malformed
 	 */
 	static int[] forShard(GgufReader r, ShardContext shard, java.util.logging.Logger log)
 			throws UnsupportedModelException {
 		SlidingWindow window = read(r);
-		if (window.declared())
+		if (window.declared()) {
 			log.info("Sliding-window attention: " + window);
+		} else {
+			String notice = UndeclaredWindowNotice.forFile(r);
+			if (notice != null)
+				log.warning(notice);
+		}
 		return window.forShard(shard.startLayer(), shard.endLayer() - shard.startLayer());
 	}
 
