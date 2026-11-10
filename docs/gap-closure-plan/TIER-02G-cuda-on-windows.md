@@ -756,3 +756,14 @@ suites at `80ec949e` on it (Tier 02F's Windows run as well). Then this change's 
 item 4's unit tests), item 3, and the thresholds.
 
 **Owed to the owner:** commit the step 4, kit-probe, item 4 and item 5 changes; steps 2 and 3.
+
+### 2026-11-09: Tier 03 begins while this tier is postponed (owner decision)
+
+Owner decision 2026-11-09, put in [Tier 02F](TIER-02F-hardware-validation-kit.md)'s record of that date and recorded under README
+execution rule 1: [Tier 03](TIER-03-kv-cache-maturity.md) begins while this tier and Tier 02F stay open.
+- This tier's item 3 choice (the 2026-11-06 finding, options (a) to (c)) is due before Tier 03's step 3, the block-table kernel.
+  Option (a) splits each prefill window's attention into bounded launches, and Tier 03's items 1 and 7 change how the attention
+  kernels read the KV, so whichever lands second carries the other.
+- When this tier resumes, its standing gate names which build is its pre-tier jar if Tier 03's work is in the tree by then. Its
+  pre-tier kit record at `80ec949e` is unaffected.
+- Nothing else here changes.

@@ -30,6 +30,8 @@ Windows and macOS runs by testers (owner decision 2026-11-05: CI stays deferred)
 By owner decision 2026-11-05 (README rule 1), [Tier 02G](TIER-02G-cuda-on-windows.md) has begun while this tier stays open.
 The first Windows tester's run arrived 2026-11-09 (`quick`, i5-1240P, no NVIDIA GPU): ingested, and the three defects it
 exposed fixed test first. A Windows re-run is owed for those fixes, and a macOS run is still owed.
+The tester's unscrubbed results folder went into the pushed commit `f234e90c` against that record's instruction. The owner
+rewrote the tip without it and force-pushed it as `e16748ad` (2026-11-09, latest record).
 Gap analysis refs: none — see "Why this tier, why now"
 
 **Added 2026-10-13 (owner decisions, recorded in the execution record below).** This host has one CPU
@@ -1909,6 +1911,9 @@ sent because the kit's own zip came out partial (defect 2).
 **The folder itself is not scrubbed, so it stays out of the tree.** It holds the tester's Windows user name in 42 text files, and
 the JFR recordings the kit never packs. Nothing from it is in `docs/`, except through the scrubbed re-pack below. It is the owner's
 to delete once a re-run has replaced it.
+*(Corrected 2026-11-09, latest record: the folder's zip went into commit `f234e90c` at the repository root, and that commit is
+pushed. Its removal from the branch's history is owed to the owner.)* *(2026-11-09, later: done. The owner amended the tip to
+`e16748ad`, whose tree differs from `f234e90c`'s only by the zip, and force-pushed it.)*
 
 **Results: 12 probes, 1 DONE, 6 PASS, 4 NOISY, 1 FAIL, in 37:42.** Entry
 `docs/perf-compare/20261110T002742Z-remote-windows-amd64-12th-gen-core-i5-1240p/`.
@@ -2016,3 +2021,74 @@ owns; its criterion carries a dated note.
 4. The 2026-11-09 decision on what runs next, which this run does not change.
 
 **Next for the executor:** `ingest` the re-run's zip and score criteria 4, 7, 9 and 12 for Windows.
+
+### 2026-11-09, latest: the tester's unscrubbed folder is in a pushed commit; no re-run yet; what runs next still open
+
+**Plan against code, verified at HEAD `f234e90c`** (the owner's commit of the previous entry's fixes and records; `git branch -r
+--contains f234e90c` lists `origin/67-gap-inference`). `check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep or
+build was running. `git status`: `report1.qdstrm` deleted in the working tree (not this session's change), `.gitattributes` and
+`.github/` untracked.
+- The previous entry's fixes are in the commit. No comparison glued to its block is left in `scripts/run.bat`, and
+  `KitBootstrap.readText` and `decode` exist. `KeepAwake` prints `windowsMessage` after the Windows call.
+- No re-run has arrived. All 47 kit zips under `juno-kit-results/` record `"os" : "Linux"`, the newest is from 2026-11-06, and no
+  `.zip` under the home folder, outside build caches, is newer than the ingested folder's.
+- Tier 03's code claims (the first 2026-11-09 entry) still hold. Since `616f577f`, `f234e90c` changed only `juno-kit`, `scripts/run.bat`
+  and a launcher test. `PagedKvTensor.needsAttentionScratch()` returns `true`. `KvBlockPool` has `allocate` and `free` and no
+  reference count, and `KvElementType` is `F16` and `Q8_0`. No Phi-3-mini-4k file is under `models/`.
+
+**Drift.**
+- **The tester's unscrubbed results folder is in commit `f234e90c`, which is pushed.** The previous entry said it stays out of the
+  tree and asked to leave out `juno-kit-results.zip`, "which is not scrubbed and is not git-ignored at the root". The commit adds it
+  at the repository root (5,335,799 bytes, 134 files). It was read by counts only:
+  - 4 JFR recordings, which the kit never packs because they carry host data;
+  - 307 lines in its logs, JSON and text files that hold a Windows home path, which carries the tester's user name.
+
+  The repository is public (owner decision 4, 2026-10-13), so the kit's promise to this tester (scope item 10) is broken until the
+  file is out of the branch's history. A later commit that deletes it leaves it in that history. The previous entry carries a dated
+  correction.
+- `.gitattributes` is still in no commit (the first 2026-11-09 entry), so a Windows re-run on `f234e90c` gets the quality text's line
+  ends from the tester's `core.autocrlf` (the 2026-11-07 note). It also gets `scripts/run.bat` and `juno.bat` as stored, LF, unless
+  Git for Windows converts them.
+
+**Change (out of tier; repository configuration, not a measurement boundary). Withdrawn the same day: the owner reverted it (see
+"Owner's answers" below).** `.gitignore` gains `/juno-kit-results*.zip`, so a
+results zip dropped at the repository root is not picked up by `git add`. That covers the kit's own name and a tester's whole folder.
+This host's published kit zip under `docs/perf-compare/` is unaffected. For the committed file the line takes effect only once the
+file is out of the index.
+
+**Decisions for the owner.**
+1. **The committed folder.**
+   - (a) Rewrite the branch tip without it and force-push. Then ask GitHub Support to remove the cached commit `f234e90c`, which
+     stays reachable by its hash after a force-push, and tell the tester.
+   - (b) Delete it in a new commit. History keeps it.
+   - **Recommendation: (a).** Only a rewrite takes the user name out of the public history, and the commit is the branch's tip, so
+     nothing is rebased.
+2. **What runs while this tier and Tier 02G wait** (the first 2026-11-09 entry): still open. Recommendation (1): let Tier 03 begin.
+
+**Tests.** No code changed, so none was run. `check-plan-thresholds.sh` passes after these edits.
+
+**Out-of-tier changes:** none (the `.gitignore` line was reverted by the owner).
+
+**Exit criteria:** 8 of 13, unchanged.
+
+**Owner's answers, 2026-11-09.**
+- **Decision 1:** the owner deleted `juno-kit-results.zip` and `report1.qdstrm` from the working tree and reverted the `.gitignore`
+  line. A commit of that deletion is option (b). The file stays in `f234e90c`, which is on `origin/67-gap-inference`, until the tip
+  is rewritten and force-pushed. The report says so once; whether to rewrite is the owner's choice and stays open.
+- **Decision 2: (1).** Recorded under README execution rule 1. [Tier 03](TIER-03-kv-cache-maturity.md) begins while this tier and
+  Tier 02G stay open, and its record carries its step 0.
+
+**Owed to the owner:** decision 1 and its git commands; `.gitattributes` in a commit before the Windows re-run; the Windows re-run
+(`juno-kit.bat --suite quick --yes`) and a macOS run; decision 2.
+
+**Next for the executor:** `ingest` the re-run's zip, as the previous entry says. On decision 2 (1), record it under README execution
+rule 1, then Tier 03's step 0.
+
+**2026-11-09, later: decision 1 resolved as option (a).** Read from git during Tier 03's step 0 session:
+- The owner amended the tip, and the branch now ends at `e16748ad`. Its tree differs from `f234e90c`'s only by `juno-kit-results.zip`,
+  which is gone.
+- `origin/67-gap-inference` points at `e16748ad`, and no branch contains `f234e90c`.
+- `.gitattributes` is staged, and not yet in a commit.
+
+Left to the owner, optional: GitHub can still serve the old commit by its hash until it is garbage-collected. GitHub Support can purge
+it, and the tester can be told. Still owed: `.gitattributes` in a commit before the Windows re-run, then that re-run and a macOS run.

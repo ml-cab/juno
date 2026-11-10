@@ -94,7 +94,8 @@ Features:
   and `sliding_window_pattern`, uniform or per-layer), with no flag; a file
   that declares none is unchanged. CPU and GPU attention, both schedules,
   every handler family, LoRA play and training, cluster shards. Malformed
-  window keys are refused at load. See `docs/howto.md`.
+  window keys are refused at load. Validated on a model trained with a
+  window (Phi-3-mini-4k, 2,047 tokens). See `docs/howto.md`.
 
 ### Speculative decoding
 

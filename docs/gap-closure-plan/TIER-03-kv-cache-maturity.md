@@ -1,6 +1,9 @@
 # Tier 03: KV cache maturity
 
-Status: not started
+Status: in progress (begun 2026-11-09 by owner decision while Tiers 02F and 02G stay open; README execution rule 1). Step 0
+done 2026-11-09: on `Phi-3.1-mini-4k-instruct-Q4_K_M.gguf` (window 2047, every layer) the KV oracle passes at 3,000 tokens on
+CPU and CUDA under both schedules, and teacher-forced NLL past position 2047 reads 2.634 with the window against 10.529 without
+it (CPU; CUDA 2.634 against 10.524). Exit criterion 1 ticked (1 of 15). Next: step 1, the gather-based attention oracle tests.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -37,7 +40,10 @@ ordering note both withdraw.)*
    Qwen3-1.7B declare none, and Phi-3.5-mini's 262144 never binds. A Phi-3-mini-4k GGUF is the likely
    candidate: its training configuration uses a 2047-token window on the `phi3` handler Juno already runs.
    *Unverified:* whether a given GGUF of it carries `phi3.attention.sliding_window`; confirm with `./juno
-   gguf-info` before relying on it. At the start of this tier, ask the owner for the file (README rule 3,
+   gguf-info` before relying on it. *(2026-11-09, step 0: one does, `bartowski/Phi-3.1-mini-4k-instruct-GGUF`'s Q4_K_M, window
+   2047, read from its header; three other conversions do not. See the execution record. `./juno gguf-info` confirms it once the
+   file is on disk.)* *(2026-11-09, later: on disk, `gguf-info` confirms it, and the validation below passes on CPU and CUDA; see
+   the execution record.)* At the start of this tier, ask the owner for the file (README rule 3,
    [`INVENTORY.md`](INVENTORY.md)). If it declares the window, run `SlidingWindowLiveCheck` on it at a
    3,000-token prompt on CPU and GPU, both schedules, and add a teacher-forced NLL comparison over a
    3,000-token text with the window on against off: the windowed run must read **lower** NLL past token
@@ -224,13 +230,15 @@ Existing models suffice for correctness and defrag testing. Item 0 needs one fil
 GGUF of a model trained with a binding sliding window on a handler Juno runs, likely Phi-3-mini-4k
 ([`INVENTORY.md`](INVENTORY.md), gaps table). The owner is asked for it at the start of this tier.
 *(Corrected 2026-11-09: this section said "no new downloads required for this tier specifically", written before item 0 was
-added on 2026-10-11.)*
+added on 2026-10-11.)* *(2026-11-09, later: the owner downloaded `Phi-3.1-mini-4k-instruct-Q4_K_M.gguf`, SHA-256 checked; it is
+in `models/`.)*
 
 ## Exit criteria
 
-- [ ] Sliding-window attention validated on a model trained with a binding window (item 0), or the
+- [x] Sliding-window attention validated on a model trained with a binding window (item 0), or the
       absence of such a file on a supported handler recorded here with the owner's answer, and Tier 08
-      keeping the obligation.
+      keeping the obligation. *(2026-11-09: validated on Phi-3-mini-4k, window 2047, CPU and CUDA, both
+      schedules; see the execution record. Tier 08 keeps Gemma's patterned window.)*
 - [ ] Block-table attention kernel in place; `needsAttentionScratch()` false on every path, asserted by
       unit test.
 - [ ] Cross-session prefix sharing works safely (refcounted) for non-vision, non-LoRA-play sessions
@@ -254,3 +262,164 @@ added on 2026-10-11.)*
       `juno-api.yaml` alongside the code that serves it (README feature-complete rule).
 - [ ] Docs updated, Juno-native language only.
 - [ ] `CHANGELOG.md` entry added.
+
+## Execution record
+
+### 2026-11-09: tier begun (owner decision); step 0, the windowed file located and asked for
+
+**Owner decision 2026-11-09: (1)**, the choice put in [Tier 02F](TIER-02F-hardware-validation-kit.md)'s record of that date. This
+tier begins while Tiers 02F and 02G stay open (README execution rule 1). [Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3 choice
+is due before step 3.
+
+**Plan against code, verified at HEAD `f234e90c`.** `check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep or
+build was running. The code this tier starts from is as the scope describes:
+- `PagedKvTensor.needsAttentionScratch()` returns `true` unconditionally.
+- `KvBlockPool` has `allocate()` and `free(int)` and no reference count.
+- `KvElementType` is `F16` and `Q8_0`, and its Javadoc calls `F16` the CLI name of the float32 path.
+- `gather-tax-microbench.sh`, `SlidingWindowLiveCheck`, `StaticBatchPrefixCacheSessionGatingTest`, `ModelQualityNllLiveTest`
+  and `DeviceScratchBudget` exist.
+- `DenseKvTensor`'s doubling and the FP16-only `DeviceKvCache`, read at `616f577f` (Tier 02F's first 2026-11-09 entry), are
+  unchanged: `f234e90c` touched only the kit, `scripts/run.bat` and a launcher test.
+- `SlidingWindow` reads `<arch>.attention.sliding_window` (absent or 0: no window) and `<arch>.attention.sliding_window_pattern`.
+- `Phi3RopeConfig.from` accepts a file without `rope_factors_short`/`rope_factors_long` tensors (both stay null). Such a file's
+  4096-token context holds item 0's 3,000-token prompt.
+
+**Item 0: the windowed file.** Read from Hugging Face without downloading a model:
+1. the API's repository search, then each candidate's file tree (size, LFS SHA-256) at a pinned commit;
+2. the first 8 MiB of each candidate file, fetched by HTTP range request into a scratch folder;
+3. those bytes parsed for their GGUF metadata keys.
+
+| Repository (commit) | File | `phi3.attention.sliding_window` |
+|---|---|---|
+| `microsoft/Phi-3-mini-4k-instruct-gguf` (`a6411339`) | `Phi-3-mini-4k-instruct-q4.gguf` | absent |
+| `bartowski/Phi-3-mini-4k-instruct-GGUF` (`e1447f6d`) | `Phi-3-mini-4k-instruct-Q4_K_M.gguf` | absent |
+| `legraphista/Phi-3-mini-4k-instruct-update2024_07_03-IMat-GGUF` (`c2b1652e`) | `Phi-3-mini-4k-instruct.IQ4_NL.gguf` | absent |
+| `bartowski/Phi-3.1-mini-4k-instruct-GGUF` (`66a614ac`) | `Phi-3.1-mini-4k-instruct-Q4_K_M.gguf` | **2047** |
+| `lmstudio-community/Phi-3.1-mini-4k-instruct-GGUF` (`7b8efa41`) | the same file (same SHA-256) | **2047** |
+
+- **The file:** `Phi-3.1-mini-4k-instruct-Q4_K_M.gguf`, 2,393,232,096 bytes, SHA-256
+  `d6d25bf078321bea4a079c727b273cb0b5a2e0b4cf3add0f7a2c8e43075c414f`.
+  - Quantized from `microsoft/Phi-3-mini-4k-instruct`: its July 2024 update, which these two repositories call 3.1.
+  - MIT licence; the repository is not gated.
+- **Its header:** `general.architecture = phi3`; Q4_K_M (`file_type` 15); `context_length` 4096; 32 layers; 32 heads and 32 KV
+  heads; `rope.freq_base` 10000; `tokenizer.ggml.pre = default`.
+- **The key depends on the conversion, not the model version.** legraphista's conversion of the same July update lacks it.
+
+**Asked of the owner** (README rule 3; this session does not write to `models/`). 91 GB is free on the disk that holds `models/`:
+
+```
+curl -L -C - -o models/Phi-3.1-mini-4k-instruct-Q4_K_M.gguf \
+  https://huggingface.co/bartowski/Phi-3.1-mini-4k-instruct-GGUF/resolve/66a614ace4d069a12c2f6043f4ea92621c898d4a/Phi-3.1-mini-4k-instruct-Q4_K_M.gguf
+echo "d6d25bf078321bea4a079c727b273cb0b5a2e0b4cf3add0f7a2c8e43075c414f  models/Phi-3.1-mini-4k-instruct-Q4_K_M.gguf" | sha256sum -c
+```
+
+**The rest of step 0, once the file is on disk:**
+1. `./juno gguf-info` on it.
+2. `SlidingWindowLiveCheck` at a 3,000-token prompt, on CPU and GPU, both schedules.
+3. The teacher-forced NLL comparison over a 3,000-token text, window on against window off. The windowed run must read lower NLL
+   past token 2047.
+
+If the owner declines the download, this record says so and Tier 08 keeps the obligation.
+
+**Tests.** No code changed, so none was run. `check-plan-thresholds.sh` passes after these edits.
+
+**Out-of-tier changes:** none.
+
+**Exit criteria:** 0 of 15.
+
+**Owed to the owner:** the download above, or a decline.
+
+**Next for the executor:** the rest of step 0 on the file. Then step 1, the gather-based attention oracle tests.
+
+### 2026-11-09, later: step 0 done; the trained window validated on CPU and CUDA
+
+**Plan against code.** As in the entry above. HEAD is now `e16748ad`, the owner's amend of `f234e90c`, which removes only the tester's
+zip ([Tier 02F](TIER-02F-hardware-validation-kit.md)), so no main code changed between the two entries. `check-plan-thresholds.sh` passed at the
+end of that entry; nothing in the tree changed before this work except the owner's download. It passes again after these edits. No gate,
+sweep or build was running.
+
+**The file.** The owner downloaded `Phi-3.1-mini-4k-instruct-Q4_K_M.gguf`; its SHA-256 matches the one recorded above. `./juno
+gguf-info` on it reads:
+- `general.architecture = phi3`, `file_type` 15;
+- `phi3.attention.sliding_window = 2047`, with no pattern key, so every layer;
+- `block_count` 32, 32 heads and 32 KV heads;
+- `context_length` 4096, `rope.dimension_count` 96, `rope.freq_base` 10000, `rope.scaling.original_context_length` 4096;
+- `tokenizer.ggml.add_bos_token = false`.
+
+**The text.** No new text was needed. The frozen `model-quality-nll.txt` gives 3,066 ids under this file's tokenizer (`GgufTokenizer.encode`
+on the raw text, as for the other id files), so its first 3,001 are checked in as `model-quality-nll.phi3-mini-4k.ids`. They match
+`model-quality-nll.phi35.ids` id for id over all 2,049 of that file, which checks the tokenization.
+
+**Tests added** (test scope only; no main code changed). All are opt-in with `-Djuno.test.trainedWindow=true` and a 32 GB heap
+(`JAVA_TOOL_OPTIONS=-Xmx32g`), and skip without the file. Without the property all 5 report skipped.
+- `TeacherForcedNll`: per-position teacher-forced NLL through `forwardVerify`, in windows of 128, as `ModelQualityNllLiveTest` scores.
+- `SlidingWindowTrainedLiveTest` (CPU):
+  - the window as `SlidingWindow.read` gives it: 2047 on all 32 layers, and 3,000 tokens fit inside the 4096 context;
+  - `SlidingWindowLiveCheck` at width 2047 on a 3,000-token prompt, under `static` and under `continuous`;
+  - NLL over 3,000 positions with the file's window against `SlidingWindow.NONE`. The two must agree over positions [0, 2047), and
+    the windowed run must read lower over [2047, 3000).
+- `SlidingWindowTrainedGpuTest` (CUDA, tag `gpu`):
+  - the same oracle, with the prompt prefilled on the device and GPU attention asserted active;
+  - the same NLL comparison. Each position is a decode-width forward, so every position past 2047 attends on the device under the
+    window.
+
+**Results.** Positions are 0-based; position `t` predicts token `t + 1` from a context of `t + 1` keys. The window first excludes a key
+at `t = 2047`.
+
+| Reading | CPU | CUDA |
+|---|---|---|
+| NLL [0, 2047), window / none | 1.31213 / 1.31213 (difference 0) | 1.31328 / 1.31328 (difference 0) |
+| NLL [2047, 3000), window / none | **2.63426 / 10.52854**, ratio 0.25020 | **2.63350 / 10.52423**, ratio 0.25023 |
+| Perplexity past 2047, window / none | 13.93 / 37,367 | 13.92 / 37,206 |
+| NLL [2047, 2560), window / none | 2.56599 / 6.48681 | 2.56612 / 6.48992 |
+| NLL [2560, 3000), window / none | 2.71386 / 15.24082 | 2.71205 / 15.22786 |
+| Oracle `static`: windowed / global / window against none | 0.000000 / 42.9867 / 9.8494 | 0.000000 / 43.4288 / 9.6124 |
+| Oracle `continuous` | 0.000000 / 42.9867 / 9.8494 | 0.000000 / 43.4288 / 9.5701 |
+| Wall time | 11,064 s (NLL 2,444 s and 2,673 s) | 528 s (NLL 69 s and 68 s) |
+
+- **The window is applied where the model expects it.** Without it, NLL past 2047 climbs to 15.2 over the last 440 positions. That is
+  above the 10.38 of a uniform guess over the 32,064-token vocabulary: the model reads key distances it never saw in training. With the
+  window, NLL past 2047 (2.57, then 2.71) stays near the 2.10 of positions 1,024 to 2,047.
+- **Before 2047 the window reads every key,** and both backends give identical NLL with it on and off.
+- **CUDA agrees with the CPU** to 0.03% past 2047 (2.63350 against 2.63426), with device attention under the window.
+- **Oracle.** The rows a windowed layer must not read (positions 0 to 953) were overwritten with values around 50, and that left the
+  next logits exactly unchanged, under both schedules on both backends. The same overwrite in a global layer moves them by 43.
+- **One small difference, for the record.** On CUDA the window-against-none reading differs by 0.04 between the two schedules; on the CPU
+  it does not. Both values are far above the 0.01 bound.
+
+**Finding for the owner: conversions that omit the key.** Three of the five Phi-3-mini-4k conversions checked above omit
+`phi3.attention.sliding_window`, including Microsoft's own GGUF. Juno applies no window to them, by design (the how-to: it does not
+guess which window a file meant). On the July-update weights that is the no-window run above: NLL 10.5 past position 2047. Microsoft's
+file is the April release; whether it degrades the same way is unmeasured and would need a download. Decision below.
+
+**Docs.**
+- `docs/howto.md`: a bullet in "Sliding-window attention". It records the validation, and says that a conversion without the key gets no
+  window and how to check a file.
+- `README.md`: one phrase.
+- `CHANGELOG.md`: a Session 137 entry.
+- [`INVENTORY.md`](INVENTORY.md): the file's row, and the gap marked closed.
+
+**Out-of-tier changes (README rule 9):** a dated note in [Tier 08](TIER-08-model-architecture-breadth.md)'s handover paragraph. Tier 03
+item 0 met the uniform-window half of the obligation; Gemma's patterned window stays there.
+
+**Tests run.**
+- `SlidingWindowTrainedLiveTest#declaresItsWindow`: pass.
+- `SlidingWindowTrainedLiveTest`: 4 run, 4 pass, `mvn test -pl node`, 32 GB heap.
+- `SlidingWindowTrainedGpuTest`: 3 run, 3 pass, GTX 1080, run alone.
+- Both classes without the property: 5 skipped, build success.
+- `check-plan-thresholds.sh`: ok.
+
+**Exit criteria:** 1 of 15 (criterion 1, item 0).
+
+**Decision for the owner.** What should a `phi3` file with a 4096-token context and no window key get?
+1. Documentation only. The how-to bullet is already in.
+2. **Recommended:** a one-line startup notice when such a file loads. It names the key and says contexts past 2047 tokens run without
+   the window the model was trained with. This is loud, and guesses nothing. It is a few lines in the Phi-3 load path plus a unit test on
+   synthetic metadata, as an item 0 follow-up in this tier. Phi-3.5-mini (context 131072) does not match it.
+3. Infer a 2047 window for that shape. Not recommended: it contradicts the documented no-guess rule, and would window a file that truly
+   has none.
+
+**Owed to the owner:** the decision above. Nothing to run.
+
+**Next for the executor:** step 1, the correctness tests for the current gather-based attention as the oracle, with option 2 first if the
+owner chooses it. [Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3 choice is still due before step 3.

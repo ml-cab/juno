@@ -1,5 +1,16 @@
 ## Status 
 
+**Session 137** - Sliding-window attention validated on a model trained with a window
+
+- **Phi-3-mini-4k's 2,047-token window is applied where the model expects it.** On a GGUF conversion that declares
+  `phi3.attention.sliding_window = 2047`, teacher-forced NLL over a 3,000-token text past position 2,047 reads 2.63 with
+  the window and 10.5 without it, on the CPU and on CUDA; before position 2,047 the two are identical. The KV oracle
+  at width 2,047 on a 3,000-token prompt passes on both, with dense and paged KV.
+- **Some conversions of that model omit the key**, and Juno then applies no window; `./juno gguf-info` shows whether a
+  file declares it.
+- New opt-in live tests: `SlidingWindowTrainedLiveTest` (CPU) and `SlidingWindowTrainedGpuTest` (CUDA), run with
+  `-Djuno.test.trainedWindow=true` and a heap of about 32 GB.
+
 **Session 136** - The hardware validation kit's first Windows run, and what it found
 
 - **`juno.bat local` and `juno.bat cluster` accept `--temperature`, and `local` accepts `--mmproj-path`.** Each was refused as

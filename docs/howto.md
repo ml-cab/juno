@@ -558,6 +558,12 @@ A file that declares no window computes exactly what it did before.
   wrong length, a negative width or period. Juno does not guess which layers a file meant to window.
 - **A window wider than any context the model reaches changes nothing.** Phi-3.5-mini declares a
   262,144-token window on every layer against its 4,096-token limit, so its output is unchanged.
+- **Validated on a model trained with a window.** Phi-3-mini-4k (its July 2024 update) was trained with a
+  2,047-token window on every layer, and a GGUF conversion that declares `phi3.attention.sliding_window =
+  2047` carries it. Over a 3,000-token text, teacher-forced NLL past position 2,047 reads 2.63 with the
+  window and 10.5 without it, on the CPU and on CUDA alike; before position 2,047 the two are identical.
+  Some conversions of the same model omit the key, and Juno then applies no window: past 2,047 tokens such
+  a file computes the no-window reading above. `./juno gguf-info` shows whether a file declares it.
 - **Every path.** CPU and CUDA attention (prefill, single-token decode, `--parallel` multi-stream decode,
   the device-resident decode and prefill regions), dense and paged KV (`--schedule static` and
   `continuous`), every handler family, `--lora-play`, and LoRA training, whose backward pass gives the

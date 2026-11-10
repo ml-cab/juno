@@ -32,6 +32,12 @@ before acting on it — both documents are snapshots, not ground truth that stay
    refusals, the kit probes, the audit of Linux-only assumptions, the launchers); what is left needs the Windows
    evaluation installed on this host (its steps 2 and 3). Work resumes on Tier 02G after those Windows runs. Tier 02H's
    place after Tier 02G was sequencing only: none of its work depends on Tier 02G's.
+   *Owner decision 2026-11-09 (recorded in [Tier 02F](TIER-02F-hardware-validation-kit.md),
+   [Tier 02G](TIER-02G-cuda-on-windows.md) and [Tier 03](TIER-03-kv-cache-maturity.md)):* Tier 03 begins while Tiers 02F and
+   02G are open. Tier 02F waits on testers' Windows and macOS runs and Tier 02G on the Windows evaluation's runs; neither leaves
+   executor work on this host, and Tier 03's work depends on neither. One ordering holds between them: Tier 02G's item 3 choice
+   (bounded attention launches, its 2026-11-06 finding) is due before Tier 03's step 3, the block-table kernel, since both change
+   how prefill attention is launched and how it reads the KV. Nothing else in this rule changes.
 2. **No surface left aside.** A tier is not complete until its change has been carried through
    every product surface it touches — see "Cross-surface compatibility checklist" below. If a
    surface can't reasonably support the new feature yet (e.g. continuous schedule doesn't support

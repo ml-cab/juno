@@ -35,7 +35,8 @@ this tier's Gemma handler exists. Real-model validation of the windowed path is 
 this tier's exit criteria, not Tier 02B's. *(2026-10-11, plan review: [Tier 03](TIER-03-kv-cache-maturity.md)
 item 0 tries to bring the first trained-window validation forward on a Phi-3-mini-4k file. If it does, this
 tier still validates Gemma's patterned window, which a uniform Phi-3 window does not exercise; read Tier 03's
-record first.)*
+record first.)* *(2026-11-09: it did. Tier 03 validated the uniform 2047-token window on Phi-3-mini-4k, on CPU and CUDA under
+both schedules. Gemma's patterned window stays here.)*
 
 ## Scope
 

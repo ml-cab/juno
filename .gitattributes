@@ -1,0 +1,7 @@
+# Line endings are the same on every OS, whatever core.autocrlf says. Text is checked out with LF, so the
+# test fixtures, the model-quality corpus and the PTX kernels a Windows checkout builds from are byte for
+# byte the ones a Linux checkout builds from. Batch files are checked out with CRLF: cmd.exe misreads
+# labels in a batch file with LF line ends.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
