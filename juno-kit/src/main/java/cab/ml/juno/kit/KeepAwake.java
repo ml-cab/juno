@@ -57,6 +57,12 @@ final class KeepAwake implements AutoCloseable {
 				"--mode=block", "tail", "--pid=" + pid, "-f", "/dev/null");
 	}
 
+	/** What {@code SetThreadExecutionState}'s result means: it returns the previous state, or 0 when it failed. */
+	static String windowsMessage(int previousState) {
+		return previousState != 0 ? "  Keeping this machine awake for the run (SetThreadExecutionState)."
+				: "  Could not keep Windows awake (SetThreadExecutionState returned 0); set sleep to Never meanwhile.";
+	}
+
 	static KeepAwake start(PrintStream out) {
 		String os = System.getProperty("os.name");
 		if (os.toLowerCase(Locale.ROOT).contains("win")) {
@@ -66,6 +72,7 @@ final class KeepAwake implements AutoCloseable {
 								.orElseThrow(),
 						FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
 				int prev = (int) h.invokeExact(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+				out.println(windowsMessage(prev));
 				if (prev != 0)
 					return new KeepAwake(null, h);
 			} catch (Throwable t) {

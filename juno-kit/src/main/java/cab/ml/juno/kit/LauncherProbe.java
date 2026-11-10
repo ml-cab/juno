@@ -142,7 +142,7 @@ final class LauncherProbe implements KitProbe {
 			p.destroyForcibly();
 			return new ProbeReport.Check(name, false, "no exit within 120 s");
 		}
-		String out = Files.readString(log, StandardCharsets.UTF_8);
+		String out = KitBootstrap.readText(log);
 		boolean warned = out.contains(LORA_GRAMMAR_WARNING);
 		return new ProbeReport.Check(name, warned, warned ? "warned (exit code " + p.exitValue() + ")"
 				: "no warning; last lines: " + JunoProcess.tail(log, 5));

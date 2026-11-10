@@ -1,0 +1,36 @@
+{
+  "id" : "quality.tinyllama-1.1b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "integer-kernel NLL at most 1.01x the float-activation NLL",
+    "passed" : true,
+    "detail" : "ratio 0.99969 (2.39748 over 2.39823)"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, integer kernels",
+    "unit" : "nats",
+    "values" : [ 2.397478341905886 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, float-activation kernels",
+    "unit" : "nats",
+    "values" : [ 2.3982334750962604 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 99.609375 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "floatSeconds" : 289.5691119,
+    "floatRunKernels" : "float-activation",
+    "tokens" : 2048,
+    "integerSeconds" : 76.1849098,
+    "integerRunKernels" : "integer where the Vector API is present"
+  }
+}

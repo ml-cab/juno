@@ -95,9 +95,9 @@ final class JunoProcess implements AutoCloseable {
 		}
 		if (!p.waitFor(timeout.toSeconds(), TimeUnit.SECONDS)) {
 			kill(p);
-			return new Result(-1, Files.readString(dir.resolve(LOG)) + "\n[no exit after " + timeout.toSeconds() + " s]");
+			return new Result(-1, KitBootstrap.readText(dir.resolve(LOG)) + "\n[no exit after " + timeout.toSeconds() + " s]");
 		}
-		return new Result(p.exitValue(), Files.readString(dir.resolve(LOG)));
+		return new Result(p.exitValue(), KitBootstrap.readText(dir.resolve(LOG)));
 	}
 
 	/** A REST server ({@code --api-port} is added), returned once {@code /v1/cluster/health} answers. */
@@ -217,7 +217,7 @@ final class JunoProcess implements AutoCloseable {
 	}
 
 	String log() throws IOException {
-		return Files.readString(dir.resolve(LOG));
+		return KitBootstrap.readText(dir.resolve(LOG));
 	}
 
 	/**
@@ -303,7 +303,7 @@ final class JunoProcess implements AutoCloseable {
 
 	static String tail(Path f, int lines) {
 		try {
-			List<String> all = Files.readAllLines(f);
+			List<String> all = KitBootstrap.readText(f).lines().toList();
 			return String.join(" | ", all.subList(Math.max(0, all.size() - lines), all.size()));
 		} catch (IOException e) {
 			return "(no log: " + e.getMessage() + ")";

@@ -218,7 +218,12 @@ Tier 04.
     single-thread throughput. Without one, the row is marked `NEEDS-AVX2-HARDWARE` and the forced-width
     parity tests are the evidence; flag this to the user when step 5 is reached (see
     [`INVENTORY.md`](INVENTORY.md)). *2026-10-13 (step 5): `NEEDS-AVX2-HARDWARE`; flagged to the owner; the
-    forced-width parity tests (`CpuIntegerWidthParityTest`) pass.*
+    forced-width parity tests (`CpuIntegerWidthParityTest`) pass.* *2026-11-09: the first 256-bit host's reading arrived, from
+    the hardware validation kit on a Windows i5-1240P (`docs/perf-compare/20261110T002742Z-remote-windows-amd64-12th-gen-core-i5-1240p/`):
+    the 256-bit Q4_K kernel read 1.16x to 1.27x the 128-bit kernel on one thread over three attempts, each marked NOISY
+    for other programs' CPU use. A reading, not a score: a remote host scores a threshold only by an owner decision recorded
+    here. The row stays `NEEDS-AVX2-HARDWARE`. Owner decision 2026-11-09, on this reading: `auto` stays at 128, so owner decision 4
+    stands (Tier 02F's record of that day).*
   - Every throughput number is a median of at least three runs with min/max published.
 
 ## Models needed

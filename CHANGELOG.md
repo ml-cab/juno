@@ -1,5 +1,14 @@
 ## Status 
 
+**Session 136** - The hardware validation kit's first Windows run, and what it found
+
+- **`juno.bat local` and `juno.bat cluster` accept `--temperature`, and `local` accepts `--mmproj-path`.** Each was refused as
+  an unknown flag, because `scripts/run.bat` had no space before the opening parenthesis on those lines. A launcher test now
+  fails on any comparison written that way.
+- **The kit packs and scrubs logs that are not UTF-8.** On Windows a probe's log is in the machine's code page, which stopped
+  the packing partway and left a partial zip; a path in such a log is now read as the path it is, so it is still scrubbed.
+- **On Windows the kit says whether it is keeping the machine awake**, in its log.
+
 **Session 135** - A decode batch on the GPU runs in the device region, and every reply equals its single-request reply
 
 - **A decode step of several requests (`--parallel` above 1, the continuous schedule) runs on the device** the way one

@@ -1,0 +1,61 @@
+{
+  "id" : "cpu.kernel-width",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "Q4_K 14336x4096 threads 1 128-bit",
+    "unit" : "ms/call",
+    "values" : [ 10.000865714285714, 10.145295412844035, 10.217835051546391 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "Q4_K 14336x4096 threads 1 256-bit",
+    "unit" : "ms/call",
+    "values" : [ 7.476221985815603, 8.075214074074074, 7.969712711864407 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "Q4_K 14336x4096 threads 16 128-bit",
+    "unit" : "ms/call",
+    "values" : [ 2.260725526932084, 2.20568125, 2.2315593984962407 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "Q4_K 14336x4096 threads 16 256-bit",
+    "unit" : "ms/call",
+    "values" : [ 2.425444552529183, 1.9494184557438796, 1.8124648312611011 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "Q6_K 4096x14336 threads 1 128-bit",
+    "unit" : "ms/call",
+    "values" : [ 19.99504117647059, 20.349085416666664, 19.869966666666667 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "Q6_K 4096x14336 threads 1 256-bit",
+    "unit" : "ms/call",
+    "values" : [ 16.882598148148148, 15.96922380952381, 18.202121153846154 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "Q6_K 4096x14336 threads 16 128-bit",
+    "unit" : "ms/call",
+    "values" : [ 5.053433971291866, 4.981239303482587, 5.0745474999999995 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "Q6_K 4096x14336 threads 16 256-bit",
+    "unit" : "ms/call",
+    "values" : [ 3.9140699186991874, 3.994534523809524, 3.9209416030534356 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  } ],
+  "facts" : {
+    "Q6_K 4096x14336 threads 16 256-bit over 128-bit time" : 0.7758964746206195,
+    "Q4_K 14336x4096 threads 16 256-bit over 128-bit time" : 0.8735678096032377,
+    "Q6_K 4096x14336 threads 1 256-bit over 128-bit time" : 0.8443392538753535,
+    "Q4_K 14336x4096 threads 1 256-bit over 128-bit time" : 0.7855574813301818
+  }
+}

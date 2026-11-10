@@ -1,0 +1,30 @@
+{
+  "id" : "launcher.tinyllama",
+  "kind" : "CHECK",
+  "passed" : false,
+  "checks" : [ {
+    "name" : "local mode with --api-port answers a chat request",
+    "passed" : false,
+    "detail" : "the launcher exited with code 1 before its API answered; last lines: cmd.exe /c <home>\\dev\\space\\juno\\juno.bat local --model-path <home>\\.cache\\juno\\models\\kit\\tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf --max-tokens 8 --temperature 0 --cpu --heap 4g --api-port 53182 | [ERR] Unknown local flag: --temperature |       Run: run.bat local --help"
+  }, {
+    "name" : "the launcher exits cleanly on exit",
+    "passed" : false,
+    "detail" : "it never served"
+  }, {
+    "name" : "lora with --grammar-file warns that constrained decoding is a no-op for LoRA training",
+    "passed" : true,
+    "detail" : "warned (exit code 0)"
+  }, {
+    "name" : "the launcher prints no [DBG] lines",
+    "passed" : true,
+    "detail" : "none in its output"
+  }, {
+    "name" : "the launcher writes nothing to the registry (HKCU\\Console unchanged)",
+    "passed" : true,
+    "detail" : "last-write time before 134184975968080486, after 134184975968080486"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "launcher" : "juno.bat"
+  }
+}

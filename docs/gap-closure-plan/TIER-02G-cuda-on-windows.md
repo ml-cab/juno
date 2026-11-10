@@ -220,10 +220,19 @@ exercise the CUDA 13.x layout; it is welcome, not required.
       write.
       *(2026-11-07: holds as read, by `LauncherParityTest` and `WindowsLauncherScriptTest` (execution record of that day,
       item 5). Owed: the launcher probe on Windows.)*
+      *(2026-11-09: the launcher probe ran on a tester's Windows host (no NVIDIA GPU) and failed: `juno.bat local` refused
+      `--temperature`. `run.bat` had no space before `(` on that flag in `local` and `cluster` and on `--mmproj-path` in `local`,
+      and `LauncherParityTest` reads flag text, so it passed. Fixed, with `WindowsLauncherScriptTest`'s glued-comparison check.
+      The same run passed the other three Windows launcher checks (LoRA grammar warning, no `[DBG]`, registry untouched).
+      Owed: the probe's re-run on Windows, for local mode's request and clean exit. See Tier 02F's record of that day.)*
 - [ ] ROCm on Windows and CUDA on macOS fail closed, tested.
 - [ ] Every Linux-only assumption reachable on Windows is fixed or fails closed (repo-wide, README rule 8).
       *(2026-11-07: the repo-wide audit as far as this host reads it is recorded, with five fixes (execution record of that
       day). Owed: the kit's CPU suites on the Windows machine, which find what reading cannot.)*
+      *(2026-11-09: a tester's Windows run of the `quick` CPU suite found two: the `run.bat` flags above, and probe logs in
+      the machine's code page, which stopped the kit's packing. Both fixed. It also confirmed that a checkout without
+      `.gitattributes` writes CR LF text: its quality reading equals this host's CR LF reading to all 16 digits. Still owed:
+      the `cpu` and `all` suites, which `quick` does not cover.)*
 - [ ] Kit probes for this tier's behaviour are added: the kernel-timing probe, and the launcher probe on
       Windows.
       *(2026-11-06: both added and run on Linux (`docs/perf-compare/20261106T045718Z-gpu-kernel-timing/`; the launcher's

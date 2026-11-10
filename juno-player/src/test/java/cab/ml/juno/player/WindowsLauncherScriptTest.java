@@ -65,6 +65,30 @@ class WindowsLauncherScriptTest {
 	}
 
 	@Test
+	void no_comparison_is_glued_to_its_block() throws IOException {
+		for (String script : SCRIPTS)
+			assertThat(comparisonsGluedToTheirBlock(LauncherParityTest.read(script))).as(script).isEmpty();
+	}
+
+	@Test
+	void the_glued_comparison_check_finds_the_defect_and_passes_its_fix() {
+		assertThat(comparisonsGluedToTheirBlock(List.of("if /i \"%~1\"==\"--temperature\"( set \"T=%~2\" & goto :x )")))
+				.hasSize(1);
+		assertThat(comparisonsGluedToTheirBlock(List.of("if /i \"%~1\"==\"--temperature\" ( set \"T=%~2\" & goto :x )",
+				"if /i \"%~1\"==\"--heap\"       ( set \"H=%~2\" & goto :x )"))).isEmpty();
+	}
+
+	/**
+	 * Lines where a quoted right-hand side runs straight into the opening parenthesis. {@code cmd.exe} takes
+	 * {@code "--temperature"(} as the operand, so the comparison is never true and the flag reaches the unknown-flag
+	 * branch. A check that the flag's text is in the file passes on such a line.
+	 */
+	static List<String> comparisonsGluedToTheirBlock(List<String> lines) {
+		Pattern glued = Pattern.compile("==\\s*\"[^\"]*\"\\(");
+		return lines.stream().filter(line -> glued.matcher(line).find()).toList();
+	}
+
+	@Test
 	void the_block_check_finds_the_help_text_pattern_and_passes_its_fixes() {
 		List<String> helpInBlock = List.of("if /i \"%~1\"==\"--help\" (", "  echo   --top-k N  (default 50)",
 				"  echo   --top-p F", "  goto :eof", ")");

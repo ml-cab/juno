@@ -394,11 +394,39 @@ public final class KitBootstrap {
 			for (Path f : files) {
 				String name = dir.relativize(f).toString().replace('\\', '/');
 				z.putNextEntry(new ZipEntry(name));
-				z.write(privacy.scrub(Files.readString(f, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8));
+				z.write(privacy.scrub(readText(f)).getBytes(StandardCharsets.UTF_8));
 				z.closeEntry();
 			}
 		}
 		return zip;
+	}
+
+	/**
+	 * A text file the kit or a child process wrote. On Windows a JVM's redirected stdout and stderr are in the machine's
+	 * code page ({@code native.encoding}), so a probe's log need not be UTF-8.
+	 */
+	static String readText(Path f) throws IOException {
+		return decode(Files.readAllBytes(f), codePage());
+	}
+
+	/**
+	 * UTF-8 when the bytes are valid UTF-8, else {@code codePage}, so a path in the log still reads as the path the
+	 * scrubber looks for. Bad bytes never throw: a log that cannot be read cleanly is still a result.
+	 */
+	static String decode(byte[] bytes, java.nio.charset.Charset codePage) {
+		try {
+			return StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+		} catch (java.nio.charset.CharacterCodingException e) {
+			return new String(bytes, codePage);
+		}
+	}
+
+	private static java.nio.charset.Charset codePage() {
+		try {
+			return java.nio.charset.Charset.forName(System.getProperty("native.encoding"));
+		} catch (IllegalArgumentException e) {
+			return StandardCharsets.ISO_8859_1;
+		}
 	}
 
 	private static String extension(Path p) {

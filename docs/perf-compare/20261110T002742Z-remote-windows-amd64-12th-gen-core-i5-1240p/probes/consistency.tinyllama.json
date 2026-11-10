@@ -1,0 +1,142 @@
+{
+  "id" : "consistency.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "local mode refuses architecture qwen35 and names it",
+    "passed" : true,
+    "detail" : "exit 1; names it"
+  }, {
+    "name" : "pipeline cluster refuses architecture qwen35, names it, leaves no node JVM",
+    "passed" : true,
+    "detail" : "exit 1; names it; 0 node JVMs left"
+  }, {
+    "name" : "tensor cluster refuses architecture qwen35, names it, leaves no node JVM",
+    "passed" : true,
+    "detail" : "exit 1; names it; 0 node JVMs left"
+  }, {
+    "name" : "local mode refuses architecture gemma4 and names it",
+    "passed" : true,
+    "detail" : "exit 1; names it"
+  }, {
+    "name" : "pipeline cluster refuses architecture gemma4, names it, leaves no node JVM",
+    "passed" : true,
+    "detail" : "exit 1; names it; 0 node JVMs left"
+  }, {
+    "name" : "tensor cluster refuses architecture gemma4, names it, leaves no node JVM",
+    "passed" : true,
+    "detail" : "exit 1; names it; 0 node JVMs left"
+  }, {
+    "name" : "local mode refuses architecture mistral3 and names it",
+    "passed" : true,
+    "detail" : "exit 1; names it"
+  }, {
+    "name" : "pipeline cluster refuses architecture mistral3, names it, leaves no node JVM",
+    "passed" : true,
+    "detail" : "exit 1; names it; 0 node JVMs left"
+  }, {
+    "name" : "tensor cluster refuses architecture mistral3, names it, leaves no node JVM",
+    "passed" : true,
+    "detail" : "exit 1; names it; 0 node JVMs left"
+  }, {
+    "name" : "local mode refuses architecture minimax-m2 and names it",
+    "passed" : true,
+    "detail" : "exit 1; names it"
+  }, {
+    "name" : "pipeline cluster refuses architecture minimax-m2, names it, leaves no node JVM",
+    "passed" : true,
+    "detail" : "exit 1; names it; 0 node JVMs left"
+  }, {
+    "name" : "tensor cluster refuses architecture minimax-m2, names it, leaves no node JVM",
+    "passed" : true,
+    "detail" : "exit 1; names it; 0 node JVMs left"
+  }, {
+    "name" : "local mode loads a supported model and exits cleanly",
+    "passed" : true,
+    "detail" : "exit 0"
+  }, {
+    "name" : "static batching, cpu: OpenAI round 1, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: OpenAI round 1, prompt 1 equals its single-request output",
+    "passed" : true,
+    "detail" : "'Red.'"
+  }, {
+    "name" : "static batching, cpu: OpenAI round 1, prompt 2 equals its single-request output",
+    "passed" : true,
+    "detail" : "'A spider has six legs.'"
+  }, {
+    "name" : "static batching, cpu: OpenAI round 1, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: native round 1, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: native round 1, prompt 1 equals its single-request output",
+    "passed" : true,
+    "detail" : "'Red.'"
+  }, {
+    "name" : "static batching, cpu: native round 1, prompt 2 equals its single-request output",
+    "passed" : true,
+    "detail" : "'A spider has six legs.'"
+  }, {
+    "name" : "static batching, cpu: native round 1, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: OpenAI round 2, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: OpenAI round 2, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: OpenAI round 2, prompt 1 equals its single-request output",
+    "passed" : true,
+    "detail" : "'Red.'"
+  }, {
+    "name" : "static batching, cpu: OpenAI round 2, prompt 2 equals its single-request output",
+    "passed" : true,
+    "detail" : "'A spider has six legs.'"
+  }, {
+    "name" : "static batching, cpu: native round 2, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: native round 2, prompt 0 equals its single-request output",
+    "passed" : true,
+    "detail" : "'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: native round 2, prompt 1 equals its single-request output",
+    "passed" : true,
+    "detail" : "'Red.'"
+  }, {
+    "name" : "static batching, cpu: native round 2, prompt 2 equals its single-request output",
+    "passed" : true,
+    "detail" : "'A spider has six legs.'"
+  }, {
+    "name" : "static batching, cpu: a session request after batched stateless traffic equals single-request output",
+    "passed" : true,
+    "detail" : "single 'The capital of France is Paris.', session 'The capital of France is Paris.'"
+  }, {
+    "name" : "static batching, cpu: no prefix-cache hit for stateless traffic",
+    "passed" : true,
+    "detail" : "0 hits, 1 lookups"
+  }, {
+    "name" : "static batching, cpu: native streaming joins to the native blocking answer",
+    "passed" : true,
+    "detail" : "blocking 'Red.', streamed 'Red.'"
+  }, {
+    "name" : "continuous: a session request after the same stateless request equals it",
+    "passed" : true,
+    "detail" : "stateless 'The capital of France is Paris.', session 'The capital of France is Paris.'"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "gpu" : false
+  }
+}

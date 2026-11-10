@@ -29,7 +29,7 @@ entry.
 
 | Host label | OS | CPU (cores, threads, integer vector width) | GPU and backend | Ingested runs | Rows it scores |
 |---|---|---|---|---|---|
-| none yet | | | | | |
+| `windows-amd64-12th-gen-core-i5-1240p` | Windows 10 (10.0, amd64) | 12th Gen Intel Core i5-1240P (12 cores, 16 threads, integer 256-bit) | none (no CUDA or ROCm device) | [`20261110T002742Z`](../perf-compare/20261110T002742Z-remote-windows-amd64-12th-gen-core-i5-1240p/) (`quick`, Juno `616f577f`) | none scored; the first 256-bit reading for Tier 02E's width row, not scored without an owner decision |
 
 ## Models present in `models/` (2026-09-18, re-checked 2026-09-24)
 

@@ -28,6 +28,8 @@ drafted from this host's runs. The same day a real download from Hugging Face, i
 catalog criterion, and the Linux keep-awake inhibitor was seen held. Every open criterion now waits on
 Windows and macOS runs by testers (owner decision 2026-11-05: CI stays deferred), as each criterion's dated note says.
 By owner decision 2026-11-05 (README rule 1), [Tier 02G](TIER-02G-cuda-on-windows.md) has begun while this tier stays open.
+The first Windows tester's run arrived 2026-11-09 (`quick`, i5-1240P, no NVIDIA GPU): ingested, and the three defects it
+exposed fixed test first. A Windows re-run is owed for those fixes, and a macOS run is still owed.
 Gap analysis refs: none — see "Why this tier, why now"
 
 **Added 2026-10-13 (owner decisions, recorded in the execution record below).** This host has one CPU
@@ -300,15 +302,20 @@ GPU, macOS.
 
 ## Exit criteria
 
-- [ ] `juno-kit` is in the reactor with the `juno-kit.sh` and `juno-kit.bat` launchers; the bootstrap checks
+- [x] `juno-kit` is in the reactor with the `juno-kit.sh` and `juno-kit.bat` launchers; the bootstrap checks
       prerequisites before building, and a failed build still produces a results zip.
       *(2026-11-05: met on Linux (every run here; the failed-build zip in `KitBootstrapTest`). Owed: `juno-kit.bat` has
       run nowhere yet; a Windows tester's run (step 9).)*
+      *(2026-11-09: met. `juno-kit.bat` ran on a tester's Windows 10 machine: the bootstrap refused a first try for disk
+      (723 MiB free, 2048 MiB needed), and after space was freed it built all 16 reactor modules and started the kit. See the
+      2026-11-09 Windows record.)*
 - [ ] Detection, the suites, `--budget`, `--plan`, `--yes`, `--list`, `resume` and `pack` work as
       specified, each unit-tested.
       *(2026-11-05: all unit-tested, and seen working here (`resume` and `pack` in step 3). Owed: the Windows and macOS
       detection fixtures follow documented output formats, not recordings; a Windows and a macOS tester's run supply
       recorded outputs (step 9).)*
+      *(2026-11-09: on a real Windows host the parsers read the right values (i5-1240P, 12 cores, 16 threads, on mains, 100%).
+      The zip holds the parsed values, not the commands' raw output, so the fixtures stay as they are. Owed: a macOS run.)*
 - [x] The estimate is shown before the run and refined during it. On this host, the first estimate for the
       `quick` suite is `>= 0.65x` and `<= 1.35x` the actual time.
       *(2026-11-03: read 0.741x, point 1738 s against 2345 s, on the `a1fe7166` catalog
@@ -328,6 +335,11 @@ GPU, macOS.
       inhibitor held was not observed; a Windows and a macOS tester's run (step 9).)*
       *(2026-11-05, later: Linux observed. `systemd-inhibit --list` showed the kit's `sleep:idle` block inhibitor during
       both runs of the download check, and none after either. Owed: the Windows and macOS paths (step 9).)*
+      *(2026-11-09: on Windows the noise rule re-ran four probes twice each and marked them NOISY, and the battery state was
+      read. The keep-awake call printed no failure, but a return of 0 was silent then, so this run cannot show it held; the
+      kit now logs the result either way. Metered-connection detection exists on Linux only (`"metered" : "unknown"` here), so
+      that warning cannot fire on Windows or macOS; recorded, not changed. Owed: the keep-awake line from a Windows re-run, and
+      a macOS run.)*
 - [x] The model catalog is pinned by SHA-256, downloads resume, and hashes are verified.
       *(2026-11-05: pinned (step 2) and verified here against `models/`; `ModelStoreTest` replaces a wrong-hash copy and
       refuses a tampered download on a local server. Owed: nothing has been downloaded from Hugging Face by the kit yet;
@@ -347,6 +359,9 @@ GPU, macOS.
       Maven Central and huggingface.co, the pinned downloads, and Juno on 127.0.0.1, so nothing uploads (read from the
       code). Owed: `PrivacyTest`'s Windows and macOS fixtures are not recordings; scrubbing checked on a Windows and a
       macOS tester's zip (step 9).)*
+      *(2026-11-09: scrubbing worked on real Windows data as far as the zip got (37 files, 158 home paths replaced, no user
+      name), but the packer crashed on a code-page log, so that zip has no `SUMMARY.txt` or report. Fixed, test first. Owed:
+      a complete zip from a Windows re-run, and a macOS run.)*
 - [x] `ingest` drafts the `docs/perf-compare/` entry and compares against the owner's reference run; the
       reference run on this host is published.
       *(2026-11-04: the owner's reference run at `80ec949e`, suite `all`, 72 of 72 runnable probes PASS or DONE, is
@@ -356,6 +371,8 @@ GPU, macOS.
       ingested.
       *(2026-11-05: Linux done (this host; the reference run ingested). Owed: a Windows and a macOS run, by testers while
       CI is deferred (owner decision 2026-11-03), each ingested (step 9).)*
+      *(2026-11-09: a Windows run ran all 12 selected probes and is ingested, but the kit did not finish cleanly: one probe
+      failed and packing crashed. Owed: a Windows re-run on the fixes, and a macOS run.)*
 - [x] Rule 10 and check 10 are in place (check 10 seen failing first); every open tier file has its **Kit
       probes** section; `INVENTORY.md` has the "Borrowed hardware" table.
       *(2026-10-31, step 7: check 10 failed on all 17 open tier files, then passed once the sections were
@@ -367,6 +384,8 @@ GPU, macOS.
 - [ ] Cross-surface checklist fully resolved.
       *(2026-11-05: drafted from this host's runs (the 2026-11-05 step 9 record): rows 1, 2 and 4 to 15 PASS on Linux,
       row 3 NEEDS-AMD-HARDWARE. Owed: row 14's `juno.bat`, which only a Windows tester's run exercises (step 9).)*
+      *(2026-11-09: row 14 on Windows: `juno-kit.bat` PASS; `juno.bat` not resolved, since local mode failed on the `run.bat`
+      flag defect, now fixed. Owed: the launcher probe's re-run on Windows.)*
 - [x] Docs (`juno-kit/README.md`, `docs/howto.md`, `docs/agent-arch.txt`, `README.md`) updated, in
       Juno-native language only; `CHANGELOG.md` entry added.
       *(2026-11-03, step 10: all five written; a grep of the added text finds no competitor product name, tier number,
@@ -1824,3 +1843,176 @@ the kit jar the reference run's quality code is in: LF 2.45609, CR LF 2.39748 na
 - Nothing else here changes: no criterion is ticked or unticked, and testers still build `80ec949e`.
 
 **Exit criteria:** 7 of 13, unchanged.
+
+### 2026-11-09: no tester's zip; no tier has executor work on this host; what runs next raised with the owner
+
+**Plan against code, verified at HEAD `616f577f`**, with [Tier 02H](TIER-02H-batched-gpu-decode.md)'s closing record uncommitted
+(`git diff --stat`: that one file). `check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep or build was running.
+- This tier is the first open row of the README's index. Step 9 is its only unfinished step, and it needs a tester's zip. None
+  has arrived: all 47 zips under `juno-kit-results/` record `"os" : "Linux"` in their manifests, and the only other kit zip newer
+  than 2026-11-05 under the home folder is this host's own, in `docs/perf-compare/20261109T151847Z-gpu-batched-decode-cross-surface/`.
+- What the step needs still exists: commit `80ec949e`, `Ingest`, and the reference run `docs/perf-compare/20261104T173942Z-kit-reference/`.
+- [Tier 02G](TIER-02G-cuda-on-windows.md)'s Linux-side work is done; its steps 2 and 3 are the owner's. Tier 02H's criteria are all
+  ticked. So no tier has executor work on this host, and README execution rule 1 stops [Tier 03](TIER-03-kv-cache-maturity.md).
+
+**Drift.**
+- `.gitattributes` is in no commit (`git log --all -- .gitattributes` is empty; `git status` lists it untracked). The note above
+  says LF checkouts start "from the commit that adds `.gitattributes`", and Tier 02G's item 4 lists it as fixed. Until it is committed,
+  a Windows checkout of any commit has neither the LF text nor the CR LF batch files. A run at `80ec949e` was always going to lack it.
+- Tier 03's "Models needed" said no new download is required, which item 0 contradicts. Corrected there, dated.
+
+**Read for the decision, not acted on: Tier 03's code claims hold at this HEAD.** `PagedKvTensor.needsAttentionScratch()` returns
+`true` unconditionally; `KvBlockPool` has `allocate` and `free` and no reference count; `KvElementType` is `F16` and `Q8_0` only;
+`DenseKvTensor` doubles its capacity and backs `F16` with `float[]`; `DeviceKvCache` is always FP16; no defragmentation or session
+save code exists; `gather-tax-microbench.sh`, `SlidingWindowLiveCheck`, `StaticBatchPrefixCacheSessionGatingTest`,
+`ModelQualityNllLiveTest` and `DeviceScratchBudget` exist. No Phi-3-mini-4k file is under `models/` (item 0).
+
+**Interaction the decision turns on.** Tier 02G's item 3 decision (its 2026-11-06 finding, options (a) to (c)) is still open.
+Its recommended option (a) splits each prefill window's attention into bounded launches. Tier 03's items 1 and 7 rewrite how the
+attention kernels read the KV. Whichever lands second carries the other. Tier 02G's standing gate would also have to name which
+build is its pre-tier jar once Tier 03's work is in the tree. Its pre-tier kit record at `80ec949e` is unaffected.
+
+**Decision for the owner: what runs while this tier and Tier 02G wait.**
+- (1) Let Tier 03 begin while both stay open. Its step 0 asks for the Phi-3-mini-4k file; its steps 1 and 2 (the gather oracle,
+  page reference counts) touch no attention launch. Tier 02G's item 3 choice is then due before Tier 03's step 3, the block-table kernel.
+- (2) Install the Windows 11 evaluation now and run Tier 02G's steps 2 and 3. One kit run at `80ec949e` is this tier's Windows run
+  as well as that tier's pre-tier record. It starts the evaluation's 90 days, and macOS still needs a tester.
+- (3) Keep waiting for testers and the Windows runs.
+- **Recommendation: (1)**, because nothing else moves without hardware the owner has not yet set up, and Tier 03 depends on neither
+  open tier. README execution rule 1 would record it as it did on 2026-11-05 and 2026-11-07.
+
+**Tests.** No code changed, so none was run. `check-plan-thresholds.sh` passes after these edits.
+
+**Out-of-tier changes:** none.
+
+**Exit criteria:** 7 of 13, unchanged.
+
+**Owed to the owner:** the decision above; commit Tier 02H's closing record and these notes; add `.gitattributes` to a commit.
+
+**Next for the executor:** on (1), record the decision under README execution rule 1, then Tier 03's step 0. Otherwise `ingest` each
+tester's zip as it arrives, as in the entries above.
+
+### 2026-11-09, later: step 9, the first Windows tester's run
+
+**Plan against code, verified at HEAD `616f577f`**, with the records above uncommitted. `check-plan-thresholds.sh` passed first
+(26 tier files). No gate, sweep or build was running.
+
+**What arrived.** `juno-kit-results.zip` at the repository root: one tester's whole results folder (134 entries, 22 MB unpacked),
+sent because the kit's own zip came out partial (defect 2).
+- Run `20261109T232611Z`, suite `quick`, Juno `616f577f` on a clean tree, kit jar `4da1a843a5b5972c`. Testers were to build
+  `80ec949e`; this one built the tip.
+- Windows 10 10.0 amd64; i5-1240P, 12 cores, 16 threads (a hybrid CPU), 15 GiB RAM; JVM integer and float vectors 256-bit, `UseAVX`
+  2; on mains; no CUDA or ROCm device, so the 9 GPU probes are listed as not runnable, with the reason.
+- The Windows paths seen working: `juno-kit.bat`; the free-disk check (a first try refused at 723 MiB); the full build (43 s, Maven's repository already filled);
+  the model download from Hugging Face (637 MiB, hash verified, no resume needed); detection; the FFM load of `kernel32`.
+
+**The folder itself is not scrubbed, so it stays out of the tree.** It holds the tester's Windows user name in 42 text files, and
+the JFR recordings the kit never packs. Nothing from it is in `docs/`, except through the scrubbed re-pack below. It is the owner's
+to delete once a re-run has replaced it.
+
+**Results: 12 probes, 1 DONE, 6 PASS, 4 NOISY, 1 FAIL, in 37:42.** Entry
+`docs/perf-compare/20261110T002742Z-remote-windows-amd64-12th-gen-core-i5-1240p/`.
+- `cpu.live.tinyllama` 10 of 10, with both cluster types on forked JVMs; consistency 33 of 33; grammar 14 of 14; long prompts 18 of
+  18 on both schedules; hot path 7 of 7; quality's check PASS.
+- Against the reference run at `80ec949e`: 93 items compared, 91 equal or within the bound, all **8 greedy replies byte-equal**
+  across OS, CPU and commit. The two that differ are defect 1.
+- **Mean NLL 2.397478341905886, identical to all 16 digits to this host's CR LF reading** (the same model and 2048 predictions,
+  `docs/perf-compare/20261107T070530Z-nll-line-endings/`). As the 2026-11-07 note says, the row against the reference's LF text is
+  not like for like; this equality is the real comparison, and shows the integer kernels at 128 bits match across Windows and Linux on
+  two CPU generations.
+- Calibration 0.6879 ms, 0.76x the reference host's time. Throughput readings: prefill 44.62 and 42.13 t/s at 128 and 512 tokens,
+  generation 14.58 and 14.90 t/s. Published, not compared.
+
+**Defects, each on a Windows path that had never run.**
+1. **`juno.bat` refused `--temperature`.** `scripts/run.bat` wrote `if /i "%~1"=="--temperature"(` with no space, in `:local_parse`
+   and `:cluster_parse`, and the same for `--mmproj-path` in `:local_parse`. `cmd.exe` reads `"--temperature"(` as the operand, so the
+   comparison is never true and the flag reaches "Unknown local flag". Every Windows user of those flags hit it, not only the kit.
+   `LauncherParityTest` passed because it greps for the flag's text.
+2. **Packing crashed on a log that was not UTF-8.** `KitBootstrap.zip` read each file with `Files.readString(UTF_8)`. On Windows a
+   probe JVM's redirected output is in `native.encoding`, and engine log lines hold an em dash (byte 0x97 in Cp1252), so the first such log,
+   `cpu.live.tinyllama.log`, threw `MalformedInputException` out of `KitMain.finish`. The tester saw a stack trace instead of the
+   summary, and a zip of 37 of 74 files with no `SUMMARY.txt` or report. `JunoProcess`'s and `LauncherProbe`'s log reads were strict in the
+   same way, and the launcher probe would have met it next.
+3. **The Windows keep-awake call left no evidence.** A successful call printed nothing and a return of 0 was silent too, so a run
+   cannot show it held.
+
+**Tests first**, each seen failing for the defect, then passing:
+- `WindowsLauncherScriptTest.no_comparison_is_glued_to_its_block`: failed on the three `run.bat` lines. Its checker has its own test.
+- `ResultsPackerTest` (new, 5): `aLogThatIsNotUtf8IsPackedAndTheFilesAfterItAreToo` threw the tester's exception;
+  `aHomePathInTheCodePageIsStillScrubbed` failed on the undecoded name; `readTextReadsAFileTheSameWay` threw it too.
+  `utf8TextStaysUtf8WhateverTheCodePage` and `bytesNoCharsetCanReadStillDecodeWithoutThrowing` passed against the stub, whose lenient
+  UTF-8 is their expected result.
+- `KeepAwakeTest.theWindowsCallSaysWhetherItHeld`: failed against the stub.
+
+**The change.**
+- `scripts/run.bat`: the space added on the three lines.
+- `KitBootstrap.readText` and `decode`: strict UTF-8, else `native.encoding`, so a home path in a code-page log still reads as the
+  path the scrubber looks for. Decoding never throws. `zip`, `JunoProcess` and `LauncherProbe` read logs through it.
+- `KeepAwake`: logs the call's result either way, through `windowsMessage`.
+
+**Tests.** `mvn package -pl juno-player,juno-kit -am -Dtest='cab.ml.juno.kit.**,WindowsLauncherScriptTest,LauncherParityTest'
+-Dsurefire.failIfNoSpecifiedTests=false`: `juno-kit` 127 tests, launcher tests 10, 0 failures, 0 errors. No engine code changed, so the
+full suite and `mvn verify -pl juno-master` are left for the close, as criterion 11's note says. `.bat` files cannot run on this host:
+the `run.bat` fix rests on the static test until a Windows re-run.
+
+**Ingest.** The kit's own zip is partial, so the entry is packed on this host from the folder, by the kit's `Privacy` with the
+tester's user name and home path, decoding as windows-1252: 74 files, no user name, 367 home paths replaced. The host name is not
+known on this side; none appears in the text (a search for host-name shapes found none, and the tester's own run of the scrubber,
+which knew it, replaced none). `ingest --reference` then wrote the draft, since no reference run is at `616f577f`; reviewed and
+published, with its notes. `INVENTORY.md`'s table has the host.
+
+**Cross-surface, on Windows, from this run** (CPU; no GPU probe ran): rows 1, 4 to 8, 10, 12, 13 and 15 have probes that pass or read
+NOISY only for other programs' load, except that rows 6, 12 and 14 each count the failed launcher probe. Rows 9 and 11 did not run in
+`quick`. Row 14: `juno-kit.bat` PASS, `juno.bat` open.
+
+**Found, recorded, not changed.**
+- Metered-connection detection exists on Linux only, so scope item 6's warning cannot fire on Windows or macOS. The total download size
+  is always shown.
+- The zip holds detection's parsed values, not the commands' raw output, so step 9's "recorded outputs" cannot come from a zip. The
+  parsers read the right values on this real host.
+- Other programs used 8% to 15% of the CPU throughout, on a laptop asked to stay idle. The rule worked as written; it re-ran four
+  probes twice and added about 9 minutes. Whether a Windows desktop can ever read under 5% is worth watching on the next tester's run.
+- `"cpuFlags" : [ ]` on Windows is by design (the processor identity gives no feature flags); the JVM's vector widths and `UseAVX` carry
+  what the kit uses.
+
+**The 256-bit reading (step 9, for [Tier 02E](TIER-02E-cpu-decode-kernels.md)'s width row).** `cpu.kernel-width`, 128-bit time over
+256-bit time, attempts 1, 2, 3; every attempt marked NOISY:
+
+| Shape, threads | Attempt 1 | Attempt 2 | Attempt 3 (published medians, ms per call) |
+|---|---|---|---|
+| Q4_K 14336x4096, 1 | 1.22x | 1.16x | 1.27x (10.15, 7.97) |
+| Q4_K 14336x4096, 16 | 1.20x | 1.22x | 1.14x (2.23, 1.95; 256-bit spread 31%) |
+| Q6_K 4096x14336, 1 | 1.23x | 1.21x | 1.18x (20.00, 16.88) |
+| Q6_K 4096x14336, 16 | 1.26x | 1.25x | 1.29x (5.05, 3.92) |
+
+Tier 02E's threshold is `>= 1.5x` for Q4_K on one thread; this reads 1.16x to 1.27x. Not scored, by the out-of-scope rule on remote
+hosts. 256 bits is faster in all 12 ratios, on one hybrid laptop CPU under load. Only the timing ran at 256 bits: every live, quality and
+greedy probe here ran at 128, the width `auto` selects, so no real 256-bit host has yet produced a reply.
+
+**Decision for the owner: owner decision 4 (`auto` resolves to 128) on this reading.**
+- (a) Keep `auto` at 128 for now. Get a correctness reading at 256 bits (`-Djuno.cpu.integerWidth=256`: live checks, quality, greedy
+  replies) and an idle or second 256-bit host's timing, then decide.
+- (b) Move `auto` to 256 on hosts that prefer it now, on the 14% to 29% seen here and the forced-width parity tests.
+- (c) Close the question at 128: below the 1.5x the plan asked for.
+- **Recommendation: (a).** The speed-up looks real, but it is one noisy host and the 256-bit path has not answered a request on real
+  256-bit hardware. Flipping the default changes the kernel every AVX2 user runs.
+- **Owner decision 2026-11-09: `auto` stays at 128.** Owner decision 4 stands, and 256 stays an explicit opt-in
+  (`-Djuno.cpu.integerWidth=256`). Tier 02E's width row stays `NEEDS-AVX2-HARDWARE`. No further 256-bit run is scheduled by this decision.
+
+**Docs.** `CHANGELOG.md` Session 136; `docs/perf-compare/README.md`'s row. `docs/howto.md` and `juno-kit/README.md` do not describe
+these paths and are unchanged.
+
+**Out-of-tier changes:** `scripts/run.bat` (three lines) and its test. The defect is the launcher's, which [Tier 02G](TIER-02G-cuda-on-windows.md)
+owns; its criterion carries a dated note.
+
+**Exit criteria:** 8 of 13 (criterion 1 ticked). Criteria 2, 4, 7, 9 and 12 carry dated notes and stay open.
+
+**Owed to the owner:**
+1. Commit the fixes, these records and `.gitattributes`, so a tester can pull them. Leave out `juno-kit-results.zip`, which is not
+   scrubbed and is not git-ignored at the root.
+2. The Windows re-run on that commit: `juno-kit.bat --suite quick --yes` for a clean complete zip, or `--probes launcher.tinyllama` for the
+   launcher, keep-awake and packing alone.
+3. A macOS run.
+4. The 2026-11-09 decision on what runs next, which this run does not change.
+
+**Next for the executor:** `ingest` the re-run's zip and score criteria 4, 7, 9 and 12 for Windows.

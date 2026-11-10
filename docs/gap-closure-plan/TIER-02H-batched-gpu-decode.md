@@ -1,10 +1,10 @@
 # Tier 02H: Batched GPU decode
 
-Status: in progress (added 2026-10-31 by owner decision; runs after Tier 02G). Begun 2026-11-07 by owner decision while
-Tier 02G is postponed until it is run on Windows (README execution rule 1). Steps 1 to 5 done 2026-11-09 (decomposition,
-tests first, the region on every handler that has one, item 3's announcement, every threshold, the owner's pinned standing
-gate and the cross-surface runs). Open: one **Owner decision** on row 7 of the cross-surface table, recorded under
-2026-11-09 "the standing gate and the cross-surface runs".
+Status: **complete** (2026-11-09). Every exit criterion is checked. `--parallel 8` over `1` reads 1.77x to 2.32x (bar 1.50x) at
+0.43x to 0.58x the mean latency (bar 1.00x), with 0 of 8 replies differing on every sweep model; the owner's pinned standing gate
+is met; row 7 of the cross-surface table was restated by **Owner decision** 2026-11-09. Kit probe `gpu.unit-tests` did not pass on
+this host: see README execution rule 10 under 2026-11-09 "the standing gate and the cross-surface runs". Added 2026-10-31 by owner
+decision; begun 2026-11-07 by owner decision while Tier 02G is postponed until it is run on Windows (README execution rule 1).
 Gap analysis refs: none — see "Why this tier, why now"
 
 **Added 2026-10-31 (owner decision, Tier 02F record of that date).** A decode step of several requests runs
@@ -89,7 +89,7 @@ once per layer. Static `--parallel 8` then reads above `--parallel 1` on the GPU
 | 4 | Static schedule | primary: a `--parallel` batch decodes in the region |
 | 5 | Continuous schedule | the running set's decode step takes the same region; Tier 07 scores its gate |
 | 6 | Single-node local mode | primary surface |
-| 7 | Pipeline-parallel cluster | each node's stage runs its layers' batched step in the region; live checks 1 to 6 |
+| 7 | Pipeline-parallel cluster | keeps its current path, one request at a time on each node, stated at startup; live checks 1 to 6. *Restated 2026-11-09 by **Owner decision**; it read "each node's stage runs its layers' batched step in the region", which no code did before or after this tier* |
 | 8 | Tensor-parallel cluster | batched decode across shards keeps its current path or fails closed with a stated reason; live checks 7 and 8 |
 | 9 | LoRA training | unchanged (CPU, float kernels) |
 | 10 | LoRA playback | a batch with `--lora-play` either runs the adapter in the region or keeps the host-driven batch, stated at startup |
@@ -174,10 +174,9 @@ The four sweep models, all present here (`INVENTORY.md`). Hardware: this host's 
       `--parallel` ratio reading).
       *(2026-11-09: `ConsistencyProbe`'s GPU run adds a batch of eight at 64 tokens; `gpu.parallel.tinyllama` already recorded the ratio
       as `parallel8OverParallel1`; `coverage.tsv` line `feature:batched-gpu-decode`; `ProbeSelfTests`, `CoverageTest`.)*
-- [ ] Cross-surface checklist fully resolved.
-      *(2026-11-09: 14 of 15 rows resolved, in [`20261109T151847Z-gpu-batched-decode-cross-surface`](../perf-compare/20261109T151847Z-gpu-batched-decode-cross-surface/INDEX.md). Open: row 7,
-      which needs an **Owner decision**: a pipeline cluster decodes a batch one request at a time on each node, not the batched step
-      the row describes. See this date's record "the standing gate and the cross-surface runs".)*
+- [x] Cross-surface checklist fully resolved.
+      *(2026-11-09: all 15 rows, in [`20261109T151847Z-gpu-batched-decode-cross-surface`](../perf-compare/20261109T151847Z-gpu-batched-decode-cross-surface/INDEX.md). Row 7 restated by
+      **Owner decision**: a pipeline cluster keeps its per-request path, stated at startup. See this date's record "the standing gate and the cross-surface runs".)*
 - [x] Docs (`docs/howto.md`, the launcher's `--help`, `docs/agent-arch.txt`, `README.md`) updated in
       Juno-native language; `CHANGELOG.md` entry added.
       *(2026-11-09: `README.md` does not state a `--parallel` recommendation, so it had nothing to change.)*
@@ -412,7 +411,7 @@ the tree's jar with identical entries. The gate's jars in `dist/` were untouched
 
 **Drift between the plan and the code, one row.** Row 7 says "each node's stage runs its layers' batched step in the region". Nothing does: `LocalInferencePipeline` is the only production caller of
 `forwardMultiDecode`, `ProcessPipelineClient` and `TensorParallelPipelineClient` inherit `InferencePipeline.forwardBatch`'s serial default, and the `ForwardPass` RPC carries one request. That was already so before this tier. Row 8
-allows it ("keeps its current path"); row 7 does not, so it needs the decision below.
+allows it ("keeps its current path"); row 7 as written did not, hence the decision below.
 
 | Cluster, TinyLlama, GPU, 8 concurrent clients, 64 tokens | `--parallel` 8 over 1, t/s (pre-tier) | t/s (this build) | Mean latency, 8 over 1 (this build) | Replies differing at 8 |
 |---|---|---|---|---|
@@ -431,7 +430,7 @@ So a batch on a cluster was slower than `--parallel 1` before this tier and stil
 | 4 | Static schedule | PASS: `20261109T005616Z-gpu-batched-decode-parallel` |
 | 5 | Continuous schedule | PASS: `compare-schedule.sh --gpu` (continuous over static 0.967x aggregate, a reading; largest decode batch 8), kit `gpu.schedule.tinyllama`, `gpu.mixed-prefill.tinyllama` |
 | 6 | Single-node local mode | PASS |
-| 7 | Pipeline-parallel cluster | **OPEN, Owner decision below.** Live checks 1 to 6 pass on five models (kit `gpu.live.*`), stub integration tests pass, replies equal, statement printed; the batched step the row describes does not exist |
+| 7 | Pipeline-parallel cluster | PASS on the row as restated (**Owner decision** below): keeps its current path, stated at startup (`ClusterBatchNoticeTest`); live checks 1 to 6 pass on five models (kit `gpu.live.*`), stub integration tests pass, replies equal |
 | 8 | Tensor-parallel cluster | PASS on the row's own terms: keeps its current path, stated at startup; live checks 7 and 8 pass on five models; replies equal |
 | 9 | LoRA training | PASS: CPU float kernels unchanged; `compare-lora.sh` train 1.000x (bar 1.25x), recall ok |
 | 10 | LoRA playback | PASS: keeps the serial batch, stated at startup (`LoraPlaybackBatchNoticeTest`); 0 of 8 batched replies differ; playback 1.013x (bar 0.80x) |
@@ -445,6 +444,9 @@ So a batch on a cluster was slower than `--parallel 1` before this tier and stil
 `PrefillRegionHandlerParityTest`. Five repeat runs of those two classes with every process's GPU memory sampled once a second: the test JVM returns to 118 to 122 MiB after every case while the desktop's own use moves by up to about 1 GiB; which cases miss changes
 from run to run; run 5 passes all six, every logit comparison reached.
 
+**README execution rule 10, not met to the letter.** `gpu.unit-tests` is on this tier's keep-passing list, and the rule says such a probe passes on the tier's build before the tier closes. On this host it does not: `PrefillReserveDeviceTest` fails here on the committed tree as well, and the
+free-memory check depends on what the desktop does with the GPU. The tier closed on the owner's decision (a) below, taken with these failures reported; the owner has not ruled on rule 10 separately. A run of this probe on a host with no desktop on the GPU has not been made.
+
 **Tests of this part.**
 
 | Test | First run | Result |
@@ -457,9 +459,9 @@ statement was compiled and its text confirmed in the jar; that standalone coordi
 
 **Out-of-tier changes:** none.
 
-**Owner decision needed (row 7).** Either (a) restate row 7 as row 8 reads, "keeps its current path, stated at startup", which closes this tier and leaves a batched cluster decode as later work; or (b) require a batched step on each node, which needs a new `ForwardPass` RPC carrying N activations and each
-node's stage calling the batched decode, and keeps this tier open. Recommended: (a). The tier's objective and every threshold are about the local server, where they are met; (b) changes the wire protocol and has no reading yet showing what it would gain.
+**Owner decision (2026-11-09), row 7.** Put to the owner with the readings above: (a) restate row 7 as row 8 reads, "keeps its current path, stated at startup", which closes this tier and leaves a batched cluster decode as later work; or (b) require a batched step on each node, which needs a new `ForwardPass` RPC carrying N activations and each
+node's stage calling the batched decode, and keeps this tier open. Recommended: (a), because the tier's objective and every threshold are about the local server, where they are met, and (b) changes the wire protocol with no reading yet showing what it would gain. **The owner chose (a).** A batched cluster decode is later work, not scheduled; it would need its own threshold.
 
-**Owed to the owner:** that decision. No script to run.
+**Owed to the owner:** commit this work. ROCm stays NEEDS-AMD-HARDWARE until a tester's kit run on an AMD card.
 
-**Next for the executor:** on (a), restate row 7 with the **Owner decision** recorded here, tick "Cross-surface checklist fully resolved", set the Status and the README's tier index to complete. On (b), the RPC and a threshold for it, here first.
+**Next for the executor:** nothing in this tier. In running order, Tier 02F waits on testers' zips and Tier 02G on the owner's Windows runs (its steps 2 and 3); no decision yet lets Tier 03 begin while they are open.

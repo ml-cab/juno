@@ -220,8 +220,11 @@ README execution rule 10.
 
 ## Models needed
 
-Existing models suffice for correctness and defrag testing. No new downloads required for this
-tier specifically.
+Existing models suffice for correctness and defrag testing. Item 0 needs one file that is not on disk: a
+GGUF of a model trained with a binding sliding window on a handler Juno runs, likely Phi-3-mini-4k
+([`INVENTORY.md`](INVENTORY.md), gaps table). The owner is asked for it at the start of this tier.
+*(Corrected 2026-11-09: this section said "no new downloads required for this tier specifically", written before item 0 was
+added on 2026-10-11.)*
 
 ## Exit criteria
 

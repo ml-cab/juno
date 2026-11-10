@@ -29,4 +29,11 @@ class KeepAwakeTest {
 		assertThat(KeepAwake.command("Linux", 42, false)).isEmpty();
 		assertThat(KeepAwake.command("Windows 11", 42, true)).isEmpty(); // FFM call instead of a helper
 	}
+
+	@Test
+	void theWindowsCallSaysWhetherItHeld() {
+		// SetThreadExecutionState returns the previous state, or 0 when it failed.
+		assertThat(KeepAwake.windowsMessage(0x80000000)).contains("Keeping this machine awake");
+		assertThat(KeepAwake.windowsMessage(0)).contains("Could not keep Windows awake", "SetThreadExecutionState");
+	}
 }
