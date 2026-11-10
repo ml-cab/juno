@@ -66,8 +66,9 @@ class ProbeRunnerTest {
 		Path probes = runDir.resolve("probes");
 		ProcessBuilder pb = ProbeRunner.probeProcess(List.of("java"), probes.resolve("cpu.live.tinyllama.log"),
 				ProbeRunner.nodeLogDir(probes, "cpu.live.tinyllama"));
-		assertThat(pb.environment()).containsEntry(cab.ml.juno.player.ClusterHarness.NODE_LOG_DIR_ENV,
-				probes.resolve("cpu.live.tinyllama").resolve("nodes").toString());
+		// the one variable, not the map: a failing map assertion would print the whole environment
+		assertThat(pb.environment().get(cab.ml.juno.player.ClusterHarness.NODE_LOG_DIR_ENV))
+				.isEqualTo(probes.resolve("cpu.live.tinyllama").resolve("nodes").toString());
 		assertThat(ProbeRunner.errorFileOption(probes, "cpu.live.tinyllama"))
 				.isEqualTo("-XX:ErrorFile=" + probes.resolve("cpu.live.tinyllama.hs_err_pid%p.log"));
 

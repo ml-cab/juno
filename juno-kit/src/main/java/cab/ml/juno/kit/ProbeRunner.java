@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import cab.ml.juno.player.ClusterHarness;
+
 /**
  * Runs each probe in a fresh JVM with Juno's runtime flags and a timeout, logging its output to
  * {@code probes/<id>.log}. A crash, a non-zero exit or a timeout is recorded and the run goes on. A reading
@@ -58,16 +60,17 @@ final class ProbeRunner implements RunSession.Executor {
 		String root = System.getProperty("juno.kit.root");
 		if (root != null)
 			props.add("-Djuno.kit.root=" + root);
+		props.add(errorFileOption(dir, probe.id()));
+		Path nodeLogs = nodeLogDir(dir, probe.id());
 		for (int attempt = 1;; attempt++) {
 			Files.deleteIfExists(report);
 			boolean busyBefore = probe.requirements().needsGpu() && nvidiaSmi && gpuBusyBeforeStart();
 			List<String> args = probeArgs(probe, report, modelPaths, dir);
 			List<String> cmd = JvmLauncher.command(probe.heap(), probe.kind() == ProbeKind.READING, props,
 					ProbeMain.class.getName(), args);
-			Files.writeString(log, "== attempt " + attempt + ": " + String.join(" ", cmd) + "\n",
-					StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-			Process p = new ProcessBuilder(cmd).redirectErrorStream(true)
-					.redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile())).start();
+			Files.writeString(log, "== attempt " + attempt + ": " + ClusterHarness.NODE_LOG_DIR_ENV + "=" + nodeLogs
+					+ " " + String.join(" ", cmd) + "\n", StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+			Process p = probeProcess(cmd, log, nodeLogs).start();
 			p.getOutputStream().close();
 			running = p;
 			boolean finished;
@@ -117,6 +120,31 @@ final class ProbeRunner implements RunSession.Executor {
 							: "")).trim(),
 					share, gpuMiB, gpuBusy);
 		}
+	}
+
+	/**
+	 * The probe's JVM, its output appended to its log. Every Juno JVM it starts inherits
+	 * {@link ClusterHarness#NODE_LOG_DIR_ENV}, so the cluster nodes those JVMs fork write their standard error and
+	 * JVM error files into {@code nodeLogs}, inside the run folder, which is packed and scrubbed with the rest.
+	 */
+	static ProcessBuilder probeProcess(List<String> cmd, Path log, Path nodeLogs) {
+		ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true)
+				.redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()));
+		pb.environment().put(ClusterHarness.NODE_LOG_DIR_ENV, nodeLogs.toString());
+		return pb;
+	}
+
+	/** The folder for the forked cluster nodes of probe {@code id}: {@code probes/<id>/nodes}. */
+	static Path nodeLogDir(Path probesDir, String id) {
+		return probesDir.resolve(id).resolve("nodes");
+	}
+
+	/**
+	 * The JVM option that puts probe {@code id}'s own error file in the probes folder, which exists before the
+	 * probe starts; HotSpot otherwise writes it to the working directory, the tester's checkout.
+	 */
+	static String errorFileOption(Path probesDir, String id) {
+		return "-XX:ErrorFile=" + probesDir.resolve(id + ".hs_err_pid%p.log");
 	}
 
 	/**

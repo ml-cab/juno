@@ -1,5 +1,20 @@
 ## Status 
 
+**Session 140** - A failing cluster node leaves its evidence; the kit's noise reading no longer counts its own children
+
+- **`JUNO_NODE_LOG_DIR` keeps what a local cluster's forked nodes leave when they fail.** Each node appends its standard
+  error, with its warnings and errors, to `<folder>/<node>.log`, and a JVM that crashes writes its error file there. Without
+  it, as before, a node's output is discarded unless `--verbose` is given.
+- **When a cluster stops, a node that had already exited is named in a warning**, with its process ID and exit code. A node
+  that dies mid-request otherwise shows up only as a closed connection.
+- **A failed live check (`./juno test`, the kit's live probes) names its root cause**, such as a reset connection, after the
+  exception's own message.
+- **The hardware validation kit packs that evidence.** Every probe runs with `JUNO_NODE_LOG_DIR` inside the run folder, and
+  the probe's own JVM writes its error file there too. A Java error file's list of environment variables is left out of the zip.
+- **The kit's noise rule no longer counts the probe's own short-lived child processes as other programs.** The CPU a child
+  used after its last sample was counted as another program's, which marked the CPU kernel width probe noisy on every attempt
+  on a 16-thread host. A second in which one of the probe's processes exits is now left out of the reading.
+
 **Session 139** - A warning for Phi-3 files without their window, and KV pages that can be shared
 
 - **A `phi3` file with a 4,096-token context and no `phi3.attention.sliding_window` key is named in a warning at load**, on

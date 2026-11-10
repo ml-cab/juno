@@ -19,7 +19,11 @@ package cab.ml.juno.player;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -66,6 +70,14 @@ public final class ClusterHarness implements AutoCloseable {
 	static final int NODE_3_PORT = 19094;
 	/** How long a node has to exit through its shutdown hooks once its standard input closes. */
 	static final long NODE_STOP_GRACE_MS = 10_000;
+
+	/**
+	 * Environment variable naming a folder for what a forked node leaves when it fails: its standard error in
+	 * {@code <node id>.log} (with warnings and errors logged there) and its JVM error file. Unset, a node's
+	 * standard error is discarded (inherited with {@code JUNO_VERBOSE}) and its error file goes to the working
+	 * directory.
+	 */
+	public static final String NODE_LOG_DIR_ENV = "JUNO_NODE_LOG_DIR";
 
 	private static final int VOCAB_SIZE = EmbeddedNodeServer.VOCAB_SIZE;
 	private static final int TOTAL_LAYERS = EmbeddedNodeServer.TOTAL_LAYERS;
@@ -413,6 +425,7 @@ public final class ClusterHarness implements AutoCloseable {
 			pipelineClient.shutdown();
 		if (tensorPipelineClient != null)
 			tensorPipelineClient.shutdown();
+		nodesExitedEarly(processes).forEach(log::warning);
 		// Every node is told to stop before any is waited on, so they exit in parallel.
 		processes.forEach(ClusterHarness::closeStdin);
 		for (Process proc : processes)
@@ -518,15 +531,11 @@ public final class ClusterHarness implements AutoCloseable {
 			cmd.add("-Djuno.health.url=" + healthUrl);
 		}
 
-		if (!verbose) {
-			java.io.File q = java.io.File.createTempFile("juno-quiet-", ".properties");
-			q.deleteOnExit();
-			try (java.io.PrintWriter pw = new java.io.PrintWriter(q)) {
-				pw.println("handlers=");
-				pw.println(".level=OFF");
-			}
-			cmd.add("-Djava.util.logging.config.file=" + q.getAbsolutePath());
-		}
+		// JUNO_NODE_LOG_DIR: the node's stderr, its warnings and its JVM error file go to that folder.
+		Path logDir = nodeLogDir(System.getenv(NODE_LOG_DIR_ENV));
+		if (!verbose)
+			cmd.add("-Djava.util.logging.config.file=" + quietLoggingConfig(logDir != null).toAbsolutePath());
+		cmd.addAll(nodeErrorFileOptions(logDir));
 
 		cmd.addAll(nodeLifecycleProperties());
 
@@ -536,11 +545,7 @@ public final class ClusterHarness implements AutoCloseable {
 
 		ProcessBuilder pb = new ProcessBuilder(cmd);
 		pb.redirectErrorStream(false);
-		if (verbose) {
-			pb.redirectError(ProcessBuilder.Redirect.INHERIT);
-		} else {
-			pb.redirectError(ProcessBuilder.Redirect.DISCARD);
-		}
+		pb.redirectError(nodeStderr(logDir, nodeId, port, verbose));
 		Process proc = pb.start();
 		log.info("Forked JVM for node [" + nodeId + "] PID=" + proc.pid());
 		return proc;
@@ -576,13 +581,66 @@ public final class ClusterHarness implements AutoCloseable {
 	private static String drainStderr(Process proc) {
 		try {
 			var errStream = proc.getErrorStream();
-			if (errStream == null || errStream.available() == 0)
-				return "(stderr discarded — rerun with --verbose for details)";
+			if (errStream == null || errStream.available() == 0) {
+				Path logDir = nodeLogDir(System.getenv(NODE_LOG_DIR_ENV));
+				return logDir != null ? "(stderr in " + logDir + ")"
+						: "(stderr discarded — rerun with --verbose for details)";
+			}
 			byte[] bytes = errStream.readAllBytes();
 			return new String(bytes, java.nio.charset.StandardCharsets.UTF_8).strip();
 		} catch (Exception e) {
 			return "(could not read stderr: " + e.getMessage() + ")";
 		}
+	}
+
+	/** The folder {@link #NODE_LOG_DIR_ENV} names, or {@code null} when it is unset or blank. */
+	static Path nodeLogDir(String value) {
+		return value == null || value.isBlank() ? null : Path.of(value.strip());
+	}
+
+	/** The JVM options that put a forked node's error file in {@code dir}; none without a folder. */
+	static List<String> nodeErrorFileOptions(Path dir) {
+		return dir == null ? List.of() : List.of("-XX:ErrorFile=" + dir.resolve("hs_err_pid%p.log"));
+	}
+
+	/**
+	 * Where a forked node's standard error goes. With a folder: appended to {@code <dir>/<node id>.log}, after a
+	 * line naming the node, its port and the time, so the file holds every start of that node in one run. Without
+	 * one: this JVM's standard error with {@code verbose}, else nowhere.
+	 */
+	static ProcessBuilder.Redirect nodeStderr(Path dir, String nodeId, int port, boolean verbose) throws IOException {
+		if (dir == null)
+			return verbose ? ProcessBuilder.Redirect.INHERIT : ProcessBuilder.Redirect.DISCARD;
+		Files.createDirectories(dir);
+		Path file = dir.resolve(nodeId + ".log");
+		Files.writeString(file, "--- " + nodeId + " on port " + port + ", started " + Instant.now()
+				+ System.lineSeparator(), StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+		return ProcessBuilder.Redirect.appendTo(file.toFile());
+	}
+
+	/**
+	 * The logging configuration of a node started without {@code JUNO_VERBOSE}: nothing, or with
+	 * {@code keepWarnings} warnings and errors to standard error, where {@link #nodeStderr} keeps them, so a
+	 * failure the node or its gRPC server logs reaches the file.
+	 */
+	static Path quietLoggingConfig(boolean keepWarnings) throws IOException {
+		Path q = Files.createTempFile("juno-quiet-", ".properties");
+		q.toFile().deleteOnExit();
+		Files.writeString(q, keepWarnings
+				? String.join(System.lineSeparator(), "handlers=java.util.logging.ConsoleHandler", ".level=WARNING",
+						"java.util.logging.ConsoleHandler.level=WARNING", "")
+				: String.join(System.lineSeparator(), "handlers=", ".level=OFF", ""), StandardCharsets.UTF_8);
+		return q;
+	}
+
+	/**
+	 * A line for each node that exited before the cluster asked it to stop. Such a node died, and the
+	 * coordinator saw only a closed connection.
+	 */
+	static List<String> nodesExitedEarly(List<Process> procs) {
+		return procs.stream().filter(p -> !p.isAlive())
+				.map(p -> "Node PID " + p.pid() + " exited with code " + p.exitValue() + " before the cluster stopped it")
+				.toList();
 	}
 
 	/**

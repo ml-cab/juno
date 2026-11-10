@@ -20,11 +20,14 @@ import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.OptionalDouble;
 
 /**
  * Samples, once a second while a probe runs, how much of the machine's CPU other processes use: system CPU
- * time minus the probe's process tree and the kit's own. A process that exits keeps its last-seen CPU time,
- * so a short-lived child is not counted as another program. Where {@code nvidia-smi} runs it also samples,
+ * time minus the probe's process tree and the kit's own, each process's CPU time read at both ends of the
+ * second. A second in which one of those processes exited is left out: the CPU it used after its last sample
+ * is in the system's load and in no sample of it, so it would count as another program's. A probe that starts
+ * many short child JVMs (the kernel width probe starts 24 per attempt) read several points high before this. Where {@code nvidia-smi} runs it also samples,
  * every other second, the device memory the probe's processes hold and the other compute processes.
  */
 final class LoadSampler implements AutoCloseable {
@@ -33,7 +36,6 @@ final class LoadSampler implements AutoCloseable {
 			.getOperatingSystemMXBean();
 	private final int cpus = Runtime.getRuntime().availableProcessors();
 	private final ProcessHandle probe;
-	private final Map<Long, Double> ownCpu = new HashMap<>();
 	private final Thread thread;
 	private final boolean gpu;
 	private volatile boolean stop;
@@ -50,7 +52,7 @@ final class LoadSampler implements AutoCloseable {
 
 	private void loop() {
 		os.getCpuLoad();
-		double ownBefore = ownCpuSeconds();
+		Map<Long, Double> ownBefore = ownCpu();
 		long t0 = System.nanoTime();
 		int tick = 0;
 		while (!stop) {
@@ -60,11 +62,11 @@ final class LoadSampler implements AutoCloseable {
 				return;
 			}
 			double load = os.getCpuLoad();
-			double ownNow = ownCpuSeconds();
+			Map<Long, Double> ownNow = ownCpu();
 			long t1 = System.nanoTime();
 			double dt = (t1 - t0) / 1e9;
 			if (load >= 0)
-				add(otherShareSeconds(load, cpus, dt, ownNow - ownBefore), dt);
+				otherCpuSeconds(load, cpus, dt, ownBefore, ownNow).ifPresent(other -> add(other, dt));
 			ownBefore = ownNow;
 			t0 = t1;
 			if (gpu && tick++ % 2 == 0)
@@ -98,24 +100,38 @@ final class LoadSampler implements AutoCloseable {
 		wallSeconds += dt;
 	}
 
+	/**
+	 * Other programs' CPU seconds in one interval, from the CPU seconds so far of the probe's live processes at its
+	 * start ({@code before}) and end ({@code now}), by PID. Empty when a process in {@code before} is gone from
+	 * {@code now}: it exited during the interval, and its CPU after the first sample was never read. A process new
+	 * in {@code now} started during the interval and counts from zero.
+	 */
+	static OptionalDouble otherCpuSeconds(double systemLoad, int cpus, double intervalSeconds, Map<Long, Double> before,
+			Map<Long, Double> now) {
+		if (!now.keySet().containsAll(before.keySet()))
+			return OptionalDouble.empty();
+		double own = 0;
+		for (Map.Entry<Long, Double> e : now.entrySet())
+			own += e.getValue() - before.getOrDefault(e.getKey(), 0.0);
+		return OptionalDouble.of(otherShareSeconds(systemLoad, cpus, intervalSeconds, own));
+	}
+
 	/** CPU seconds others used in an interval: system load times capacity, minus our own, never negative. */
 	static double otherShareSeconds(double systemLoad, int cpus, double intervalSeconds, double ownCpuSeconds) {
 		return Math.max(0, systemLoad * cpus * intervalSeconds - Math.max(0, ownCpuSeconds));
 	}
 
-	private double ownCpuSeconds() {
-		record(ProcessHandle.current());
-		record(probe);
-		probe.descendants().forEach(this::record);
-		double sum = 0;
-		for (double v : ownCpu.values())
-			sum += v;
-		return sum;
+	/** CPU seconds so far of this JVM, the probe and the probe's live descendants, by PID. */
+	private Map<Long, Double> ownCpu() {
+		Map<Long, Double> cpu = new HashMap<>();
+		record(cpu, ProcessHandle.current());
+		record(cpu, probe);
+		probe.descendants().forEach(h -> record(cpu, h));
+		return cpu;
 	}
 
-	private void record(ProcessHandle h) {
-		h.info().totalCpuDuration().map(Duration::toNanos)
-				.ifPresent(ns -> ownCpu.merge(h.pid(), ns / 1e9, Math::max));
+	private static void record(Map<Long, Double> cpu, ProcessHandle h) {
+		h.info().totalCpuDuration().map(Duration::toNanos).ifPresent(ns -> cpu.put(h.pid(), ns / 1e9));
 	}
 
 	/** Others' share of the machine's CPU over the probe so far, 0 to 1. */

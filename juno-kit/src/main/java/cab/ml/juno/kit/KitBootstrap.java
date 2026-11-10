@@ -440,9 +440,14 @@ public final class KitBootstrap {
 	 * JSON-escaped) with {@code <home>}, host names with {@code <host>}, the user name with {@code <user>}, and
 	 * MAC and IP addresses with {@code <mac>} and {@code <ip>}. Loopback addresses and hardware names stay. A
 	 * user name shorter than three characters is replaced only inside the home path, so it cannot rewrite
-	 * ordinary words.
+	 * ordinary words. A JVM error file's environment-variable block is left out whole: {@code JAVA_TOOL_OPTIONS}
+	 * and {@code _JAVA_OPTIONS} can hold a password.
 	 */
 	static final class Privacy {
+
+		/** A JVM error file's {@code Environment Variables:} line and the non-blank lines after it. */
+		private static final Pattern JVM_ENVIRONMENT = Pattern
+				.compile("(?m)^Environment Variables:\\R(?:[^\\r\\n]+(?:\\r?\\n|\\z))*");
 
 		private static final Pattern MAC = Pattern.compile(
 				"(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\\1){4}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])");
@@ -505,7 +510,7 @@ public final class KitBootstrap {
 		}
 
 		String scrub(String text) {
-			String s = text;
+			String s = JVM_ENVIRONMENT.matcher(text).replaceAll("Environment Variables: (left out by the kit)\n");
 			for (Pattern p : homes)
 				s = p.matcher(s).replaceAll(Matcher.quoteReplacement("<home>"));
 			for (Pattern p : hosts)

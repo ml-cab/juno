@@ -243,6 +243,18 @@ on this host, so a desktop firewall has nothing to ask about. When the cluster s
 node's standard input, and the node exits through its shutdown hooks (its gRPC server drains and,
 with `--jfr`, its recording is written); a node still running 10 s later is ended. A node started on
 its own (`juno-node`, `NodeMain`) listens on every interface unless `-Dnode.bind=<address>` names one.
+
+A node's own output is discarded unless `--verbose` is given. To keep what a failing node leaves without
+the full log, set `JUNO_NODE_LOG_DIR` to a folder. Each node then appends its standard error, with its
+warnings and errors, to `<folder>/node-1.log` (and so on), after a line naming the node, its port and the time.
+A JVM that crashes writes its error file there as `hs_err_pid<pid>.log`. Whether or not the folder is set,
+the coordinator logs a warning for any node that had already exited when the cluster stopped, with its process
+ID and exit code.
+
+```bash
+JUNO_NODE_LOG_DIR=/tmp/juno-nodes ./juno --pType tensor --model-path /path/to/model.gguf
+```
+
 Two distribution strategies are available via `--pType`:
 
 - **`pipeline`** (default) — contiguous layer blocks, serial activation flow node-1 -> node-2 -> node-3

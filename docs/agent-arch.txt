@@ -283,10 +283,16 @@ Module dependency (excerpt):
               CpuDecodeKernelVariantMicrobench.productionMsPerCall).
         Running: ProbeRunner (fresh JVM per probe through JvmLauncher, Juno's runtime flags,
               -Xms = -Xmx and pre-touch for readings, JFR on the OS clock where the kernel rejected
-              the TSC, timeout, process tree killed on timeout and on kit shutdown), ProbeMain
+              the TSC, timeout, process tree killed on timeout and on kit shutdown; the probe JVM's
+              error file at probes/<id>.hs_err_pid%p.log, and JUNO_NODE_LOG_DIR=probes/<id>/nodes in
+              its environment, inherited by every Juno JVM it starts, so forked cluster nodes leave
+              their stderr and error files in the run folder), ProbeMain
               (dispatch by switch, so a renamed probe breaks the build), LoadSampler + GpuLoad
-              (other processes' CPU share; nvidia-smi compute processes split into the probe's own
-              and others; the probe's peak device memory), NoiseRule (a scored reading spread over
+              (other processes' CPU share, each own process's CPU time read at both ends of each
+              second and a second in which one of them exited left out, since its CPU after its
+              last sample is in the system load and in no sample of it; nvidia-smi compute
+              processes split into the probe's own and others; the probe's peak device memory),
+              NoiseRule (a scored reading spread over
               15% of its median, taken under more than 5% other-process CPU or on a busy GPU, is
               re-run up to twice, then NOISY), RunSession + Checkpoint (after every probe),
               Progress, KeepAwake (SetThreadExecutionState through FFM on Windows, caffeinate -i -w
@@ -310,7 +316,8 @@ Module dependency (excerpt):
               overlays trained in the run), LedgerNotes. ProbeSelfTests runs every probe on a
               synthetic GGUF the test writes (SyntheticGguf), with no model file and no GPU.
         Packing: Manifest (schema 1), ReportWriter (SUMMARY.txt, report.html), ResultsPacker
-              (text files only, every one scrubbed; JFR recordings never packed),
+              (text files only, every one scrubbed, a JVM error file's environment-variable block
+              left out whole; JFR recordings never packed),
               juno-kit-results-<os>-<arch>-<UTC>.zip under juno-kit-results/.
         Coverage: coverage.tsv (resources) + Coverage + CoverageTest: every cross-surface row,
               ForwardPassHandlerLoader.supportedArchitectures() (with
@@ -487,6 +494,13 @@ Local cluster node lifecycle (ClusterHarness, NodeMain): a forked node gets
   waits for each (stopNode, NODE_STOP_GRACE_MS 10 s) and destroys only a node still running.
   Process.destroy() alone is SIGTERM on Linux but a forced termination on Windows, which
   runs no hook. A coordinator that dies closes the pipes too, so its nodes exit with it.
+  What a failing node leaves (ClusterHarness.NODE_LOG_DIR_ENV, JUNO_NODE_LOG_DIR): unset, a
+  node's stderr is discarded (inherited with JUNO_VERBOSE) and its logging is off. Set, nodeStderr
+  appends each node's stderr to <dir>/<node id>.log after a line naming node, port and time,
+  quietLoggingConfig(true) sends WARNING and above to that stderr, and nodeErrorFileOptions adds
+  -XX:ErrorFile=<dir>/hs_err_pid%p.log. The harness stops reading a node's stdout once READY is
+  printed, and HotSpot writes its fatal-error banner there, so the error file is the record of a
+  crash. stop() first logs nodesExitedEarly: every node already dead, with its PID and exit code.
 
 Launchers (juno, scripts/run.sh; juno.bat, scripts/run.bat): run.bat repeats run.sh by
   hand, subcommand by subcommand and flag by flag, and passes the same options to the Java

@@ -135,6 +135,8 @@ Send that file to the person who asked you to run the kit. It holds:
 
 - a manifest: the kit version, the Juno commit, the kit's own SHA-256, the suites run and the hardware;
 - one result file and one log per probe, and the unit-test reports;
+- when a probe runs a local cluster, each node's error output, and the error file of any Java process
+  that crashed, so a failure on your machine can be explained from the zip alone;
 - `SUMMARY.txt`, a plain-text summary, and `report.html`, the same results as a page you can open in a
   browser.
 
@@ -146,6 +148,7 @@ Before the zip is written, every file in it is scrubbed:
 
 - your user name, your home directory, the machine's host name, and every IP and MAC address are replaced
   with placeholders, in the logs and the test reports too;
+- a Java error file's list of environment variables is left out whole, since it can hold a password;
 - hardware model names (CPU, GPU) are kept, because they are what the results are about;
 - JFR recordings, which hold details of the machine, are never packed.
 

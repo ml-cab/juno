@@ -536,9 +536,22 @@ public final class ModelLiveChecks {
 		} catch (CheckFailed e) {
 			outcome = new LiveCheck(number, name, false, e.getMessage());
 		} catch (Exception | AssertionError | OutOfMemoryError e) {
-			outcome = new LiveCheck(number, name, false, e.getClass().getSimpleName() + ": " + e.getMessage());
+			outcome = new LiveCheck(number, name, false, failureDetail(e));
 		}
 		add(results, progress, outcome);
+	}
+
+	/**
+	 * A failed check's detail: the exception's class and message, then its root cause's when it has one. A gRPC
+	 * "UNAVAILABLE: io exception" alone does not say what closed the connection; the root cause does.
+	 */
+	static String failureDetail(Throwable e) {
+		Throwable root = e;
+		while (root.getCause() != null && root.getCause() != root)
+			root = root.getCause();
+		String detail = e.getClass().getSimpleName() + ": " + e.getMessage();
+		return root == e ? detail
+				: detail + "; root cause " + root.getClass().getSimpleName() + ": " + root.getMessage();
 	}
 
 	private static void add(List<LiveCheck> results, PrintStream progress, LiveCheck outcome) {

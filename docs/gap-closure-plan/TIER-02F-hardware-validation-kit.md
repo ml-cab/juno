@@ -348,6 +348,8 @@ GPU, macOS.
       which prints only when the call returns a previous state. Probes the noise rule found loaded re-ran and were marked
       NOISY. `cpu.kernel-width` reads high by construction: the sampler counts each exiting child JVM's last partial second as
       other programs' CPU (the 2026-11-10 record). Owed: a macOS run.)*
+      *(2026-11-10, latest: the sampler is fixed, test first. A second in which one of the probe's processes exits is left out
+      of the reading. Owed: a macOS run.)*
 - [x] The model catalog is pinned by SHA-256, downloads resume, and hashes are verified.
       *(2026-11-05: pinned (step 2) and verified here against `models/`; `ModelStoreTest` replaces a wrong-hash copy and
       refuses a tampered download on a local server. Owed: nothing has been downloaded from Hugging Face by the kit yet;
@@ -396,6 +398,8 @@ GPU, macOS.
       *(2026-11-05, on `80ec949e` plus the CPU batched matmul change: 12 modules, 2,607 tests, 0 failures, 0 errors,
       53 skipped; then `mvn install -DskipTests` and `mvn verify -pl juno-master`, 13 tests and 20 integration tests,
       0 failures. Re-run at the close if step 9 changes code.)*
+      *(2026-11-10: step 9 changed code in `juno-player`, `juno-master` and `juno-kit`. Their unit tests pass (158, 15 and
+      132), as does `mvn verify -pl juno-master` (20 integration tests). The full suite is still due at the close.)*
 - [x] Cross-surface checklist fully resolved.
       *(2026-11-05: drafted from this host's runs (the 2026-11-05 step 9 record): rows 1, 2 and 4 to 15 PASS on Linux,
       row 3 NEEDS-AMD-HARDWARE. Owed: row 14's `juno.bat`, which only a Windows tester's run exercises (step 9).)*
@@ -2170,6 +2174,8 @@ unit suite in it throughout, so this session built and tested nothing. `check-pl
 - (c) Re-run `--probes cpu.live.tinyllama` a few times on that laptop with little free disk, to see whether it repeats.
 - **Recommendation: (a) now, since it costs one message, then (b),** so that the next failure on any tester's host carries its
   own evidence.
+- **Owner decision 2026-11-10: (a) and (b).** The owner asked the tester for the three error files; no answer yet. (b) is done
+  (the next entry).
 
 **Finding 2: the noise sampler counts part of the probe's own child JVMs as other programs' CPU (kit defect; not yet fixed).**
 - `LoadSampler` samples once a second. It counts as the probe's own CPU the last-seen CPU time of the kit, the probe and the
@@ -2188,6 +2194,7 @@ unit suite in it throughout, so this session built and tested nothing. `check-pl
   the probe's own has exited, so neither that interval's CPU nor its wall time enters. The interval rule is a pure function and
   can be tested without a real process. No probe or threshold changes.
 - Not done this session: a `juno-kit` build and test would have run beside the other session's suite.
+- **Owner decision 2026-11-10: fix it once that suite finishes.** Done (the next entry).
 
 **Found, recorded, not changed.**
 - On this host the first estimate read 0.65x the actual time in both re-runs (0.72x in the first run). Without
@@ -2223,3 +2230,89 @@ line.
 
 **Next for the executor:** finding 2's fix, test first, once no suite is running in the tree. Then finding 1 as the owner
 decides. Then `ingest` the macOS zip when it arrives.
+
+### 2026-11-10, latest: findings 1 and 2 acted on (owner decisions)
+
+**Plan against code, verified at HEAD `737ce2cb`**, the owner's commit of this day's earlier records and of Tier 03's work,
+which is pushed. `check-plan-thresholds.sh` passed first. The other session's suite had finished (exit code 1 in `node`; that
+session's own run), and no build was running.
+- `737ce2cb` also holds three tests written ahead of this change: `PrivacyTest`'s and `ProbeRunnerTest`'s additions, and
+  `ModelLiveChecksFailureDetailTest`. They call methods this change adds, so at `737ce2cb` the `juno-kit` and `juno-master`
+  tests do not compile.
+- `docs/juno-kit-results-2.zip` is in no commit and is no longer on disk.
+
+**Finding 1, option (b): a failing node leaves its evidence in the results folder.**
+- **`ClusterHarness` (`juno-player`), the `JUNO_NODE_LOG_DIR` environment variable.**
+  - When it is set, each forked node's stderr is appended to `<dir>/<node id>.log`, after a line naming the node, its port and
+    the time.
+  - Nodes log WARNING and above to that stderr; before, their logging was off.
+  - Each node gets `-XX:ErrorFile=<dir>/hs_err_pid%p.log`.
+  - A node that dies before `READY` names that folder instead of suggesting `--verbose`.
+  - When the variable is unset, nothing changes.
+- **On every stop, with or without the folder,** `nodesExitedEarly` logs a warning for each node already dead, with its PID and
+  exit code.
+- **`ModelLiveChecks.failureDetail` (`juno-master`):** a failed check's detail adds its root cause (for example "; root cause
+  IOException: Connection reset by peer"), so "UNAVAILABLE: io exception" says what closed the connection.
+- **The kit.**
+  - `ProbeRunner` puts `JUNO_NODE_LOG_DIR=probes/<id>/nodes` in each probe JVM's environment, and gives that JVM
+    `-XX:ErrorFile=probes/<id>.hs_err_pid%p.log`. The log's attempt line names the folder.
+  - The packer already packed `.log` files. `Privacy.scrub` now leaves out a JVM error file's `Environment Variables:` block
+    whole, because `JAVA_TOOL_OPTIONS` and `_JAVA_OPTIONS` can hold a password. The rest of the file is scrubbed as before.
+- **Why an environment variable and not a system property:** the probes also start Juno in child JVMs (`JunoProcess`), and
+  children inherit the environment.
+
+**Finding 2: the sampler.**
+- `LoadSampler.otherCpuSeconds` reads the probe's own processes' CPU time at both ends of each one-second interval, by PID.
+- An interval in which a process seen at its start is gone at its end is left out. A process new at the end counts from zero.
+- Still not covered: a child that starts and exits within one second is never seen. The kernel width probe's children live
+  about 4.6 s.
+
+**Tests first.** Each test was seen failing against a stub that kept today's behaviour, then passing:
+- `ClusterHarnessNodeDiagnosticsTest` (new, 5 tests) failed 5 of 5. On that run, the crash test's JVM wrote its error file into
+  `juno-player/`, which is the defect itself. That file is removed, and the test now starts that JVM in a working directory of
+  its own, so a failing run neither litters the module nor passes by accident.
+- `ModelLiveChecksFailureDetailTest` (2 tests): the root-cause test failed.
+- `PrivacyTest.aJvmErrorFilesEnvironmentBlockIsLeftOut` failed.
+- `ProbeRunnerTest.aProbesNodesAndItsJvmWriteTheirErrorOutputIntoTheRunFolder` failed. Its environment assertion reads the one
+  variable, because a failed assertion on the whole map prints the whole environment into the build log.
+- `LoadSamplerTest` (new, 3 tests): the exited-child interval failed, with the stub reading 8.0 CPU-seconds as other programs'.
+  The other two passed against the stub, as expected.
+
+**Tests.** `mvn install -DskipTests`, then:
+- `mvn test -pl juno-player,juno-kit`: `juno-player` 158 tests, 0 failures, 2 skipped; `juno-kit` 132 tests, 0 failures.
+- `mvn verify -pl juno-master`: 15 tests and 20 integration tests, 0 failures, `ThreeNodeClusterIT` (8) and
+  `TensorParallelClusterIT` (5) among them.
+- After the crash test's working-directory change, that class again: 5 of 5.
+- No other module's code changed. The full suite is left for the close, as criterion 11's note says.
+
+**End to end on this host.** `./juno-kit.sh --probes cpu.live.tinyllama --yes --skip-build`, on the installed jars.
+- PASS 10 of 10, in 4:54.
+- `probes/cpu.live.tinyllama/nodes/node-1.log` to `node-3.log` hold two starts each, the pipeline cluster and then the
+  tensor-parallel one. Each start has its header line, then the JVM's own startup warnings (the incubator module, and a gRPC
+  dependency's `sun.misc.Unsafe` notice).
+- No node logged a warning or an error, and no node exited early.
+- All three files are in the zip, with the jar path scrubbed to `<home>`.
+
+**Found, recorded, not changed.** The run's `--out` was a folder whose name holds the user name between hyphens
+(`-home-<user>-Repo-...`).
+- The scrubber's user-name rule does not match a name joined by hyphens. That is by design: it must not rewrite parts of
+  hyphenated host or file names.
+- So that folder name survives in the zip, in `checkpoint.json`'s arguments and in each probe log's attempt line.
+- This predates the change (the report path and `logDir=` carried it before), but the attempt line now repeats it twice more.
+- A tester's default `--out` is under their checkout, which is scrubbed as `<home>`.
+
+**Docs.** `docs/howto.md` (the cluster section), `docs/agent-arch.txt` (node lifecycle; the kit's running and packing),
+`juno-kit/README.md` (what the zip holds; the environment block), and `CHANGELOG.md` Session 140.
+
+**Out-of-tier changes:** `ClusterHarness` (`juno-player`) and `ModelLiveChecks` (`juno-master`). Both are diagnostics only. No
+forward pass, MatVec, KV or batching path is touched, so no performance gate applies.
+
+**Exit criteria:** 9 of 13, unchanged.
+
+**Owed to the owner:**
+1. Commit this change. It also makes `737ce2cb`'s three tests compile.
+2. The tester's answer on the three error files.
+3. The next Windows run, which carries node logs if check 8 fails again.
+4. A macOS run.
+
+**Next for the executor:** read the tester's error files when they arrive; `ingest` the next zip.
