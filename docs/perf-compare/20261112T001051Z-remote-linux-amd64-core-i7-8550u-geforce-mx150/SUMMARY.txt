@@ -1,0 +1,82 @@
+Juno hardware validation kit 0.1.2, Juno 9dda5f7d9248da634effb83d4a14bdcccb8bd89f (modified tree)
+Suite quick, started 20261110T142832Z, finished 20261110T144459Z
+Host: Linux 6.17.0-19-generic amd64; Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz, 4 cores, 8 threads, 7 GiB RAM
+JVM vectors: integer 256-bit, float 256-bit; UseAVX 2; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce MX150, 2048 MiB, driver 535.288.01
+
+env                            DONE     0:01
+calibration                    DONE     0:19, 2 attempts, attempt 1 re-run: q4k_decode_ms_per_call spread 16% > 15%.
+    q4k_decode_ms_per_call                               median 2.0530, min 2.0290, max 2.0626 ms (n=5, spread 1.6%)
+cpu.kernel-width               NOISY    5:44, 3 attempts, attempt 1 re-run: Q4_K 14336x4096 threads 8 128-bit spread 16% > 15%; Q6_K 4096x14336 threads 8 128-bit spread 17% > 15%; other processes used 7% of the CPU. attempt 2 re-run: other processes used 6% of the CPU. still: other processes used 7% of the CPU
+    Q4_K 14336x4096 threads 1 128-bit                    median 18.26, min 17.97, max 18.83 ms/call (n=3, spread 4.8%)
+    Q4_K 14336x4096 threads 1 256-bit                    median 12.89, min 12.88, max 13.59 ms/call (n=3, spread 5.5%)
+    Q4_K 14336x4096 threads 8 128-bit                    median 6.6648, min 6.3150, max 6.8295 ms/call (n=3, spread 7.7%)
+    Q4_K 14336x4096 threads 8 256-bit                    median 4.2296, min 4.1320, max 4.3204 ms/call (n=3, spread 4.5%)
+    Q6_K 4096x14336 threads 1 128-bit                    median 35.54, min 35.24, max 37.70 ms/call (n=3, spread 6.9%)
+    Q6_K 4096x14336 threads 1 256-bit                    median 29.10, min 27.63, max 30.26 ms/call (n=3, spread 9.0%)
+    Q6_K 4096x14336 threads 8 128-bit                    median 13.19, min 12.96, max 13.25 ms/call (n=3, spread 2.2%)
+    Q6_K 4096x14336 threads 8 256-bit                    median 9.3530, min 9.2687, max 9.6626 ms/call (n=3, spread 4.2%)
+cpu.throughput.tinyllama.128   DONE     1:48
+    prefill t/s                                          no valid repetition (t/s)
+    generation t/s                                       no valid repetition (t/s)
+    generation allocation per token in recording         no valid repetition (B/token)
+    prefill GC pause in token span                       no valid repetition (ms)
+    generation GC pause in token span                    no valid repetition (ms)
+cpu.throughput.tinyllama.512   DONE     3:49
+    prefill t/s                                          no valid repetition (t/s)
+    generation t/s                                       no valid repetition (t/s)
+    generation allocation per token in recording         no valid repetition (B/token)
+    prefill GC pause in token span                       no valid repetition (ms)
+    generation GC pause in token span                    no valid repetition (ms)
+gpu.throughput.tinyllama.512   DONE     0:27, GPU 1064 MiB
+    prefill t/s                                          no valid repetition (t/s)
+    generation t/s                                       no valid repetition (t/s)
+    generation allocation per token in recording         no valid repetition (B/token)
+    prefill GC pause in token span                       no valid repetition (ms)
+    generation GC pause in token span                    no valid repetition (ms)
+gpu.throughput.tinyllama.2048  DONE     1:03, GPU 1446 MiB
+    prefill t/s                                          no valid repetition (t/s)
+    generation t/s                                       no valid repetition (t/s)
+    generation allocation per token in recording         no valid repetition (B/token)
+    prefill GC pause in token span                       no valid repetition (ms)
+    generation GC pause in token span                    no valid repetition (ms)
+gpu.packed-kquant.tinyllama.static PASS     0:47, GPU 1080 MiB
+    ok   prompt of about 512 tokens: 512 prompt tokens
+    ok   exactly 512 tokens generated: 512 generated
+    ok   one stream piece per generated token: 512 pieces
+    ok   streamed and unstreamed greedy text identical: 1023 characters
+    ok   packed weights resident and the tiled kernel loaded, no dequantizing fallback: Tiled K-quant GEMM kernels loaded from /cab/ml/juno/node/kquant_gemm.ptx (Q4_K, Q5_K, Q6_K)
+gpu.packed-kquant.tinyllama.continuous PASS     1:42, GPU 886 MiB
+    ok   prompt of about 512 tokens: 512 prompt tokens
+    ok   exactly 512 tokens generated: 512 generated
+    ok   one stream piece per generated token: 512 pieces
+    ok   streamed and unstreamed greedy text identical: 1023 characters
+    ok   packed weights resident and the tiled kernel loaded, no dequantizing fallback: Tiled K-quant GEMM kernels loaded from /cab/ml/juno/node/kquant_gemm.ptx (Q4_K, Q5_K, Q6_K)
+gpu.kernel-timing              PASS     0:14, GPU 270 MiB
+    prefill attention, tinyllama-1.1b 32/4/64 heads, 2048 rows over up to 2048 keys median 100.59, min 100.54, max 100.63 ms (n=5)
+    prefill attention, qwen2.5-3b 16/2/128 heads, 2048 rows over up to 2048 keys median 135.02, min 134.83, max 135.39 ms (n=5)
+    prefill attention, phi-3.5-mini 32/32/96 heads, 2048 rows over up to 2048 keys median 249.41, min 249.35, max 249.65 ms (n=5)
+    prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys median 268.75, min 268.30, max 268.81 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 2048 rows median 197.59, min 196.98, max 212.01 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 2048 rows median 209.69, min 209.01, max 210.56 ms (n=5)
+    LM head GEMV, qwen2.5-3b output 151936x2048 Q6_K, 1 row median 11.61, min 11.53, max 11.91 ms (n=5)
+    ok   longest single kernel at a 2048-token window <= 500 ms (the 2 s display-driver watchdog / 4)
+launcher.tinyllama             PASS     0:18
+    ok   local mode with --api-port answers a chat request: HTTP 200: 1. Red
+2. Blue
+
+    ok   the launcher exits cleanly on exit: exit code 0, 0 of its processes still running
+    ok   lora with --grammar-file warns that constrained decoding is a no-op for LoRA training: warned (exit code 0)
+    ok   the launcher prints no [DBG] lines: none in its output
+
+Not run on this machine:
+  cpu.live.tinyllama             memory: needs 8 GiB, the machine has 7 GiB
+  gpu.live.tinyllama             memory: needs 8 GiB, the machine has 7 GiB
+  gpu.residency.tinyllama        memory: needs 8 GiB, the machine has 7 GiB
+  consistency.tinyllama          memory: needs 8 GiB, the machine has 7 GiB
+  gpu.consistency.tinyllama      memory: needs 8 GiB, the machine has 7 GiB
+  grammar.tinyllama              memory: needs 10 GiB, the machine has 7 GiB
+  long-prompt.tinyllama          memory: needs 8 GiB, the machine has 7 GiB
+  gpu.long-prompt.tinyllama      memory: needs 8 GiB, the machine has 7 GiB
+  cpu.hot-path.tinyllama-1.1b    memory: needs 8 GiB, the machine has 7 GiB
+  quality.tinyllama-1.1b         memory: needs 8 GiB, the machine has 7 GiB

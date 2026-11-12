@@ -22,9 +22,9 @@ import java.util.List;
 
 /**
  * The plan's outlier rule, applied to a reading probe: a row is not scorable when its own repetitions
- * disagree by more than 15% of their median. A reading taken while other processes used a material share
- * of the CPU, or while another program used the GPU, is treated the same way. Any of these is re-run up to
- * twice and then marked.
+ * disagree by more than 15% of their median. A scored row with no valid repetition, a reading taken while
+ * other processes used a material share of the CPU, or one taken while another program used the GPU, is
+ * treated the same way. Any of these is re-run up to twice and then marked.
  */
 final class NoiseRule {
 
@@ -64,7 +64,7 @@ final class NoiseRule {
 			return Verdict.OK;
 		boolean bad = otherCpuShare > MAX_OTHER_CPU_SHARE || gpuBusy;
 		for (ProbeReport.Reading r : report.readings())
-			bad |= r.scored() && noisy(r.values());
+			bad |= r.scored() && (r.values().isEmpty() || noisy(r.values()));
 		if (!bad)
 			return Verdict.OK;
 		return attempt < MAX_ATTEMPTS ? Verdict.RERUN : Verdict.NOISY;
@@ -74,7 +74,9 @@ final class NoiseRule {
 	static String reason(ProbeReport report, double otherCpuShare, boolean gpuBusy) {
 		List<String> causes = new ArrayList<>();
 		for (ProbeReport.Reading r : report.readings())
-			if (r.scored() && noisy(r.values()))
+			if (r.scored() && r.values().isEmpty())
+				causes.add(r.name() + " has no valid repetition");
+			else if (r.scored() && noisy(r.values()))
 				causes.add(String.format(java.util.Locale.ROOT, "%s spread %.0f%% > 15%%", r.name(),
 						spread(r.values()) * 100));
 		if (otherCpuShare > MAX_OTHER_CPU_SHARE)

@@ -30,7 +30,7 @@ record ProbeOutcome(String id, String status, long wallMillis, int attempts, Str
 	static final String FAIL = "FAIL";
 	/** A reading probe whose readings are within the noise rule. */
 	static final String DONE = "DONE";
-	/** A reading probe still noisy, or still under load, after its re-runs. */
+	/** A reading probe still noisy, still under load, or still without a valid repetition, after its re-runs. */
 	static final String NOISY = "NOISY";
 	/** The child JVM crashed, exited non-zero or wrote no report. */
 	static final String ERROR = "ERROR";

@@ -1,0 +1,68 @@
+{
+  "schemaVersion" : 1,
+  "kind" : "run",
+  "kitVersion" : "0.1.2",
+  "junoCommit" : "9dda5f7d9248da634effb83d4a14bdcccb8bd89f",
+  "junoTreeDirty" : true,
+  "kitJarSha256" : "3a84952eb367ce3c6c4c56e0460edc7e1e48df419276d026a4df11cd4be3755a",
+  "suite" : "quick",
+  "probes" : [ "env", "calibration", "cpu.kernel-width", "cpu.throughput.tinyllama.128", "cpu.throughput.tinyllama.512", "gpu.throughput.tinyllama.512", "gpu.throughput.tinyllama.2048", "gpu.packed-kquant.tinyllama.static", "gpu.packed-kquant.tinyllama.continuous", "gpu.kernel-timing", "launcher.tinyllama" ],
+  "startedUtc" : "20261110T142832Z",
+  "finishedUtc" : "20261110T144459Z",
+  "host" : {
+    "os" : "Linux",
+    "osVersion" : "6.17.0-19-generic",
+    "arch" : "amd64",
+    "cpuModel" : "Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz",
+    "cores" : 4,
+    "threads" : 8,
+    "ramBytes" : 8229425152,
+    "freeDiskBytes" : 207180836864,
+    "cpuFlags" : [ "arch_perfmon", "apic", "xtpr", "avx", "pni", "smap", "3dnowprefetch", "fpu", "syscall", "mpx", "vnmi", "ssbd", "tm", "ssse3", "arch_capabilities", "hwp_notify", "tsc_adjust", "bts", "pts", "md_clear", "lm", "pti", "bmi2", "dtes64", "bmi1", "vmx", "ept_ad", "ss", "mtrr", "sdbg", "flush_l1d", "pln", "ept", "stibp", "aes", "pebs", "lahf_lm", "aperfmperf", "hwp_act_window", "vme", "de", "pdcm", "invpcid", "xsaves", "pdpe1gb", "avx2", "epb", "pse", "fsgsbase", "ida", "vpid", "xsavec", "flexpriority", "pclmulqdq", "monitor", "fxsr", "clflushopt", "adx", "cpuid", "ibrs", "xgetbv1", "hwp_epp", "erms", "clflush", "mmx", "smep", "popcnt", "art", "tpr_shadow", "fma", "pbe", "tsc_deadline_timer", "cmov", "ds_cpl", "xtopology", "rep_good", "nonstop_tsc", "dtherm", "xsaveopt", "pat", "rdrand", "movbe", "pcid", "ht", "arat", "cx16", "sse4_2", "sse4_1", "f16c", "msr", "rdtscp", "xsave", "abm", "cx8", "sep", "pae", "ibpb", "tsc", "x2apic", "tm2", "constant_tsc", "cpuid_fault", "nopl", "est", "pse36", "dts", "acpi", "nx", "intel_pt", "rdseed", "hwp", "mce", "sse2", "sse", "mca", "pge" ],
+    "intVectorBits" : 256,
+    "floatVectorBits" : 256,
+    "useAvx" : "2",
+    "cuda" : true,
+    "rocm" : false,
+    "gpus" : [ {
+      "vendor" : "NVIDIA",
+      "name" : "NVIDIA GeForce MX150",
+      "memoryBytes" : 2147483648,
+      "driver" : "535.288.01"
+    } ],
+    "power" : {
+      "hasBattery" : true,
+      "onBattery" : false,
+      "percent" : 47
+    },
+    "metered" : "no",
+    "clockSource" : "tsc",
+    "backend" : {
+      "java.vm.name" : "OpenJDK 64-Bit Server VM",
+      "os.version" : "6.17.0-19-generic",
+      "maxHeapBytes" : 536870912,
+      "os.arch" : "amd64",
+      "cudaLibraries" : {
+        "runtime" : "libcudart.so.12",
+        "cublas" : "libcublas.so.12",
+        "driver" : "libcuda.so.1"
+      },
+      "rocmDevices" : [ ],
+      "intVectorBits" : 256,
+      "useAvx" : "2",
+      "rocm" : false,
+      "cpuThreads" : 8,
+      "os.name" : "Linux",
+      "java.vendor" : "Amazon.com Inc.",
+      "cuda" : true,
+      "clockSource" : "tsc",
+      "java.version" : "25.0.2",
+      "availableProcessors" : 8,
+      "floatVectorBits" : 256,
+      "cudaDevices" : [ {
+        "memoryBytes" : 2098593792,
+        "name" : "NVIDIA GeForce MX150"
+      } ]
+    }
+  }
+}

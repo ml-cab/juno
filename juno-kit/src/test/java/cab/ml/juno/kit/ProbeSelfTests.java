@@ -40,6 +40,7 @@ class ProbeSelfTests {
 		assertThat(r.kind()).isEqualTo(ProbeKind.READING);
 		assertThat((Integer) r.facts().get("intVectorBits")).isGreaterThanOrEqualTo(64);
 		assertThat(r.facts()).containsKeys("floatVectorBits", "useAvx", "cuda", "rocm", "cpuThreads", "cudaLibraries");
+		assertThat((Double) r.facts().get("jfrClockRatio")).as("JFR's span over System.nanoTime's").isFinite();
 		if (Boolean.TRUE.equals(r.facts().get("cuda")))
 			assertThat(((Map<?, ?>) r.facts().get("cudaLibraries")).keySet()).map(Object::toString)
 					.contains("runtime", "cublas");

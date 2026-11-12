@@ -96,6 +96,7 @@ public final class KitMain {
 				+ (Boolean.parseBoolean(commit[1]) ? " (modified tree)" : ""));
 		console.println("Detecting this machine...");
 		HostInfo host = HostDetector.detect(existingAncestor(o.resultsRoot()));
+		JvmLauncher.useClockOf(host);
 		printHost(console, host);
 
 		ModelStore store = new ModelStore(o.modelsDir(), o.cacheDir(), new HfGgufFetcher());
@@ -204,6 +205,7 @@ public final class KitMain {
 		Path runDir = o.runDir();
 		Checkpoint cp = Checkpoint.load(runDir);
 		HostInfo host = Json.read(runDir.resolve("host.json"), HostInfo.class);
+		JvmLauncher.useClockOf(host);
 		KitOptions started = KitOptions.parse(cp.args(), root);
 		List<Probe> selected = cp.selected().stream().map(ProbeCatalog::byId).toList();
 		ModelStore store = new ModelStore(started.modelsDir(), started.cacheDir(), new HfGgufFetcher());
@@ -390,6 +392,7 @@ public final class KitMain {
 				h.intVectorBits(), h.floatVectorBits(), h.cuda() ? "yes" : "no", h.rocm() ? "yes" : "no");
 		for (HostInfo.Gpu g : h.gpus())
 			out.printf(Locale.ROOT, "  GPU: %s %s, %d MiB%n", g.vendor(), g.name(), g.memoryBytes() >> 20);
+		out.println("  " + JfrClockCheck.describe(h.clockSource(), JfrClockCheck.ratioOf(h.backend())));
 		if (h.power().hasBattery())
 			out.printf(Locale.ROOT, "  Battery: %s%s%n", h.power().onBattery() ? "discharging" : "on mains",
 					h.power().percent() >= 0 ? ", " + h.power().percent() + "%" : "");

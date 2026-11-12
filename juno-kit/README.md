@@ -88,7 +88,8 @@ The kit tells you at each stage whether you may use the computer:
 
 1. **Build and downloads:** you may use the computer.
 2. **Calibration and measurements:** leave it idle. The kit samples other programs' CPU and GPU use. A
-   reading taken while the machine was busy is re-run up to twice, then marked `NOISY`.
+   reading taken while the machine was busy, or one with no valid repetition, is re-run up to twice, then
+   marked `NOISY`.
 
 Also:
 

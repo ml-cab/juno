@@ -285,7 +285,8 @@ Module dependency (excerpt):
         Detection: HostDetector, DetectionParsers (/proc/cpuinfo, sysctl, Win32_Processor,
               nvidia-smi, rocm-smi, Linux power supplies, pmset, Win32_Battery, nmcli), EnvProbe
               (child JVM: vector widths, UseAVX, CpuThreads, CudaAvailability with the CUDA
-              libraries loaded and where from or why CUDA is unavailable, RocmAvailability;
+              libraries loaded and where from or why CUDA is unavailable, RocmAvailability,
+              JfrClockCheck's ratio of a JFR span to System.nanoTime's over a 500 ms sleep;
               reports on stdout), HostInfo.
         Choice and estimate: ProbeCatalog (every probe: id, kind CHECK or READING, suites,
               Requirements, models, reference cost, priority, entry class, timeout >= 3x cost,
@@ -296,7 +297,8 @@ Module dependency (excerpt):
               CpuDecodeKernelVariantMicrobench.productionMsPerCall).
         Running: ProbeRunner (fresh JVM per probe through JvmLauncher, Juno's runtime flags,
               -Xms = -Xmx and pre-touch for readings, JFR on the OS clock where the kernel rejected
-              the TSC, timeout, process tree killed on timeout and on kit shutdown; the probe JVM's
+              the TSC or JfrClockCheck found JFR's clock more than 1% off the OS clock (the decision
+              in -Djuno.kit.jfrOsClock, carried to every JVM a probe starts), timeout, process tree killed on timeout and on kit shutdown; the probe JVM's
               error file at probes/<id>.hs_err_pid%p.log, and JUNO_NODE_LOG_DIR=probes/<id>/nodes in
               its environment, inherited by every Juno JVM it starts, so forked cluster nodes leave
               their stderr and error files in the run folder), ProbeMain
@@ -306,8 +308,8 @@ Module dependency (excerpt):
               last sample is in the system load and in no sample of it; nvidia-smi compute
               processes split into the probe's own and others; the probe's peak device memory),
               NoiseRule (a scored reading spread over
-              15% of its median, taken under more than 5% other-process CPU or on a busy GPU, is
-              re-run up to twice, then NOISY), RunSession + Checkpoint (after every probe),
+              15% of its median or with no valid repetition, taken under more than 5% other-process
+              CPU or on a busy GPU, is re-run up to twice, then NOISY), RunSession + Checkpoint (after every probe),
               Progress, KeepAwake (SetThreadExecutionState through FFM on Windows, caffeinate -i -w
               on macOS, systemd-inhibit on Linux).
         Models: CatalogModel (six models: Hugging Face repo, pinned commit, file, bytes, SHA-256),

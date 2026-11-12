@@ -2370,6 +2370,7 @@ running a LoRA performance comparison on this host, so this session built, teste
   the tester is running.
 - **Recommendation: (a).** Neither change is shown to prevent a repeat on a machine this full, and the kit now captures a
   repeat. Revisit (b) if another machine shows it.
+- **Owner decision 2026-11-11: (a).** Recorded; nothing changed.
 
 **Finding 3: on the Linux laptop every throughput reading was withheld (kit; JFR's clock is wrong there).**
 - Run `20261110T142832Z`, suite `quick`, Juno `9dda5f7d` on a "modified tree", kit jar `3a84952eb367ce3c`.
@@ -2411,6 +2412,7 @@ running a LoRA performance comparison on this host, so this session built, teste
   a second. Test first: the rule is a pure function of two durations. Not addressed by either: the harness
   (`perf-lib.sh`) has the same rule. The reference host's readings pass the guard, but the slow-counter case cannot be
   ruled out from that alone.
+- **Owner decision 2026-11-11: (b).** Done; see the 2026-11-11 record.
 
 **Finding 4: `KQuantGemvRowsTest` fails on the MX150 (engine, GPU; cause not established).**
 - The tester's own `mvn` build stopped at `node`: 1315 tests, 2 failures, 131 skipped.
@@ -2446,6 +2448,8 @@ running a LoRA performance comparison on this host, so this session built, teste
   weight at load) and see it pass. If it does not fail on this x16 link, the tester's re-run of a branch is the only
   check.
 - **Recommendation: (a) first, since it costs one message, then (b).**
+- **Owner decision 2026-11-11: (a) first, then (b).** (b) is done and did not reproduce the failure here; the message for (a)
+  is with the owner. See the 2026-11-11 record.
 
 **Found, recorded, not changed.**
 - An 8 GB machine shows 7.66 GiB, and `Requirements` compares whole bytes against 8 GiB. So the laptop skipped 10
@@ -2472,3 +2476,82 @@ running a LoRA performance comparison on this host, so this session built, teste
 
 **Next for the executor:** `ingest` the Linux zip once no measurement runs on this host; then findings 1, 3 and 4 as the
 owner decides.
+
+### 2026-11-11: owner decisions on findings 1, 3 and 4; the Linux zip ingested; JFR's clock checked once per host
+
+**Plan against code, verified at HEAD `1b90ca0c`** (Tier 03's commit, which also carries the 2026-11-10 records). The other
+session's LoRA performance comparison had finished. No Maven or measurement run was active before each build or test here.
+
+**Owner decisions 2026-11-11: the recommendations.** Finding 1 (a), finding 3 (b), finding 4 (a) then (b).
+
+**Ingest.** `juno-kit ingest` with the jar in `juno-kit/target/`, built 2026-11-11 from a tree whose last `juno-kit` change
+is `74f75d78`, against `20261104T173942Z-kit-reference`. Entry
+`docs/perf-compare/20261112T001051Z-remote-linux-amd64-core-i7-8550u-geforce-mx150/`, reviewed and published with notes,
+and its row in the perf-compare README. 13 of 13 items equal the reference. The entry holds no user name, home path, host
+name, MAC or IP address.
+
+**Finding 1: recorded, nothing changed** (owner decision (a)).
+
+**Finding 3, option (b): the kit checks JFR's clock once per host.**
+- `JfrClockCheck` (new) times one JFR event around a 500 ms sleep against `System.nanoTime`. `EnvProbe` runs it, so
+  detection's backend JVM measures it and `host.json` carries the ratio as `backend.jfrClockRatio` (left out when JFR could
+  not record).
+- The rule: JFR reads the OS clock where the kernel's clocksource is not `tsc` (the harness's rule, kept) or where the ratio
+  is more than 1% from 1. `JvmLauncher.useClockOf` puts the decision in `-Djuno.kit.jfrOsClock`. `KitMain` calls it after
+  detection and, on `resume`, from `host.json`. Every JVM the kit starts carries the property, so a probe's own children read
+  the same clock. A `host.json` without the ratio keeps the clocksource rule.
+- `SUMMARY.txt` and the console add a line, for example "JFR clock: the operating system's; the CPU counter read 1.1066x it".
+- `NoiseRule`: a scored reading with no valid repetition is re-run up to twice, then `NOISY`, with "<reading> has no valid
+  repetition". The laptop's four throughput probes read `DONE` with no number.
+- Measured here, in the env probe's JVM: JFR's counter read 0.99765 and 0.99764 times the OS clock in two runs, and 1.00005
+  on the OS clock. The counter is 0.23% off this Xeon's "@ 3.50GHz", inside the bound. This host's clocksource is `hpet`,
+  so its probes read the OS clock, as before; `--plan` prints "JFR clock: the operating system's; kernel clock source hpet".
+- Not verified on a host whose counter disagrees: the laptop is the only one seen. Its next run should print the
+  OS-clock line with a ratio near 1.107, and carry throughput readings. The rule is unit-tested at that ratio.
+- Not changed, as the decision said: `perf-lib.sh`'s rule. The reference host reads the OS clock.
+
+**Tests first.** Each new test was seen failing against a stub that kept today's behaviour, then passing:
+- `JfrClockCheckTest` (new, 7): 6 failed. The within-1% case passes against a stub that never disagrees, which is its
+  expected result.
+- `NoiseRuleTest.aScoredReadingWithNoValidRepetitionIsReRunAndThenMarked` failed. So did the env probe's self-test, which now
+  requires a finite `jfrClockRatio`.
+- Then `mvn test -pl juno-kit -am -Dtest='cab.ml.juno.kit.**' -Dsurefire.failIfNoSpecifiedTests=false`: 140 tests, 1 failure.
+  `ProbeRunnerTest.aProbeRunsInItsOwnJvmAndLeavesItsReportAndLog` read `NOISY` for other processes' CPU, at 18%, 12% and 11%
+  on its three attempts. With no test running, this host's desktop (an editor, the window manager and X) used 17% of the
+  CPU. The test asserts `DONE` for a reading probe, so it needs an idle host. Its assertion now prints the outcome's note.
+  Not rerun on an idle host.
+
+**Finding 4, option (b): not reproduced here.**
+- `DeviceUploadOrderingTest` (new, `gpu` tag, `node`): two matrices of different data take turns in one device allocation.
+  After each upload a GEMV runs at once, and is compared bit for bit with a GEMV after the legacy default stream is
+  synchronized. The scratch is grown first, so no allocation in between synchronizes the device. Shapes: Q5_K and Q6_K at
+  512x2048 (the tester's), Q6_K and Q4_K at 4096x4096 (about 14.7 and 9.4 MB per upload). 40 rounds each.
+- Here (GTX 1080, driver 580.178.04, x16 link): passed, 160 rounds, no difference. On this host the copy has landed before
+  the next kernel reads.
+- The sizes favour the hypothesis. In `KQuantGemvRowsTest`, a first GEMV is preceded by no synchronizing call when the scratch
+  is already large enough. On the MX150 such uploads passed at 229 KB (1024x256 and 256x1024, every type) and 589 KB (Q4_K
+  512x2048), and failed at 720 KB (Q5_K) and 917 KB (Q6_K in 224-byte slots).
+- `KQuantMmqParityTest` grows the scratch at every shape after its first, and freeing the old buffer synchronizes the device.
+  So it could not show the race, which explains the "does not fit cleanly" of the 2026-11-10 record.
+- No fix applied, by the decision: a synchronize after each upload cannot be shown to change anything on this host. The
+  tester's run of the new test decides. It fails there if the copy lands late, and passes if `KQuantGemvRowsTest` fails for
+  another reason.
+- `mvn test -pl node -am -Dtest=DeviceUploadOrderingTest -Dsurefire.failIfNoSpecifiedTests=false`: 4 tests, 0 failures. No
+  `node` main code changed.
+
+**Owed to the owner:**
+1. Commit this change. `report1.qdstrm` shows as deleted in the working tree; this session did not touch it.
+2. Send the tester the message for finding 4 (a) once the commit is pushed: five runs of `KQuantGemvRowsTest` and
+   `DeviceUploadOrderingTest`, with the surefire `.txt` reports (the `.xml` reports hold system properties: user name and
+   home path).
+3. A macOS run.
+
+**Docs.** `CHANGELOG.md` Session 142, `docs/agent-arch.txt` (detection, running, `NoiseRule`), `juno-kit/README.md` (the
+`NOISY` rule). `docs/howto.md` does not describe the kit.
+
+**Out-of-tier changes:** `node` gains a test, and [Tier 02H](TIER-02H-batched-gpu-decode.md)'s dated line on finding 4 a
+follow-up.
+
+**Exit criteria:** 9 of 13, unchanged.
+
+**Next for the executor:** the tester's reports for finding 4; the laptop's next kit run for finding 3.

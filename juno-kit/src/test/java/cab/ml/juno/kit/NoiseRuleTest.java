@@ -79,6 +79,18 @@ class NoiseRuleTest {
 		assertThat(NoiseRule.reason(reading(100, 101, 99), 0.0, false)).isEmpty();
 	}
 
+	/** A laptop's throughput probes withheld every repetition and still read DONE. */
+	@Test
+	void aScoredReadingWithNoValidRepetitionIsReRunAndThenMarked() {
+		ProbeReport empty = reading();
+		assertThat(NoiseRule.verdict(empty, 0.0, false, 1)).isEqualTo(NoiseRule.Verdict.RERUN);
+		assertThat(NoiseRule.verdict(empty, 0.0, false, 3)).isEqualTo(NoiseRule.Verdict.NOISY);
+		assertThat(NoiseRule.reason(empty, 0.0, false)).isEqualTo("tg has no valid repetition");
+		ProbeReport unscored = new ProbeReport("r", ProbeKind.READING, null, List.of(),
+				List.of(new ProbeReport.Reading("gc_pause_ms", "ms", List.of(), false, false)), Map.of());
+		assertThat(NoiseRule.verdict(unscored, 0.0, false, 1)).isEqualTo(NoiseRule.Verdict.OK);
+	}
+
 	@Test
 	void anUnscoredReadingNeverTriggersAReRun() {
 		ProbeReport gc = new ProbeReport("r", ProbeKind.READING, null, List.of(),

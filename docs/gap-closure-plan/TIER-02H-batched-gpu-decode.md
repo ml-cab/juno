@@ -337,6 +337,9 @@ wait per layer, downloading K, V and the layer output.
 Q6_K at 512x2048 with `n=1`. At `n=1` both sides are the single-row GEMV, so the first GEMV on a newly uploaded matrix differed
 from the second. Cause not established, and not reproduced here. Recorded as finding 4 in
 [Tier 02F](TIER-02F-hardware-validation-kit.md)'s 2026-11-10 record of the tester's error files.)*
+*(2026-11-11: `DeviceUploadOrderingTest` (new) runs a GEMV right after each upload against one after the device is idle, at
+the failing sizes and at 4096x4096. It passes here, 160 rounds. Whether the upload lands late on the MX150 waits on the
+tester's run of it. Recorded in Tier 02F's 2026-11-11 record.)*
 
 *Deviation from "Tests to write", recorded:* the region-against-host-driven test asked for random K-quant weights. Random weights hold the
 stronger equality (`ResidentBatchDecodeTest` against the single region, bit for bit); against the host-driven batch, whose norms run

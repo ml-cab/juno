@@ -33,12 +33,25 @@ final class JvmLauncher {
 
 	/**
 	 * Make JFR read the operating-system clock. The performance harness does this where the kernel has
-	 * rejected the CPU timestamp counter, because spans crossing cores whose counters disagree misread.
+	 * rejected the CPU timestamp counter, because spans crossing cores whose counters disagree misread. The kit
+	 * also does it where {@link JfrClockCheck} finds JFR's clock off.
 	 */
 	static final List<String> OS_CLOCK_FLAGS = List.of("-XX:+UnlockExperimentalVMOptions",
 			"-XX:-UseFastUnorderedTimeStamps");
 
+	/**
+	 * The host's JFR clock decision, {@code true} for the operating-system clock. The kit sets it once it knows
+	 * the host, and every JVM it starts carries it on, so a probe's own children read the same clock.
+	 */
+	static final String OS_CLOCK_PROPERTY = "juno.kit.jfrOsClock";
+
 	private JvmLauncher() {
+	}
+
+	/** Decides, from detection's facts, which clock JFR reads in every JVM started from here on. */
+	static void useClockOf(HostInfo host) {
+		System.setProperty(OS_CLOCK_PROPERTY,
+				String.valueOf(JfrClockCheck.osClockNeeded(host.clockSource(), JfrClockCheck.ratioOf(host.backend()))));
 	}
 
 	/**
@@ -55,8 +68,11 @@ final class JvmLauncher {
 			cmd.add("-XX:+AlwaysPreTouch");
 		}
 		cmd.add("-Xmx" + heap);
-		if (osClockNeeded(clockSource()))
+		String decided = System.getProperty(OS_CLOCK_PROPERTY);
+		if (decided != null ? Boolean.parseBoolean(decided) : osClockNeeded(clockSource()))
 			cmd.addAll(OS_CLOCK_FLAGS);
+		if (decided != null)
+			cmd.add("-D" + OS_CLOCK_PROPERTY + "=" + decided);
 		cmd.addAll(props);
 		cmd.add("-cp");
 		cmd.add(absoluteClassPath(System.getProperty("java.class.path")));

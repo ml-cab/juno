@@ -1,0 +1,31 @@
+[ {
+  "id" : "cpu.live.tinyllama",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+}, {
+  "id" : "gpu.live.tinyllama",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+}, {
+  "id" : "gpu.residency.tinyllama",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+}, {
+  "id" : "consistency.tinyllama",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+}, {
+  "id" : "gpu.consistency.tinyllama",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+}, {
+  "id" : "grammar.tinyllama",
+  "reason" : "memory: needs 10 GiB, the machine has 7 GiB"
+}, {
+  "id" : "long-prompt.tinyllama",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+}, {
+  "id" : "gpu.long-prompt.tinyllama",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+}, {
+  "id" : "cpu.hot-path.tinyllama-1.1b",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+}, {
+  "id" : "quality.tinyllama-1.1b",
+  "reason" : "memory: needs 8 GiB, the machine has 7 GiB"
+} ]

@@ -34,8 +34,9 @@ import jdk.incubator.vector.FloatVector;
  * What the JVM and Juno see on this machine: the preferred vector widths, the JVM's AVX level, Juno's CPU
  * thread count and its own CUDA and ROCm backend probes, with the CUDA libraries Juno loaded and where from
  * ({@code cudaLibraries}: a file found on {@code PATH} or under {@code CUDA_PATH}, or the name the system
- * loader resolved), or why CUDA is unavailable ({@code cudaUnavailableReason}). Detection runs it before
- * anything is chosen, and every run records it.
+ * loader resolved), or why CUDA is unavailable ({@code cudaUnavailableReason}), and JFR's clock over the
+ * operating system's ({@code jfrClockRatio}, {@link JfrClockCheck}; absent when JFR could not record).
+ * Detection runs it before anything is chosen, and every run records it, on the clock the probes read.
  */
 final class EnvProbe implements KitProbe {
 
@@ -51,6 +52,9 @@ final class EnvProbe implements KitProbe {
 		f.put("useAvx", vmOption("UseAVX"));
 		f.put("cpuThreads", CpuThreads.threads());
 		f.put("clockSource", JvmLauncher.clockSource());
+		double jfrClock = JfrClockCheck.measure();
+		if (!Double.isNaN(jfrClock))
+			f.put("jfrClockRatio", jfrClock);
 		boolean cuda = false;
 		List<Map<String, Object>> cudaDevices = new ArrayList<>();
 		try {

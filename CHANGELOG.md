@@ -1,5 +1,24 @@
 ## Status 
 
+**Session 142** - The hardware validation kit checks JFR's clock on each machine; a reading with no valid repetition is no longer `DONE`
+
+- **The kit checks once per machine that JFR's clock agrees with the operating system's.** Where the CPU's timestamp
+  counter is invariant, the JVM converts JFR's counter ticks at the frequency in the processor's name and never measures
+  the counter. On a tester's laptop whose counter ran at about 1.99 GHz against the "@ 1.80GHz" in its name, every JFR span
+  read 1.107 times too long, so every throughput repetition was withheld. A counter slower than its name would have made
+  readings too high, with nothing flagged. Detection now times one JFR event against the operating system's clock; where
+  the two differ by more than 1%, every probe reads JFR from the operating-system clock, as it already did where the
+  kernel rejected the counter. `host.json` records the ratio (`backend.jfrClockRatio`), and `SUMMARY.txt` and the console
+  say which clock the probes read. On the reference host the counter reads 0.9977 times the operating system's clock.
+- **A reading probe whose scored reading has no valid repetition is re-run up to twice and then marked `NOISY`**, with
+  "<reading> has no valid repetition". It read `DONE` with no number before.
+- New tests: `JfrClockCheckTest`, a case in `NoiseRuleTest`, and the clock ratio in the env probe's self-test.
+- **New GPU test `DeviceUploadOrderingTest`:** the first GEMV after each K-quant weight upload must equal a GEMV run once
+  the device is idle, with two matrices taking turns in one allocation and the scratch grown first, so nothing in between
+  synchronizes by accident. It passes on the reference host's GTX 1080. It isolates the suspected cause of a laptop GPU's
+  `KQuantGemvRowsTest` failure: a copy from pageable memory may return before its transfer lands, and the GEMV runs on a
+  stream that is not ordered after the copy.
+
 **Session 141** - CPU attention reads the KV cache where it is stored; requests share a finished request's prompt KV; a session no longer resumes from another session's prompt
 
 - **A request whose prompt starts like a finished request's starts from that prompt's KV** instead of computing it: many

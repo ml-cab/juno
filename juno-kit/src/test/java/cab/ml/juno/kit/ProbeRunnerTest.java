@@ -39,8 +39,8 @@ class ProbeRunnerTest {
 	void aProbeRunsInItsOwnJvmAndLeavesItsReportAndLog(@TempDir Path runDir) throws Exception {
 		ProbeOutcome o = new ProbeRunner(Map.of()).execute(probe("env", ProbeKind.READING, "EnvProbe", Map.of(), 120),
 				runDir);
-		assertThat(o.status()).isEqualTo(ProbeOutcome.DONE);
-		assertThat(o.attempts()).isEqualTo(1);
+		assertThat(o.status()).as(o.note()).isEqualTo(ProbeOutcome.DONE);
+		assertThat(o.attempts()).as(o.note()).isEqualTo(1);
 		ProbeReport r = Json.read(runDir.resolve("probes/env.json"), ProbeReport.class);
 		assertThat(r.facts()).containsKey("intVectorBits");
 		assertThat(Files.readString(runDir.resolve("probes/env.log"))).contains("== attempt 1:")

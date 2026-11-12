@@ -43,6 +43,7 @@ final class ReportWriter {
 		for (HostInfo.Gpu g : host.gpus())
 			sb.append(String.format(Locale.ROOT, "GPU: %s %s, %d MiB, driver %s%n", g.vendor(), g.name(),
 					g.memoryBytes() >> 20, g.driver()));
+		sb.append(JfrClockCheck.describe(host.clockSource(), JfrClockCheck.ratioOf(host.backend()))).append('\n');
 		sb.append('\n');
 		for (String id : cp.selected()) {
 			ProbeOutcome o = cp.done().stream().filter(d -> d.id().equals(id)).findFirst().orElse(null);
