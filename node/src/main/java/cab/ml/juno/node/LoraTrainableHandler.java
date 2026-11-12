@@ -24,6 +24,7 @@ import java.util.Optional;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
+import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 import cab.ml.juno.lora.DoraMagnitude;
@@ -661,23 +662,15 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			vC[li].ensureCapacity(lastPos);
 		}
 
-		float[] kDequant = null;
-		float[] vDequant = null;
-		if (kvLayout.needsAttentionScratch()) {
-			kDequant = new float[(lastPos + 1) * kvDim];
-			vDequant = new float[(lastPos + 1) * kvDim];
-		}
-
 		for (int li = 0; li < L; li++) {
-			x = inferenceLayerBatch(x, li, startPos, kC[li], vC[li], kDequant, vDequant);
+			x = inferenceLayerBatch(x, li, startPos, kC[li], vC[li]);
 		}
 		return x;
 	}
 
 	/** Batch inference layer with LoRA delta applied per-token. */
 	private float[][] inferenceLayerBatch(float[][] x, int li, int startPos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kDequant, float[] vDequant) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer) {
 		int W = x.length;
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -708,8 +701,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		float[][] attnOut = new float[W][];
 		for (int b = 0; b < W; b++) {
 			int seqLen = startPos + b + 1;
-			float[] kView = kCacheLayer.viewForAttention(seqLen, kDequant);
-			float[] vView = vCacheLayer.viewForAttention(seqLen, vDequant);
+			KvRows kView = kCacheLayer.attentionRows(seqLen);
+			KvRows vView = vCacheLayer.attentionRows(seqLen);
 			attnOut[b] = gqa(Q[b], kView, vView, seqLen, layerWindows[li]);
 		}
 
@@ -1186,23 +1179,15 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			vC[li].ensureCapacity(pos);
 		}
 
-		float[] kScratch = null;
-		float[] vScratch = null;
-		if (kvLayout.needsAttentionScratch()) {
-			kScratch = new float[(pos + 1) * kvDim];
-			vScratch = new float[(pos + 1) * kvDim];
-		}
-
 		for (int li = 0; li < L; li++) {
-			x = inferenceLayer(x, li, pos, kC[li], vC[li], kScratch, vScratch);
+			x = inferenceLayer(x, li, pos, kC[li], vC[li]);
 		}
 		return x;
 	}
 
 	/** Fast inference layer — LoRA applied but no activations stored. */
 	private float[] inferenceLayer(float[] x, int li, int pos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer) {
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
 
@@ -1226,8 +1211,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		vCacheLayer.writeToken(pos, v);
 
 		int seqLen = pos + 1;
-		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
-		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+		KvRows kView = kCacheLayer.attentionRows(seqLen);
+		KvRows vView = vCacheLayer.attentionRows(seqLen);
 		float[] attnOut = gqa(q, kView, vView, seqLen, layerWindows[li]);
 		float[] attnProj = matVecLayer(wo[li], q4At(woQ4Dev, li), fpAt(woDev, li), attnOut, H, H);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);
@@ -1672,12 +1657,17 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	/**
 	 * Grouped-query attention (inference, same as LlamaTransformerHandler).
 	 */
-	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
+	private float[] gqa(float[] q, KvRows kCache, KvRows vCache, int seqLen, int window) {
 		float[] out = new float[cfg.numHeads() * cfg.headDim()];
 		// heads on the worker pool, bit-identical to the serial loop
 		GqaMath.attendPooled(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
 				cfg.kvDim(), window);
 		return out;
+	}
+
+	/** {@link #gqa(float[], KvRows, KvRows, int, int)} over the ephemeral float[] caches. */
+	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
+		return gqa(q, KvRows.of(kCache, cfg.kvDim()), KvRows.of(vCache, cfg.kvDim()), seqLen, window);
 	}
 
 	/** SwiGLU FFN (inference). */

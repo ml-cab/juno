@@ -25,12 +25,12 @@ import org.junit.jupiter.api.Test;
 class DenseKvTensorTest {
 
 	@Test
-	@DisplayName("F16 write is bit-identical via viewForAttention")
+	@DisplayName("F16 write is bit-identical in the attention rows, which are the backing array")
 	void f16_bit_identical() {
 		DenseKvTensor t = new DenseKvTensor(KvElementType.F16, 8);
 		float[] tok = { 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f };
 		t.writeToken(0, tok);
-		float[] view = t.viewForAttention(1, null);
+		float[] view = t.attentionRows(1).floatPage(0);
 		assertThat(view).startsWith(1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f);
 		assertThat(t.allocatedBytes()).isEqualTo(DenseKvTensor.INITIAL_SEQ_CAPACITY * 8 * Float.BYTES);
 	}
@@ -48,8 +48,7 @@ class DenseKvTensorTest {
 		for (int i = 0; i < kvDim; i++)
 			tok[i] = (float) Math.sin(i * 0.01);
 		q8.writeToken(0, tok);
-		float[] scratch = new float[kvDim];
-		float[] got = q8.viewForAttention(1, scratch);
+		float[] got = q8.toFloatArray(1);
 		for (int i = 0; i < kvDim; i++)
 			assertThat(got[i]).isCloseTo(tok[i], within(0.02f));
 	}

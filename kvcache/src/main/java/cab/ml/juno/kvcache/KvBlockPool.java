@@ -25,9 +25,11 @@ import java.util.List;
 /**
  * Shared pool of fixed-size KV pages (token slots × {@code kvDim}).
  *
- * <p>Used by the continuous-schedule paged KV path. Payloads are float32 for
- * {@link KvElementType#F16} (current float path) or packed q8_0 bytes for
- * {@link KvElementType#Q8_0}.
+ * <p>Used by the continuous-schedule paged KV path. A page is a float array of
+ * {@code kvDim} floats per row for {@link KvElementType#F16} (the current float
+ * path) or a byte array of packed q8_0 rows for {@link KvElementType#Q8_0}.
+ * Attention reads the pages in place ({@link KvRows}), through
+ * {@link #floatPage} and {@link #bytePage}.
  *
  * <p>Each page carries a reference count. {@link #allocate} hands out a page
  * held once; {@link #retain} adds a holder (a second {@link KvPageTable} sharing
@@ -46,7 +48,10 @@ public final class KvBlockPool {
 	private final int bytesPerPage;
 
 	private final Object lock = new Object();
-	private final List<byte[]> pages = new ArrayList<>();
+	/** F16 pages, else null. */
+	private final List<float[]> floatPages;
+	/** Q8_0 pages, else null. */
+	private final List<byte[]> bytePages;
 	/** Holders per page; 0 means free. Indexed by block id, grown with {@link #pages}. */
 	private int[] refs = new int[16];
 	private final ArrayDeque<Integer> free = new ArrayDeque<>();
@@ -67,6 +72,8 @@ public final class KvBlockPool {
 		case Q8_0 -> Q8_0KvCodec.encodedBytes(kvDim);
 		};
 		this.bytesPerPage = pageSize * bytesPerToken;
+		this.floatPages = type == KvElementType.F16 ? new ArrayList<>() : null;
+		this.bytePages = type == KvElementType.F16 ? null : new ArrayList<>();
 	}
 
 	public int pageSize() {
@@ -98,8 +105,11 @@ public final class KvBlockPool {
 		if (recycled != null) {
 			id = recycled;
 		} else {
-			id = pages.size();
-			pages.add(new byte[bytesPerPage]);
+			id = pageCount();
+			if (floatPages != null)
+				floatPages.add(new float[pageSize * kvDim]);
+			else
+				bytePages.add(new byte[bytesPerPage]);
 			if (id == refs.length)
 				refs = Arrays.copyOf(refs, 2 * refs.length);
 		}
@@ -130,7 +140,7 @@ public final class KvBlockPool {
 	/** Holders of {@code blockId}; 0 when it is free. */
 	int refCount(int blockId) {
 		synchronized (lock) {
-			return blockId >= 0 && blockId < pages.size() ? refs[blockId] : 0;
+			return blockId >= 0 && blockId < pageCount() ? refs[blockId] : 0;
 		}
 	}
 
@@ -146,7 +156,10 @@ public final class KvBlockPool {
 			if (refs[blockId] == 1)
 				return blockId;
 			int copy = allocateLocked();
-			System.arraycopy(pages.get(blockId), 0, pages.get(copy), 0, bytesPerPage);
+			if (floatPages != null)
+				System.arraycopy(floatPages.get(blockId), 0, floatPages.get(copy), 0, pageSize * kvDim);
+			else
+				System.arraycopy(bytePages.get(blockId), 0, bytePages.get(copy), 0, bytesPerPage);
 			refs[blockId]--;
 			return copy;
 		}
@@ -166,13 +179,36 @@ public final class KvBlockPool {
 	}
 
 	/**
-	 * Live page payload (caller must not retain across {@link #free}). Used by
-	 * F16 bulk gather.
+	 * The live {@code F16} page {@code blockId} itself: {@code kvDim} floats per row. The caller reads it while it
+	 * holds the page (never across its {@link #free}) and writes it only through {@link #writeToken}.
+	 */
+	float[] floatPage(int blockId) {
+		synchronized (lock) {
+			checkLive(blockId);
+			return floatPages.get(blockId);
+		}
+	}
+
+	/** As {@link #floatPage}, for a {@code Q8_0} pool's page: {@link #bytesPerToken} bytes per row. */
+	byte[] bytePage(int blockId) {
+		synchronized (lock) {
+			checkLive(blockId);
+			return bytePages.get(blockId);
+		}
+	}
+
+	/**
+	 * A copy of page {@code blockId}'s stored bytes: float32 little-endian rows for {@code F16}, packed rows for
+	 * {@code Q8_0}. For tests that compare page contents.
 	 */
 	byte[] pageBytes(int blockId) {
 		synchronized (lock) {
 			checkLive(blockId);
-			return pages.get(blockId);
+			if (bytePages != null)
+				return bytePages.get(blockId).clone();
+			byte[] out = new byte[bytesPerPage];
+			ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().put(floatPages.get(blockId));
+			return out;
 		}
 	}
 
@@ -185,19 +221,19 @@ public final class KvBlockPool {
 			throw new IllegalArgumentException("slot out of range: " + slot);
 		if (srcOff < 0 || srcOff + kvDim > src.length)
 			throw new IllegalArgumentException("src too small for kvDim=" + kvDim);
-		byte[] page;
+		float[] f32 = null;
+		byte[] q8 = null;
 		synchronized (lock) {
 			checkWritable(blockId);
-			page = pages.get(blockId);
+			if (floatPages != null)
+				f32 = floatPages.get(blockId);
+			else
+				q8 = bytePages.get(blockId);
 		}
-		int off = slot * bytesPerToken;
-		switch (type) {
-		case F16 -> {
-			ByteBuffer.wrap(page, off, bytesPerToken).order(ByteOrder.LITTLE_ENDIAN)
-					.asFloatBuffer().put(src, srcOff, kvDim);
-		}
-		case Q8_0 -> Q8_0KvCodec.encode(src, srcOff, kvDim, page, off);
-		}
+		if (f32 != null)
+			System.arraycopy(src, srcOff, f32, slot * kvDim, kvDim);
+		else
+			Q8_0KvCodec.encode(src, srcOff, kvDim, q8, slot * bytesPerToken);
 	}
 
 	public void readToken(int blockId, int slot, float[] dst) {
@@ -209,38 +245,34 @@ public final class KvBlockPool {
 			throw new IllegalArgumentException("slot out of range: " + slot);
 		if (dstOff < 0 || dstOff + kvDim > dst.length)
 			throw new IllegalArgumentException("dst too small for kvDim=" + kvDim);
-		byte[] page;
-		synchronized (lock) {
-			checkLive(blockId);
-			page = pages.get(blockId);
-		}
-		int off = slot * bytesPerToken;
-		switch (type) {
-		case F16 -> {
-			ByteBuffer.wrap(page, off, bytesPerToken).order(ByteOrder.LITTLE_ENDIAN)
-					.asFloatBuffer().get(dst, dstOff, kvDim);
-		}
-		case Q8_0 -> Q8_0KvCodec.decode(page, off, dst, dstOff, kvDim);
-		}
+		if (floatPages != null)
+			System.arraycopy(floatPage(blockId), slot * kvDim, dst, dstOff, kvDim);
+		else
+			Q8_0KvCodec.decode(bytePage(blockId), slot * bytesPerToken, dst, dstOff, kvDim);
 	}
 
 	/** Copy one stored row between slots, byte for byte (no re-encoding). */
 	public void copyToken(int srcBlock, int srcSlot, int dstBlock, int dstSlot) {
 		if (srcSlot < 0 || srcSlot >= pageSize || dstSlot < 0 || dstSlot >= pageSize)
 			throw new IllegalArgumentException("slot out of range: " + srcSlot + " -> " + dstSlot);
-		byte[] src;
-		byte[] dst;
+		Object src;
+		Object dst;
 		synchronized (lock) {
 			checkLive(srcBlock);
 			checkWritable(dstBlock);
-			src = pages.get(srcBlock);
-			dst = pages.get(dstBlock);
+			src = floatPages != null ? floatPages.get(srcBlock) : bytePages.get(srcBlock);
+			dst = floatPages != null ? floatPages.get(dstBlock) : bytePages.get(dstBlock);
 		}
-		System.arraycopy(src, srcSlot * bytesPerToken, dst, dstSlot * bytesPerToken, bytesPerToken);
+		int rowElems = floatPages != null ? kvDim : bytesPerToken;
+		System.arraycopy(src, srcSlot * rowElems, dst, dstSlot * rowElems, rowElems);
+	}
+
+	private int pageCount() {
+		return floatPages != null ? floatPages.size() : bytePages.size();
 	}
 
 	private void checkLive(int blockId) {
-		if (blockId < 0 || blockId >= pages.size() || refs[blockId] == 0)
+		if (blockId < 0 || blockId >= pageCount() || refs[blockId] == 0)
 			throw new IllegalStateException("block not live: " + blockId);
 	}
 

@@ -151,6 +151,7 @@ set "CACHE_TYPE_K_CLUSTER=%JUNO_CACHE_TYPE_K%"
 set "CACHE_TYPE_V_CLUSTER=%JUNO_CACHE_TYPE_V%"
 set "SCHEDULE_CLUSTER=%JUNO_SCHEDULE%"
 set "KV_PAGE_SIZE_CLUSTER=%JUNO_KV_PAGE_SIZE%"
+set "PREFIX_CACHE_TOKENS_CLUSTER=%JUNO_PREFIX_CACHE_TOKENS%"
 set "PREFILL_BATCH_CLUSTER=%JUNO_PREFILL_BATCH%"
 set "GRAMMAR_FILE_CLUSTER=%JUNO_GRAMMAR_FILE%"
 set "JSON_SCHEMA_FILE_CLUSTER=%JUNO_JSON_SCHEMA_FILE%"
@@ -189,6 +190,7 @@ if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K_CLUSTER=%~2" & shift & shift &
 if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--schedule" ( set "SCHEDULE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--kv-page-size" ( set "KV_PAGE_SIZE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--prefix-cache-tokens" ( set "PREFIX_CACHE_TOKENS_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--prefill-batch" ( set "PREFILL_BATCH_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--prefill"       ( set "PREFILL_MODE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--gpu-residency" ( set "GPU_RESIDENCY_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
@@ -250,6 +252,7 @@ echo   --cache-type-k f16^|q8_0 K cache type (default f16)
 echo   --cache-type-v f16^|q8_0 V cache type (default f16)
 echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
 echo   --kv-page-size N           page size when continuous (default 16)
+echo   --prefix-cache-tokens N    prompt positions kept for shared prefixes (default: context; 0 = off)
 echo   --prefill-batch N          max prompt tokens per prefill window (default 32)
 echo   --prefill single^|batched  prefill strategy (default batched)
 echo   --gpu-residency on^|off^|auto  device-resident decode region
@@ -324,6 +327,8 @@ set "SCHEDULE_ARG_CLUSTER="
 if not "%SCHEDULE_CLUSTER%"=="" set "SCHEDULE_ARG_CLUSTER=--schedule %SCHEDULE_CLUSTER%"
 set "KV_PAGE_SIZE_ARG_CLUSTER="
 if not "%KV_PAGE_SIZE_CLUSTER%"=="" set "KV_PAGE_SIZE_ARG_CLUSTER=--kv-page-size %KV_PAGE_SIZE_CLUSTER%"
+set "PREFIX_CACHE_TOKENS_ARG_CLUSTER="
+if not "%PREFIX_CACHE_TOKENS_CLUSTER%"=="" set "PREFIX_CACHE_TOKENS_ARG_CLUSTER=--prefix-cache-tokens %PREFIX_CACHE_TOKENS_CLUSTER%"
 set "PREFILL_BATCH_ARG_CLUSTER="
 if not "%PREFILL_BATCH_CLUSTER%"=="" set "PREFILL_BATCH_ARG_CLUSTER=--prefill-batch %PREFILL_BATCH_CLUSTER%"
 if not "%GRAMMAR_FILE_CLUSTER%"=="" if not "%JSON_SCHEMA_FILE_CLUSTER%"=="" (
@@ -351,7 +356,7 @@ if /i "%HEALTH_CLUSTER%"=="true" (
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %EMBEDDINGS_ARG_CLUSTER% %POOLING_ARG_CLUSTER% %PREFILL_MODE_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %PREFILL_BATCH_ARG_CLUSTER% %GPU_RESIDENCY_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %HEALTH_FLAG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %EMBEDDINGS_ARG_CLUSTER% %POOLING_ARG_CLUSTER% %PREFILL_MODE_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %PREFIX_CACHE_TOKENS_ARG_CLUSTER% %PREFILL_BATCH_ARG_CLUSTER% %GPU_RESIDENCY_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %HEALTH_FLAG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -380,6 +385,7 @@ set "CACHE_TYPE_K=%JUNO_CACHE_TYPE_K%"
 set "CACHE_TYPE_V=%JUNO_CACHE_TYPE_V%"
 set "SCHEDULE=%JUNO_SCHEDULE%"
 set "KV_PAGE_SIZE=%JUNO_KV_PAGE_SIZE%"
+set "PREFIX_CACHE_TOKENS=%JUNO_PREFIX_CACHE_TOKENS%"
 set "GPU_LAYERS=%JUNO_GPU_LAYERS%"
 set "PARALLEL=%JUNO_PARALLEL%"
 set "BATCH_WINDOW_MS=%JUNO_BATCH_WINDOW_MS%"
@@ -430,6 +436,7 @@ if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K=%~2" & shift & shift & goto :l
 if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--schedule" ( set "SCHEDULE=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--kv-page-size" ( set "KV_PAGE_SIZE=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--prefix-cache-tokens" ( set "PREFIX_CACHE_TOKENS=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--gpu-layers" ( set "GPU_LAYERS=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--parallel"   ( set "PARALLEL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--batch-window-ms" ( set "BATCH_WINDOW_MS=%~2" & shift & shift & goto :local_parse )
@@ -492,6 +499,7 @@ echo   --cache-type-k f16^|q8_0 K cache type (default f16)
 echo   --cache-type-v f16^|q8_0 V cache type (default f16)
 echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
 echo   --kv-page-size N           page size when continuous (default 16)
+echo   --prefix-cache-tokens N    prompt positions kept for shared prefixes (default: context; 0 = off)
 echo   --gpu-layers N^|all^|auto    GPU-resident transformer layers (default auto)
 echo   --parallel N               static micro-batch size (default 1)
 echo   --batch-window-ms M        batch window when parallel^>1 (default 50)
@@ -583,6 +591,8 @@ set "SCHEDULE_ARG="
 if not "%SCHEDULE%"=="" set "SCHEDULE_ARG=--schedule %SCHEDULE%"
 set "KV_PAGE_SIZE_ARG="
 if not "%KV_PAGE_SIZE%"=="" set "KV_PAGE_SIZE_ARG=--kv-page-size %KV_PAGE_SIZE%"
+set "PREFIX_CACHE_TOKENS_ARG="
+if not "%PREFIX_CACHE_TOKENS%"=="" set "PREFIX_CACHE_TOKENS_ARG=--prefix-cache-tokens %PREFIX_CACHE_TOKENS%"
 set "GPU_LAYERS_ARG="
 if not "%GPU_LAYERS%"=="" set "GPU_LAYERS_ARG=--gpu-layers %GPU_LAYERS%"
 set "PARALLEL_ARG="
@@ -631,7 +641,7 @@ if /i "%HEALTH_LOCAL%"=="true" (
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %EMBEDDINGS_ARG% %POOLING_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GPU_LAYERS_ARG% %PARALLEL_ARG% %BATCH_WINDOW_ARG% %PREFILL_BATCH_ARG% %SPEC_TYPE_ARG% %SPEC_NGRAM_N_ARG% %SPEC_NGRAM_M_ARG% %MODEL_DRAFT_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %LORA_PLAY_ARG% %GPU_ATTENTION_ARG% %GPU_RESIDENCY_ARG% %CONTEXT_SHIFT_ARG% %HEALTH_FLAG_LOCAL% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %EMBEDDINGS_ARG% %POOLING_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %PREFIX_CACHE_TOKENS_ARG% %GPU_LAYERS_ARG% %PARALLEL_ARG% %BATCH_WINDOW_ARG% %PREFILL_BATCH_ARG% %SPEC_TYPE_ARG% %SPEC_NGRAM_N_ARG% %SPEC_NGRAM_M_ARG% %MODEL_DRAFT_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %LORA_PLAY_ARG% %GPU_ATTENTION_ARG% %GPU_RESIDENCY_ARG% %CONTEXT_SHIFT_ARG% %HEALTH_FLAG_LOCAL% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

@@ -25,6 +25,7 @@ import java.util.Random;
 import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KVCacheManager;
+import cab.ml.juno.kvcache.SharedPrefixOptions;
 import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.GrammarSession;
 import cab.ml.juno.sampler.MinTokenFloor;
@@ -55,6 +56,11 @@ public final class GenerationLoop {
 	private final KVCacheManager kvCache;
 	private final PrefillMode prefillMode;
 	private final int prefillBatchSize;
+	/** Null when sharing is off. */
+	private final SharedPrefixPool sharedPrefixes;
+	private final String sharedPrefixSummary;
+	/** Set by the LoRA playback launcher; a played adapter's KV is never shared. */
+	static final String LORA_PLAY_PROPERTY = "juno.lora.play.path";
 	private final SpeculativeDecodeOptions specOptions;
 	private final InferencePipeline draftPipeline;
 
@@ -134,6 +140,11 @@ public final class GenerationLoop {
 		this.prefillBatchSize = prefillBatchSize;
 		this.specOptions = specOptions;
 		this.draftPipeline = draftPipeline;
+		String loraPlay = System.getProperty(LORA_PLAY_PROPERTY);
+		SharedPrefixPool.Setup shared = SharedPrefixPool.open(pipeline, SharedPrefixOptions.fromEnv(),
+				loraPlay != null && !loraPlay.isBlank());
+		this.sharedPrefixes = shared.pool();
+		this.sharedPrefixSummary = shared.summary();
 		if (specOptions.specType() == SpeculativeDecodeOptions.SpecType.DRAFT_SIMPLE) {
 			if (draftPipeline == null) {
 				throw new IllegalArgumentException(
@@ -161,6 +172,16 @@ public final class GenerationLoop {
 
 	KVCacheManager kvCache() {
 		return kvCache;
+	}
+
+	/** Whether finished requests' prompts are kept for sharing, and the budget or why not: a startup line. */
+	public String sharedPrefixSummary() {
+		return sharedPrefixSummary;
+	}
+
+	/** Finished requests' prompts that new requests start from; null when sharing is off. */
+	SharedPrefixPool sharedPrefixes() {
+		return sharedPrefixes;
 	}
 
 	PrefillMode prefillMode() {
@@ -252,8 +273,8 @@ public final class GenerationLoop {
 			// keyed by its own request id and evicted when it finishes, so a trie hit
 			// would always point at KV that was written under a different key (another
 			// request, or a session) or has since been evicted. Skipping prefill against
-			// it would continue from positions this request never wrote. Prefix reuse is
-			// session-scoped and served by generate() and the continuous engine only.
+			// it would continue from positions this request never wrote. A request starts from
+			// another's prompt only through the shared pool (step 1b), which copies the rows.
 			startPos[i] = 0;
 
 			allTokens[i] = promptIds.clone();
@@ -278,6 +299,8 @@ public final class GenerationLoop {
 		// so the KV cache is warm before the decode loop starts.
 		for (int i = 0; i < n; i++) {
 			int[] promptIds = Arrays.copyOfRange(allTokens[i], 0, promptLens[i]);
+			if (sharedPrefixes != null)
+				startPos[i] = sharedPrefixes.shareInto(requestIds[i], promptIds);
 			int windowSize = promptLens[i] - 1 - startPos[i];
 			if (windowSize > 0) {
 				PrefillChunker.run(pipeline, prefillMode, prefillBatchSize, requestIds[i], promptIds, startPos[i]);
@@ -384,7 +407,10 @@ public final class GenerationLoop {
 
 			// No cachePrefix call: the KV released just below is the only KV this request
 			// ever owned, so any trie entry registered for it would dangle immediately and
-			// later be matched by an unrelated request that then skips prefill.
+			// later be matched by an unrelated request that then skips prefill. The shared
+			// pool keeps its own copy of the prompt instead.
+			if (sharedPrefixes != null && !windows[i].movedKv())
+				sharedPrefixes.retain(requestIds[i], Arrays.copyOf(allTokens[i], promptLens[i]));
 			kvCache.evict(requestIds[i]);
 			pipeline.evict(requestIds[i]);
 
@@ -454,12 +480,22 @@ public final class GenerationLoop {
 			// turns no longer lines up with it: start this turn from an empty KV.
 			dropSessionKv(kvKey);
 		} else if (hasSession) {
-			var prefixMatch = kvCache.findLongestPrefix(promptIds);
+			// Only this session's own entry: another session's positions are not under kvKey.
+			var prefixMatch = kvCache.findLongestPrefix(promptIds, kvKey);
 			if (prefixMatch.isHit()) {
 				startPos = prefixMatch.matchedTokens();
 				log.info("Prefix cache hit: " + startPos + "/" + promptIds.length + " tokens cached (session=" + kvKey
 						+ ")");
 			}
+		}
+		if (startPos == 0 && sharedPrefixes != null) {
+			// The session's own entry, if any, no longer describes its KV once shared rows replace it.
+			if (hasSession)
+				kvCache.invalidatePrefix(kvKey);
+			startPos = sharedPrefixes.shareInto(kvKey, promptIds);
+			if (startPos > 0)
+				log.info("Shared prefix: " + startPos + "/" + promptIds.length + " tokens from an earlier prompt (kvKey="
+						+ kvKey + ")");
 		}
 
 		// Build working token array (prompt IDs only at first)
@@ -619,6 +655,8 @@ public final class GenerationLoop {
 			// trie leaf would be unreachable because the paths diverge before reaching
 			// it, and findLongestPrefix would return no hit.
 			kvCache.cachePrefix(promptIds, promptIds.length, kvKey);
+			if (sharedPrefixes != null)
+				sharedPrefixes.retain(kvKey, promptIds);
 			// Do NOT evict — the pipeline's KV blocks under sessionId must survive
 			// until the session ends. Caller is responsible for calling evictSession().
 		} else {
@@ -627,7 +665,10 @@ public final class GenerationLoop {
 			// kvCache.evict() only clears KVCacheManager's cross-node/session-restore
 			// tier; pipeline.evict() releases each handler's own in-process working
 			// KV arrays for this requestId — without it they leak for the life of
-			// the process (see ForwardPassHandler.evict javadoc).
+			// the process (see ForwardPassHandler.evict javadoc). The shared pool keeps its
+			// own copy of the prompt first.
+			if (sharedPrefixes != null && !window.movedKv())
+				sharedPrefixes.retain(kvKey, promptIds);
 			kvCache.evict(kvKey);
 			pipeline.evict(kvKey);
 		}

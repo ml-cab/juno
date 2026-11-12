@@ -908,6 +908,10 @@ public final class InferenceApiServer {
 		body.put("prefixLookups", scheduler.prefixLookups());
 		body.put("prefixHits", scheduler.prefixHits());
 		body.put("prefixHitRate", scheduler.prefixHitRate());
+		body.put("sharedPrefixHits", scheduler.sharedPrefixHits());
+		body.put("sharedPrefixTokens", scheduler.sharedPrefixTokens());
+		body.put("sharedPrefixHeldTokens", scheduler.sharedPrefixHeldTokens());
+		body.put("sharedPrefixBudget", scheduler.sharedPrefixBudget());
 		ctx.json(body);
 	}
 

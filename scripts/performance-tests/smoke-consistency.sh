@@ -9,8 +9,11 @@
 # 4. Static batching (--parallel 2) never resumes from KV it did not write: with a
 #    repeated prompt in a later batch, every response over /v1/chat/completions and
 #    /v1/inference equals the single-request response for that prompt, and the server
-#    reports zero prefix-cache hits for stateless traffic. Runs on CPU, and on the GPU
-#    when one is present (skip with --no-gpu).
+#    reports zero prefix-cache hits for stateless traffic (no request resumes from its
+#    own key). A repeated prompt starts from the kept prompt of its first request: the
+#    server counts shared-prefix hits, and since that first response was computed with
+#    nothing shared, the repeats' equality with it shows shared equals unshared. Runs on
+#    CPU, and on the GPU when one is present (skip with --no-gpu).
 #
 # 5. A session request (x_juno_session_id) that repeats a prompt already served to stateless
 #    traffic must prefill in full, on the static schedule after batched traffic and on the
@@ -29,6 +32,8 @@ set -uo pipefail
 PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=perf-lib.sh
 source "${PERF_SCRIPTS}/perf-lib.sh"
+# This smoke checks shared prompt prefixes at their default, which perf-lib.sh turns off for readings.
+unset JUNO_PREFIX_CACHE_TOKENS
 ROOT="$(cd "${PERF_SCRIPTS}/../.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="${ROOT}/target/consistency-smoke/${RUN_ID}"
@@ -258,6 +263,13 @@ static_batch_invariant() {
     pass "static-batch ${mode}: zero prefix-cache hits (lookups=${lookups})"
   else
     fail "static-batch ${mode}: ${hits} prefix-cache hits"
+  fi
+  local shared
+  shared="$(curl -sf "http://127.0.0.1:${API_PORT}/v1/cluster/health" | jq -r '.sharedPrefixHits // 0')"
+  if [[ "$shared" =~ ^[0-9]+$ && "$shared" -gt 0 ]]; then
+    pass "static-batch ${mode}: repeated prompts started from a kept prompt (${shared} shared-prefix hits)"
+  else
+    fail "static-batch ${mode}: no shared-prefix hit (${shared})"
   fi
   stop_juno
 }

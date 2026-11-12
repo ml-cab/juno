@@ -146,10 +146,20 @@ public final class KVCacheManager {
 	}
 
 	/**
-	 * Find the longest matching cached prefix for the given token sequence.
+	 * Find the longest matching cached prefix for the given token sequence, cached under any key: its positions live
+	 * under the key the match names. A request resuming from its own KV uses
+	 * {@link #findLongestPrefix(int[], String)}.
 	 */
 	public PrefixCache.PrefixMatch findLongestPrefix(int[] tokens) {
 		return prefixCache.findLongestPrefix(tokens);
+	}
+
+	/**
+	 * Find the longest prefix of {@code tokens} cached under {@code kvKey}: the positions a request keyed
+	 * {@code kvKey} has already written and may skip ({@link PrefixCache#findLongestPrefix(int[], String)}).
+	 */
+	public PrefixCache.PrefixMatch findLongestPrefix(int[] tokens, String kvKey) {
+		return prefixCache.findLongestPrefix(tokens, kvKey);
 	}
 
 	/**

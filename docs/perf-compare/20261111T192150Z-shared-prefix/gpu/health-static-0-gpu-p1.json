@@ -1,0 +1,8 @@
+{
+  "schedule": "static",
+  "prefixHits": 0,
+  "sharedPrefixHits": 0,
+  "sharedPrefixTokens": 0,
+  "sharedPrefixHeldTokens": 0,
+  "sharedPrefixBudget": 0
+}

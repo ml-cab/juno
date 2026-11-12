@@ -9,7 +9,15 @@ kernel level (`PagedKvAttentionOracleTest`) and handler level on all 8 handler c
 block-table read is the CPU attention's, the GPU's per-request copy staying dense (paging it is a Tier 07 candidate); step 0's
 Phi-3 question, option 2 (a load-time warning, done); Tier 02G's item 3, option (a), landing here before step 6. Step 2 done
 2026-11-10: `KvBlockPool` counts holders per page, `KvPageTable.sharePrefix` shares pages with copy-on-write, unit-tested and
-shown failing on deliberate defects; no runtime behaviour changed. Next: step 3, the CPU attention reading the pages in place.
+shown failing on deliberate defects; no runtime behaviour changed. Step 3 done 2026-11-10: the CPU attention reads host KV in
+place on every call site (`KvRows`; paged KV page by page, `Q8_0` decoded per head slice, no gather, no per-token scratch), bit
+for bit step 1's oracle; `needsAttentionScratch()` removed; unpinned A/B every CPU lane 0.972x to 1.074x, `paged_vs_dense%`
+-6.35% at the gate cell. Exit criterion 2 ticked (2 of 15). Step 4 begun 2026-11-10: a session resumed from another session's
+cached prompt over positions it never wrote (defect, both schedules), fixed by matching a prefix entry only for the key that
+cached it. Owner decisions 2026-11-11: 1 (b), finished prompts kept under a budget; 2 (a), `static` copies the rows. Step 4 done
+2026-11-11: `SharedPrefixPool` keeps finished requests' prompts as KV nothing writes (paged: pages held again, copy-on-write;
+dense: copied), new requests start from them on all three admission paths, `--prefix-cache-tokens`; replies equal sharing off
+on TinyLlama, CPU and CUDA, both schedules. Exit criterion 3 ticked (3 of 15). Next: step 5, defragmentation.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -268,11 +276,20 @@ in `models/`.)*
       absence of such a file on a supported handler recorded here with the owner's answer, and Tier 08
       keeping the obligation. *(2026-11-09: validated on Phi-3-mini-4k, window 2047, CPU and CUDA, both
       schedules; see the execution record. Tier 08 keeps Gemma's patterned window.)*
-- [ ] Block-table attention kernel in place; `needsAttentionScratch()` false on every path, asserted by
+- [x] Block-table attention kernel in place; `needsAttentionScratch()` false on every path, asserted by
       unit test. *(2026-11-10, owner decision 1 (d): the CPU attention's read through the page table on every call site, equal
-      to step 1's oracle; the GPU's device copy is out of scope.)*
-- [ ] Cross-session prefix sharing works safely (refcounted) for non-vision, non-LoRA-play sessions
+      to step 1's oracle; the GPU's device copy is out of scope.)* *(2026-11-10, later: met. Every CPU attention call site reads
+      `SessionKvTensor.attentionRows`, the stored rows in place; no path needs scratch, so `needsAttentionScratch()` was removed
+      with its last caller rather than left returning `false`. Asserted by `KvRowsTest`, `PagedKvAttentionOracleTest` (41),
+      `PagedKvHandlerOracleTest` (18, all 8 handler classes) and `GqaWindowAttentionTest` (16), bit for bit; see step 3's
+      record.)*
+- [x] Cross-session prefix sharing works safely (refcounted) for non-vision, non-LoRA-play sessions
       in both schedules.
+      *(2026-11-11, step 4: paged KV shares pages counted by `KvBlockPool`, copy-on-write; the dense `static` KV copies the
+      rows instead, by owner decision 2 (a). `KvPrefixShareHandlerTest` bit for bit on every handler family, both schedules,
+      both host KV types; `SharedPrefixPoolTest` on all three admission paths; on TinyLlama 9 of 9 replies equal sharing off,
+      CPU and CUDA, both schedules ([`20261111T192150Z-shared-prefix`](../perf-compare/20261111T192150Z-shared-prefix/INDEX.md));
+      vision and `--lora-play` refused and tested.)*
 - [ ] Defragmentation reclaims fragmented pages without corrupting live sessions.
 - [ ] Q4_0 KV tier available alongside F16/Q8_0, meeting its quality threshold (greedy agreement >= 97%,
       NLL <= 1.02x F16 KV on every sweep model).
@@ -284,10 +301,15 @@ in `models/`.)*
 - [ ] Disk-backed session save/restore round-trips correctly across a process restart.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+      *(2026-11-10: open; the owner's pinned run at tier close. Step 3's unpinned A/B met the CPU bars on every lane, evidence
+      only.)*
 - [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
       self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
 - [ ] Perf gate published; `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag pause within budget.
+      *(2026-11-10: the `paged_vs_dense%` half read -6.35%, unpinned,
+      [`20261111T051528Z-paged-kv-in-place`](../perf-compare/20261111T051528Z-paged-kv-in-place/INDEX.md); open for the
+      defrag pause, owed by the executor at step 5, and the reading is retaken on the tier's final build.)*
 - [ ] The session save/restore surface is in `api/src/main/resources/openapi.yaml` and
       `juno-api.yaml` alongside the code that serves it (README feature-complete rule).
 - [ ] Docs updated, Juno-native language only.
@@ -696,3 +718,343 @@ tests run in `cpu.unit-tests`. `coverage.tsv` needs no line: neither is a probe,
 
 **Next for the executor:** step 3, the CPU attention reading the pages in place on every call site, held to step 1's oracle,
 with `needsAttentionScratch()` `false` for both types.
+
+### 2026-11-10, latest: step 3, CPU attention reads host KV in place
+
+**Plan against code, verified at HEAD `74f75d78`.** `check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep or
+build was running (a waiter loop left by an earlier session polls for an `mvn` run that no longer exists; it only sleeps). Since the
+entry above, HEAD moved by the owner's commit of it (`737ce2cb`) and by `74f75d78`, which touched only the kit, `ClusterHarness`
+and `ModelLiveChecks` and is recorded in [Tier 02F](TIER-02F-hardware-validation-kit.md)'s record as that tier's out-of-tier
+change; neither touches this tier's code. `git status`: `report1.qdstrm` deleted and `.github/` untracked, neither this session's.
+During this session another session added a record to Tier 02F and a dated line to Tier 02H (uncommitted); not this session's.
+- Every CPU attention call site still read host KV through `SessionKvTensor.viewForAttention(seqLen, scratch)`: 18 K/V pairs in 8
+  handler classes, as step 1's entry lists. Paged: `KvPageTable.gather`. Dense `F16`: the backing array. Dense `Q8_0`: a decode
+  of every row into a scratch buffer, per layer per call.
+- All of them reach the math through `GqaMath`: `attend` (single decode; Qwen3's `gqa`), `attendPooledAsSerial` (decode batch)
+  and `attendPooled` (prefill window, Phi-2, the LoRA handlers), the last through `GqaVectorHead` when the Vector API module is
+  present. LoRA training's teacher-forced forward calls the same forms over its own ephemeral `float[]` caches.
+- The single decode allocated two scratch arrays of `(pos + 1) * kvDim` floats per token whenever the layout was paged or
+  quantized (`SessionKvLayout.needsAttentionScratch()`), in every handler; the batch workspaces held two more.
+- `GatherTaxMicrobench` (kvcache) times its own copy of the serial attention, dense against gather-then-attend.
+
+**Design (owner decision 1 (d): the CPU attention only; the GPU's device copy unchanged).**
+- `KvRows` (new, kvcache): one layer's K or V rows of one request as attention reads them, the stored rows themselves. Rows sit
+  in pages of `rowsPerPage()` rows. A paged tensor's pages are its block table's pages in the pool, in table order; a dense
+  tensor is one page (`ONE_PAGE`). An `F16` page is a `float[]` of `kvDim` floats per row; a `Q8_0` page is a `byte[]` of
+  packed rows, decoded by the reader one head's slice at a time.
+- `SessionKvTensor.attentionRows(seqLen)` replaces `viewForAttention(seqLen, scratch)`, and `needsAttentionScratch()` is gone
+  from `SessionKvTensor` and `SessionKvLayout`: no path needs scratch, so the method was removed rather than left returning
+  `false`. The tensor keeps its view current as its storage changes (a page added or dropped, a shared page copied before a
+  write, a dense array grown), so the handlers take a view per layer per call and nothing is copied.
+- `KvBlockPool` stores `F16` pages as `float[]` (they were little-endian bytes behind a `FloatBuffer`), so attention reads them
+  directly; `writeToken`, `readToken`, `copyToken` and the copy-on-write copy work on the typed page. `Q8_0` pages stay `byte[]`.
+- `Q8_0KvCodec.decodeRange(src, rowOff, from, n, dst, dstOff)` (new): elements `[from, from + n)` of one stored row, bit for
+  bit what a whole-row `decode` gives them; a head's slice can start and end anywhere in a 32-element block.
+- `GqaMath` and `GqaVectorHead` take `KvRows`. A page's run of rows goes through the loop the whole cache went through when it
+  was one array, so the dot products and the key-order sums, and the output bits, do not depend on the page size. The `float[]`
+  forms (LoRA training's caches, the GPU kernels' oracle) read their arrays as one page.
+- `GqaVectorHead` was split into `scoreKeys`, `addValues` and `scoreRun` and rewritten so that no loop-carried `FloatVector`
+  accumulator is passed to a call C2 might not inline (the boxing hazard recorded in Session 129):
+  `CpuKernelVectorEscapeTest.attentionHeadCallsNothingOnALoopCarriedVector` (new) reads the class's bytecode and flags 31 such
+  calls in HEAD's version and none now.
+- Every handler (Llama, Phi-2, Phi-3, Qwen3, Qwen3-MoE, and the three LoRA trainable handlers): the per-token scratch arrays and
+  the batch workspaces' scratch are gone, and each K/V pair is read through `attentionRows`. The unused `gqaInto` (Llama, Phi-3,
+  Qwen3) and the `BatchWorkspace.scores` array (Llama, Phi-3, Qwen3) went with them.
+- `GatherTaxMicrobench` now times attention over dense rows against attention reading the paged rows in place
+  (`gather_ms` is zero by construction) and gates `paged_vs_dense%` <= 2% at ctx 8192 / batch 8 / page 16, this tier's perf
+  gate (exit code 2 over it); `scripts/performance-tests/gather-tax-microbench.sh`'s header says so.
+
+**Run 1 found a regression, fixed by `GqaWindowAttention`.** The first candidate (`8f58887fd342cbe7`) held every lane but one:
+`Q8_0` KV prefill read 0.927x (static) and 0.905x (continuous) the baseline, under the standing gate's 0.95x (run 1's table
+below). JFR's top methods on the static `Q8_0` lane: `Q8_0KvCodec.decodeRange` 377 samples and `GqaMath.addRun` 356, against
+the baseline's whole-cache `Q8_0KvCodec.decode` 110 and `GqaVectorHead.attend` 63. The prefill window ran `attendPooled` once
+per query row, with query heads as the pool's units, and each head decoded its own KV head's slice of every key row: a `Q8_0`
+slice was decoded `gqaRatio` times per row (8 on TinyLlama), and the value sum fell back to the scalar `addRun` because the
+vector head reads `F16` pages only. A standalone measurement of the decode itself (`decbench`, scratch only): C2 does not
+vectorize the scalar byte-to-float loop on this AVX1 host, and a Vector API form, bit for bit equal, was only about 25% faster,
+so the fix is fewer decodes, not a faster one.
+- `GqaWindowAttention` (new, node): a prefill window's attention in one pool entry, with (row, KV head) pairs as the units. A
+  unit runs the `gqaRatio` query heads that share one KV head, and over `Q8_0` rows decodes each key slice and each value slice
+  once for all of them. Each head then scores and sums exactly as its own `attendPooled` unit would: the decoded values are the
+  same, the dot product is the same per-head form (vector or serial), and each output element sums its products in key order
+  from zero; float multiply and add commute, and an accumulator starting at `+0` never holds `-0`. Over `F16` rows a unit runs
+  its heads one after another through the per-head forms. Scores live in a per-thread array per head, grown and reused.
+- The prefill-window sites (Llama 2, Phi-3, Qwen3 and Phi-2 1 each) call it instead of their per-row loop. Phi-2's single decode
+  keeps its own `gqa`. The decode batch (`attendPooledAsSerial`) and the single decode (`attend`) are unchanged: they decode per
+  head, and run 1 read their `Q8_0` decode at 0.979x, inside the gate.
+
+**Tests, written first** (they failed to compile against the old classes: `KvRows`, `attentionRows`, `decodeRange` missing).
+- `KvRowsTest` (new, 8 cases, 14 runs, both cache types): a paged view reads every written row as `readToken` does, across page
+  sizes; a dense view is one page and follows the backing array when it grows; a row written after the view was taken is read
+  through it; tables sharing a prefix read the same page until one writes into it, then each its own; after truncate, a context
+  shift and release the view reads what the tensor holds; a reused dense tensor reads zero past what the new request wrote; the
+  view's length is checked; `KvRows.of` is a one-page view of its array.
+- `Q8_0KvCodecTest.decodeRange` (new): every slice of a stored row (widths 1 to 256, every start and length, the row inside a page) equals `decode`,
+  bit for bit, and nothing outside the slice is written.
+- `PagedKvAttentionOracleTest` (step 1's kernel oracle, 33 runs to 41): every attention form now reads the pages in place and is
+  compared, bit for bit, with the same form over the rows gathered into one array; every (K type, V type) pair and page size.
+- `PagedKvHandlerOracleTest` (step 1's handler oracle, 18): unchanged, passes on the new read path. It compares paged against
+  dense, both now read in place, so it no longer checks the `Q8_0` decode against an independent path; the kernel oracle and
+  `Q8_0KvCodecTest` do.
+- `GqaWindowAttentionTest` (new, 16 runs): a window in one call against `attendPooled` per row over the gathered rows, bit for
+  bit, paged and dense, every (K type, V type) pair and page size, 4 shapes (GQA ratios 1, 4 and 8), windows 0, 1, 5 and 64,
+  windows starting at 0, 1, 16 and 30, both head forms; the output is prefilled with NaN so an unwritten head fails.
+- `CpuKernelVectorEscapeTest.attentionHeadCallsNothingOnALoopCarriedVector` (new), above.
+- Adjusted to the new interface, assertions unchanged in meaning: `DenseKvTensorTest`, `PagedKvTensorTest`,
+  `SessionKvLayoutTest`, `SessionKvReuseTest`, `GatherTaxMicrobenchTest` (which now also checks that the in-place read gives the
+  dense rows' output bits).
+
+**Shown able to fail**, each defect put in and taken out (`cmp` against a copy afterwards). Kernel oracle 41 runs, handler
+oracle 18, `KvRowsTest` 14, `Q8_0KvCodecTest` 6, `GqaWindowAttentionTest` 16:
+
+| Defect | Fails |
+|---|---|
+| serial `F16` keys always read page 0 | kernel 15, handler 6 |
+| vector-head `F16` keys always read page 0 | kernel 15, handler 7 |
+| vector-head values read the previous page in one register block | kernel 8, handler 5 |
+| `Q8_0` values decode head 0's slice for every head | kernel 16, handler 0 (paged and dense share the defect) |
+| `Q8_0` keys ignore the slot within a page | kernel 16, handler 1 |
+| the copy-on-write copy not given to the view | `KvRowsTest` 2 (the reactor stopped before node) |
+| `decodeRange` takes the first block's scale for every block | `Q8_0KvCodecTest` 1, `KvRowsTest` 5 |
+| window: every head of a unit scored with its first head's query (`Q8_0` keys) | window 8 of 16 |
+| window: decoded values not zeroed before the sums (`Q8_0` values) | window 8 of 16 |
+
+**Tests run.**
+- Focused, `mvn test -pl node -am -Dtest=GqaWindowAttentionTest,PagedKvAttentionOracleTest,PagedKvHandlerOracleTest,`
+  `CpuKernelVectorEscapeTest,KvRowsTest,Q8_0KvCodecTest`: 86 run, 86 pass.
+- The unit suite on the final tree (`mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,`
+  `metrics,juno-player -am -Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 65 min): `registry` 93, `lora` 116,
+  `kvcache` 136, `health` 23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 401 (1 skipped) and 1, `vision` 97,
+  `metrics` 86 and `juno-player` 158 (2 skipped) pass; `node` 1,398 run, 55 skipped, **2 failures**, both device-wide free-memory
+  checks on the GPU that nothing this step changes reaches:
+  - `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`, the driver holdback recorded in the entries
+    above and in Tier 02G's 2026-11-07 entry.
+  - `ResidentQkvPathTest.noDeviceMemoryRetained`: 4,587,520 bytes moved across 300 cycles against <= 4,194,304. The class alone
+    straight after (`mvn test -pl node -Dtest=ResidentQkvPathTest`): 19 of 19 pass. Tier 02E recorded the same class's
+    device-wide equality failing once this way. Bound not loosened.
+- An accidental `mvn -pl kvcache install` early in this session put this tree's `kvcache` jar into `~/.m2`; every later run
+  built `kvcache` in the reactor (`-am`), so no run read it stale. The next `install` from a clean tree replaces it.
+
+**Measurements (unpinned, this host, one at a time, nothing else measuring;
+[`docs/perf-compare/20261111T051528Z-paged-kv-in-place/`](../perf-compare/20261111T051528Z-paged-kv-in-place/INDEX.md)).** Baseline: HEAD `74f75d78` built from `git archive` in
+scratch, shaded jar `96ee5784b914097c`. Candidate: this tree, `9af57a8054650216` (run 1: `8f58887fd342cbe7`). CPU lanes through
+the candidate tree's compare script with `--juno-jar` per side, `--n-prompt 512` (Phi-3.5-mini 128), 2 warm-ups, A B A B A B,
+medians; `compare-lora.sh` and `compare-vision.sh` from each tree with `--skip-build`; the smokes against the baseline jar.
+
+Run 2, the final tree, medians of three (run 1 in parentheses where it differs in kind):
+
+| Lane | pp B/A | tg B/A | Allocation per token B/A | GC pauses A / B | Greedy replies |
+|---|---:|---:|---:|---|---|
+| TinyLlama, `static`, F16 KV | 1.072 (0.994) | 1.018 | 0.966 | 0 / 0 ms | equal, 6 of 6 |
+| TinyLlama, `continuous`, F16 KV | 1.045 (1.039) | 0.982 | 0.760 | 0 / 0 ms | equal, 6 of 6 |
+| TinyLlama, `static`, `Q8_0` KV | 0.984 (**0.927**) | 0.975 | 0.748 | 0 / 0 ms | equal, 6 of 6 |
+| TinyLlama, `continuous`, `Q8_0` KV | 1.074 (**0.905**) | 0.972 | 0.755 | 0 / 0 ms | equal, 6 of 6 |
+| Phi-3.5-mini (128), `static`, F16 KV | 1.021 (1.001) | 0.994 | 0.970 | 0 / 0 ms | equal, 6 of 6 |
+
+- Every CPU lane meets the standing gate's bars, unpinned: pp and tg >= 0.95x, allocation per token <= 1.10x, no GC pause on
+  either side. Allocation falls about a quarter on the paged and `Q8_0` lanes: the per-token scratch copies are gone.
+- LoRA (bars: train <= 1.25x, playback >= 0.80x): GPU train 1.000x, playback 1.007x; CPU train 1.000x, playback 1.009x; recall 3 of 3 on
+  each side. Vision (GPU; latency <= 1.25x, decode >= 0.80x): 0.986x and 1.004x, replies equal 6 of 6. Run 1 met these too.
+- Smokes against the baseline jar: long-prompt prefill, 24 checks pass, greedy text identical at 128, 512 and 2024 tokens under
+  both schedules; consistency, 54 checks pass. Run 1's single-sample `static` TTFT at 2024 tokens read 83.7 s against 78.3 s;
+  run 2 reads 69.6 s against 70.0 s, so that was noise.
+
+**Perf gate (`paged_vs_dense%` <= 2% at ctx 8192 / batch 8): met, unpinned.** `gather-tax-microbench.sh` on the candidate:
+-6.35% at the gate cell (page 16), 0 ms gather everywhere. The microbench times `kvcache` code, unchanged since it ran. Not every
+cell is under 2%: at ctx 32768 every page size reads +2.5% to +7.8%, and at ctx 2048 page 16 +4.0% to +10.5%. At 8192, -3.4% to
+-10.4%. The baseline's microbench measured the old path: the gather was 4.75% of gather plus attention at the gate cell, and gather-then-attend read +6.00% against dense, which this gate would fail. At 32768 tokens and page 16 the in-place read costs more than the gather did (+7.6% against +4.9%); recorded, not addressed, outside the gate's cell. The defrag-pause half of
+that criterion waits for step 5.
+
+**Docs.** `docs/howto.md` (`--cache-type-k`, `--kv-page-size`: attention reads the stored rows in place), `docs/agent-arch.txt`
+(`KvRows`, the KV paragraph, `GqaMath`, `GqaWindowAttention`), `docs/performance.md` (block KV), `CHANGELOG.md`,
+`docs/perf-compare/README.md`, `scripts/performance-tests/gather-tax-microbench.sh`'s header.
+
+**Kit probes.** None added. The step adds no flag, threshold or surface; its tests run in `cpu.unit-tests`, and the A/B and smokes
+above are the kit's lanes run here. `coverage.tsv` needs no line.
+
+**Out-of-tier changes (README rule 9):** none.
+
+**Exit criteria:** 2 of 15. Criterion 2 ticked (`needsAttentionScratch()` removed with its last caller; the oracles and
+`KvRowsTest` assert the in-place read on every path). The perf gate criterion's `paged_vs_dense%` half is met unpinned; it stays
+open for the defrag pause (step 5). The standing gate stays open for the owner's pinned run at tier close; run 2 is evidence,
+not that run.
+
+**Owed to the owner:** nothing to run, nothing to decide for this step.
+
+**Next for the executor:** step 4, cross-session prefix sharing through `PrefixCache` on `KvPageTable.sharePrefix`.
+
+### 2026-11-10, latest: step 4 begun; a session resumed from another session's prompt (defect, fixed); sharing raised with the owner
+
+**Plan against code.** Step 3 above left nothing owed, so step 4 was taken up in the same session. Reading `PrefixCache` and its two
+callers, the plan's premise that prefix reuse is session-scoped (cross-surface row 4, `StaticBatchPrefixCacheSessionGatingTest`'s
+documented contract) did not hold in the code:
+- `GenerationLoop.generate` and `ContinuousBatchEngine` looked up `findLongestPrefix(promptIds)`, which returns the longest prefix
+  **any** key cached, and skipped prefill to its length without checking whose it was. A session whose prompt starts with
+  another session's cached prompt, such as two users opening with the same message, skipped prefill over positions it never
+  wrote. Under its own key those positions are empty: a reused dense tensor reads zero there (`static`), and a paged tensor has
+  fewer rows than the read (`continuous`), so the reply is wrong or the request fails. The existing gating tests cover stateless
+  traffic and one session's own turns, not two sessions.
+- The trie held one key per node, so a second session caching the same prompt overwrote the first's entry.
+- The lookup reported the trie walk's depth, not the depth of the node holding the key, so a match could run past the cached
+  prefix along another entry's branch.
+- A session that branched its conversation (an edited or regenerated turn) kept its earlier entry, whose positions past the
+  branch the later prefill had overwritten; returning to the earlier branch resumed over them.
+
+**The fix (tests first; no runtime behaviour for a single session changes).**
+- `PrefixCache`: a node holds a set of owner keys. `findLongestPrefix(tokens, ownerKey)` (new) returns the longest prefix
+  `ownerKey` cached, at the depth of the node that holds it; a `null` key matches nothing. A key holds one entry, its latest
+  prompt: `cachePrefix` replaces it, and `invalidate` walks only that entry's path (it walked the whole trie). The lookup
+  across keys stays, documented as such, for step 4's sharing.
+- `KVCacheManager.findLongestPrefix(tokens, kvKey)` (new); `GenerationLoop.generate` and `ContinuousBatchEngine` look up with
+  the request's own KV key. `generateBatch` still never consults the trie.
+- Tests, written first:
+  - `CrossSessionPrefixHitTest` (new, coordinator, 6 cases; `KvTrackingPipeline` flags a forward over positions not written
+    under its key): on the single-request path and the continuous engine, a second session with the same opening prompt, and
+    one whose prompt extends the first's, is prefilled in full with the unshared reply; two sessions that cached the same
+    prompt each skip their own prefix on their next turn, and the second keeps it after the first's session ends; a session
+    that branches back does not resume over positions its branch overwrote. The five written first failed against HEAD's code; the sixth (branch back) was added with the replacement and fails without it (below).
+  - `PrefixCacheOwnerTest` (new, kvcache, 5 cases): owner-scoped matching, the same tokens under two keys, invalidation keeping
+    another key's shorter prefix, replacement on re-caching, and the counters.
+- Shown able to fail, each defect put in and taken out (`cmp` afterwards):
+
+  | Defect | Fails |
+  |---|---|
+  | `GenerationLoop` looks up across keys | `CrossSessionPrefixHitTest` 3 |
+  | `ContinuousBatchEngine` looks up across keys | `CrossSessionPrefixHitTest` 2 |
+  | re-caching keeps the earlier entry | `PrefixCacheOwnerTest` 1, `CrossSessionPrefixHitTest` 1 (branch back), `GenerationLoopSessionTest.evict_session_clears_prefix_cache` 1 |
+  | the owner lookup ignores the owner | `PrefixCacheOwnerTest` 5 |
+
+**Tests run.**
+- Focused (`mvn test -pl coordinator -am -Dtest=CrossSessionPrefixHitTest,PrefixCache*Test,KVCacheManagerTest,`
+  `*PrefixCache*GatingTest,GenerationLoopSessionTest`): 44 run, 44 pass (`kvcache` 19, `coordinator` 25).
+- The suites the change reaches, on the tree with step 3 (`mvn test -pl kvcache,coordinator,vision,juno-player -am
+  -Dtest='**/kvcache/**,**/coordinator/**,**/vision/**,**/player/**'`, `node`'s suite filtered out since nothing in `node`
+  changed after step 3's full suite): `kvcache` 141, `coordinator` 408 (1 skipped), `vision` 97, `juno-player` 158 (2
+  skipped), 0 failures.
+- On a real model ([`docs/perf-compare/20261111T060151Z-cross-session-prefix/`](../perf-compare/20261111T060151Z-cross-session-prefix/INDEX.md)),
+  TinyLlama on the CPU, a stateless request and sessions `user-a` and `user-b` sending the same prompt: on HEAD's jar
+  (`96ee5784b914097c`) `user-b` replies with garbled text on both schedules; on this tree's (`f0c7eb0186b6fe3a`) all three
+  replies are "The capital of France is Paris." `smoke-consistency.sh` on this tree's jar: 54 of 54 pass.
+- No performance gate: the change is in the prefix trie and the two lookups, run once per request, not the forward pass,
+  MatVec, KV storage or vision. Step 3's A/B read jar `9af57a8054650216`; this jar differs from it by this change only.
+
+**Docs.** `docs/agent-arch.txt` (prefix cache and KV ownership), `docs/howto.md` (`x_juno_session_id`), `CHANGELOG.md`.
+
+**Kit probes.** None added: the consistency probes' "no prefix-cache hit for stateless traffic" still holds, and the new tests run
+in `cpu.unit-tests`. The kit change this tier lists for item 2 lands with the sharing itself.
+
+**Out-of-tier changes (README rule 9):** none. The defect predates this tier (the trie and its callers since the session work);
+it is fixed here because step 4 builds on it.
+
+**Decisions for the owner: how step 4 shares.** `KvPageTable.sharePrefix` (step 2) gives a paged request another table's prefix
+pages, copy-on-write. Two choices the plan leaves open:
+1. **What holds a prefix once its request ends.** Today only a session keeps its KV; a stateless request releases its pages when
+   it finishes. The case the objective names (many clients sending the same system prompt, mostly stateless) needs prompt pages
+   kept past their request.
+   - (a) Share only from live sessions: a request whose prompt starts with a live session's cached prompt starts from that
+     session's pages. No memory held beyond what sessions hold today; stateless traffic gains only when a session holds the
+     prefix.
+   - (b) (a), plus a retained prefix pool: when a request retires, its prompt's whole pages stay in the trie, held by the cache
+     under a page budget, the least recently used released first. Stateless traffic shares. It needs a budget setting, which
+     fails closed on a surface without paged KV.
+   - **Recommendation: (b)**, budget default a fixed share of the page pool (say a quarter), settable to 0. The kit change this
+     tier lists for item 2 ("a shared-prefix hit is counted" on stateless traffic) assumes it.
+2. **The `static` schedule.** Its KV is dense, one array per request, so it has no pages to share; exit criterion 3 says "in both
+   schedules".
+   - (a) On `static`, copy the matched prefix rows from the holder's dense KV into the new request's (the prefill compute is
+     skipped; memory is not shared). Safe by copying, not by counting.
+   - (b) Share on `continuous` only. `static` keeps its gate and says so; criterion 3 and cross-surface row 4 are amended.
+   - **Recommendation: (a).** `static` is the default schedule and the one cluster mode falls back to, and a copy of a
+     500-token prefix costs far less than prefilling it on the CPU.
+   Either way, a GPU request keeps its own device rows (owner decision 1 (d)): a shared prefix's rows are uploaded from host KV
+   at admission, so the prefill is skipped on the device too.
+
+**Exit criteria:** 2 of 15, unchanged.
+
+**Owed to the owner:** decisions 1 and 2 above.
+
+**Next for the executor:** step 4's sharing, as the owner decides.
+
+### 2026-11-11: owner decisions 1 (b) and 2 (a); step 4, cross-session prefix sharing
+
+**Owner decisions (2026-11-11).** 1 (b): finished requests' prompts are kept under a budget, least recently used released
+first, settable to 0. 2 (a): on the `static` schedule a request copies the matched rows.
+
+**Plan against code.** As the step 4 record above left it. Two refinements to the decisions, made while implementing:
+- **A request never shares from a live session's KV**, only from kept copies. A live session's next turn writes its KV on
+  another thread, possibly below the shared length (a branched turn), so a read could tear. Every finished request's prompt,
+  session or stateless, is shared into a pool key that nothing writes, so sessions' prompts are shareable through the pool.
+  On paged KV the copy is the same pages held once more, so it costs nothing until written.
+- **The budget is in positions, defaulting to a quarter of the maximum heap at the model's host KV bytes per position, at
+  most one context.** The decision said "a quarter of the page pool", but `KvBlockPool` has no capacity: it grows on the
+  heap. The first default tried, one context, read 32,768 positions (the KV cap), about 8.6 GB on an 8B model, so it was
+  replaced before any reading relied on it.
+
+**What changed.**
+- kvcache: `SessionKvLayout.sharePrefixK/V` (paged `PagedKvTensor.sharePrefix` over `KvPageTable.sharePrefix`; dense
+  `DenseKvTensor.copyPrefixFrom`, stored bytes copied, not re-encoded); `PrefixCache.findLongestCommonPrefix` (the longest
+  opening shared with any entry, whether or not the entry ends there: the existing lookup reports only nodes where an entry
+  ends, so a request sharing only a system prompt matched nothing; caught by the pool tests); `SharedPrefixOptions`.
+- node: `ForwardPassHandler`/`InferencePipeline` `shareKvPrefix`, `supportsKvPrefixSharing`, `hostKvBytesPerToken` (defaults
+  false, false, 0); `LocalInferencePipeline` shares on each distinct handler and evicts the target everywhere if one refuses;
+  `HandlerKvShare` used by the five inference handlers, which with GPU attention copy the shared rows into the request's
+  device mirror on the layers attending there (owner decision 1 (d)'s "uploaded from host KV at admission"). Refused: a
+  `q8_0` host KV beside GPU attention (the device copy would hold `q8_0`-rounded rows, not what the request computes), a
+  node KV adapter, the LoRA handlers. vision: `VisionAwareForwardPassHandler` refuses any request with an image.
+- coordinator: `SharedPrefixPool` (one lock over lookup, share and release); `GenerationLoop.generate`, `generateBatch`
+  and `ContinuousBatchEngine` share at admission (when the request has no own-session hit; at least 16 positions, at most
+  `promptLen - 1`) and keep the prompt at completion (not after a shift or cut). `generateBatch` still never reads the session
+  trie (cross-surface row 4: shared through copies, the gate kept). Health: `sharedPrefixHits`, `sharedPrefixTokens`,
+  `sharedPrefixHeldTokens`, `sharedPrefixBudget`, in `openapi.yaml` with the existing prefix counters.
+- CLI: `--prefix-cache-tokens N` / `JUNO_PREFIX_CACHE_TOKENS` (`ConsoleMain`, `run.sh`, `run.bat`, cluster and local); a
+  startup line states the budget and its MiB, or why sharing is off; an explicit value above 0 fails at startup where sharing
+  cannot work (cluster, `--lora-play`, the cases above).
+- Readings: `perf-lib.sh` exports `JUNO_PREFIX_CACHE_TOKENS=0` unless set, and the kit's servers get it unless a probe passes
+  the flag: readings repeat prompts, and a repeat would time a skipped prefill. A jar without the setting ignores it.
+
+**Tests (written with the code; each shown able to fail).**
+
+| Test | Cases | Defect put in, then taken out (`cmp` after) | Fails |
+|---|---|---|---|
+| `SessionKvLayoutShareTest` | 12 | dense layout aliases the source | 3 |
+| `KvPrefixShareHandlerTest` | 36 | share one row short | 24 (all that share) |
+| | | dense layout aliases the source | 12 (the source's next token) |
+| `SharedPrefixPoolTest` | 9 | `generate` keeps no stateless prompt | 4 |
+| | | no release past the budget | 1 |
+| | | exact-end lookup instead of the common prefix (the first version) | 3 |
+| `VisionAwareForwardPassHandlerShareTest` | 1 | image check removed | 1 |
+| `PrefixCacheOwnerTest` (new case), `SharedPrefixOptionsTest` | 1, 3 | | |
+
+**Runs.**
+- Real model ([`20261111T192150Z-shared-prefix`](../perf-compare/20261111T192150Z-shared-prefix/INDEX.md)), TinyLlama,
+  sharing on against the same server with it off, nine requests: 9 of 9 replies equal on CPU and CUDA, both schedules.
+  After a ~1,000-token system prompt the next request answers in 4.44 s against 47.82 s (CPU `static`), 5.38 against 49.68
+  (CPU `continuous`), 0.94 against 1.33 (GTX 1080 `static`), 1.78 against 4.75 (GPU `continuous`), unpinned. Watch item: a
+  ~25-position share on GPU `static` reads 0.12 s against 0.09 s (the device copy can cost more than a short prefill).
+- `smoke-consistency.sh` on the final jar `a261d4df8de1a18c`: 56 of 56 pass (two new: shared-prefix hits counted, 19 each on
+  CPU and GPU, with every repeated reply equal to its first, unshared reply).
+- The unit suite on the final tree, the script and kit edits included (`mvn test -pl api,tokenizer,lora,node,coordinator,`
+  `sampler,kvcache,health,registry,vision,metrics,juno-player,juno-kit -am -Dmaven.test.failure.ignore=true`, GPU groups on
+  the GTX 1080, 72 min): `registry` 93, `lora` 116, `kvcache` 157, `health` 23, `tokenizer` 109 (2 skipped), `sampler` 90,
+  `coordinator` 416 (1 skipped) and 1, `vision` 98, `metrics` 86, `juno-player` 158 (2 skipped), `juno-master` 15 and
+  `juno-kit` 132 pass; `node` 1,434 run, 55 skipped, **1 failure**: `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThan`
+  `TheReservesAllowance`, 99,024,896 bytes reported free with the device full against <= 67,108,864; alone twice after,
+  95,289,344 and 96,468,992. The driver holdback recorded in the entries above and in Tier 02G's 2026-11-07 entry; nothing
+  this step changes reaches that class. Bound not loosened. `ResidentQkvPathTest` passed this time.
+- No performance gate: nothing per token changed (forward pass, MatVec, KV storage and reads are as step 3 left them); the
+  share is one copy per admitted request. Throughput readings from here on run with sharing off (above), so the standing
+  gate at tier close compares computed prefills.
+
+**Kit probes.** The change this tier lists for item 2 is in: `consistency.tinyllama` and `gpu.consistency.tinyllama` keep "no
+prefix-cache hit for stateless traffic" (no request resumes from its own key) and add "repeated prompts start from a kept
+prompt", with an explicit `--prefix-cache-tokens 4096`.
+
+**Owed, not done here.** `ModelLiveRunnerIT`'s cross-session-sharing check and `smoke-kv-cache.sh` (two concurrent clients
+sharing a system prompt) land with step 8's smoke matrix, which also needs defragmentation and save/restore. The GPU
+short-prefix watch item above.
+
+**Exit criteria:** 3 of 15 (criterion 3 ticked above).
+
+**Owed to the owner:** nothing new.
+
+**Next for the executor:** step 5, defragmentation.

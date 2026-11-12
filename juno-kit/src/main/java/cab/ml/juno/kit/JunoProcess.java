@@ -127,9 +127,10 @@ final class JunoProcess implements AutoCloseable {
 		Files.createDirectories(dir);
 		Path log = dir.resolve(LOG);
 		Files.writeString(log, String.join(" ", all) + "\n");
-		Process p = new ProcessBuilder(all).directory(dir.toFile()).redirectErrorStream(true)
-				.redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile())).start();
-		return awaitApi(new JunoProcess(p, dir, port), timeout);
+		ProcessBuilder pb = new ProcessBuilder(all).directory(dir.toFile()).redirectErrorStream(true)
+				.redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()));
+		noSharedPrefixes(pb);
+		return awaitApi(new JunoProcess(pb.start(), dir, port), timeout);
 	}
 
 	private static JunoProcess awaitApi(JunoProcess s, Duration timeout) throws IOException, InterruptedException {
@@ -161,8 +162,19 @@ final class JunoProcess implements AutoCloseable {
 		List<String> cmd = JvmLauncher.command(heap, false, all, LAUNCHER, args);
 		Path log = dir.resolve(LOG);
 		Files.writeString(log, String.join(" ", cmd) + "\n");
-		return new ProcessBuilder(cmd).directory(dir.toFile()).redirectErrorStream(true)
-				.redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile())).start();
+		ProcessBuilder pb = new ProcessBuilder(cmd).directory(dir.toFile()).redirectErrorStream(true)
+				.redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()));
+		noSharedPrefixes(pb);
+		return pb.start();
+	}
+
+	/**
+	 * Probes send the same prompt more than once, and a reading would otherwise time a prefill the server skipped by
+	 * starting from the first request's kept prompt; so shared prompt prefixes are off in the kit's servers unless the
+	 * tester set {@code JUNO_PREFIX_CACHE_TOKENS} or a probe passes {@code --prefix-cache-tokens}, which wins.
+	 */
+	private static void noSharedPrefixes(ProcessBuilder pb) {
+		pb.environment().putIfAbsent("JUNO_PREFIX_CACHE_TOKENS", "0");
 	}
 
 	URI base() {

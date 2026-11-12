@@ -260,6 +260,7 @@ public final class ConsoleMain {
 	private static String cacheTypeV = null; // null → env or default f16
 	private static String schedule = null; // null → env or default static
 	private static String kvPageSize = null; // null → env or default 16
+	private static String prefixCacheTokens = null; // null → env or default (one context)
 	private static Integer parallel = null; // null → env or default 1
 	private static Long batchWindowMs = null; // null → env or default when parallel > 1
 	private static String grammarFile = null;
@@ -466,6 +467,8 @@ public final class ConsoleMain {
 			System.setProperty(cab.ml.juno.kvcache.ServeScheduleOptions.ENV, schedule);
 		if (kvPageSize != null)
 			System.setProperty(cab.ml.juno.kvcache.KvPageSizeOptions.ENV, kvPageSize);
+		if (prefixCacheTokens != null)
+			System.setProperty(cab.ml.juno.kvcache.SharedPrefixOptions.ENV, prefixCacheTokens);
 		if (loraPlayPath != null)
 			System.setProperty(cab.ml.juno.node.LoraMmqPolicy.PLAY_PATH_PROPERTY, loraPlayPath);
 		System.setProperty("juno.byteOrder", byteOrder);
@@ -650,6 +653,13 @@ public final class ConsoleMain {
 			if (env != null && !env.isBlank())
 				kvPageSize = env.strip();
 		}
+		if (prefixCacheTokens == null) {
+			String env = System.getenv(cab.ml.juno.kvcache.SharedPrefixOptions.ENV);
+			if (env != null && !env.isBlank()) {
+				cab.ml.juno.kvcache.SharedPrefixOptions.parse(env);
+				prefixCacheTokens = env.strip();
+			}
+		}
 		if (parallel == null) {
 			String env = System.getenv(ServeBatchOptions.ENV_PARALLEL);
 			if (env != null && !env.isBlank())
@@ -675,6 +685,11 @@ public final class ConsoleMain {
 			if (env != null && !env.isBlank())
 				jsonSchemaFile = env.strip();
 		}
+	}
+
+	/** REPL-visible shared prompt prefix policy (JUL alone is off without --verbose). */
+	private static void printSharedPrefixPolicy(GenerationLoop loop) {
+		System.out.println(String.format("  %s%s%s%n", Color.GREEN, loop.sharedPrefixSummary(), Color.RESET));
 	}
 
 	/** REPL-visible KV path policy (JUL alone is off without --verbose). */
@@ -890,6 +905,12 @@ public final class ConsoleMain {
 					throw new IllegalArgumentException("--schedule requires static|continuous");
 				schedule = args[++i];
 				cab.ml.juno.kvcache.ServeScheduleOptions.parse(schedule);
+				break;
+			case "--prefix-cache-tokens":
+				if (i + 1 >= args.length)
+					throw new IllegalArgumentException("--prefix-cache-tokens requires a non-negative integer");
+				prefixCacheTokens = args[++i].strip();
+				cab.ml.juno.kvcache.SharedPrefixOptions.parse(prefixCacheTokens);
 				break;
 			case "--kv-page-size":
 				if (i + 1 >= args.length)
@@ -1172,6 +1193,10 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_SCHEDULE. Cluster/TP/PP auto-falls back to static.");
 		System.out.println("  --kv-page-size N           Tokens per KV page when schedule=continuous (default: 16)");
 		System.out.println("                             env JUNO_KV_PAGE_SIZE; ignored under static (dense)");
+		System.out.println("  --prefix-cache-tokens N    Prompt positions of finished requests kept, so a request whose");
+		System.out.println("                             prompt starts the same way skips computing that part (default:");
+		System.out.println("                             the model's context length; 0 = off). Local mode; a cluster or");
+		System.out.println("                             --lora-play refuses a value above 0. env JUNO_PREFIX_CACHE_TOKENS");
 		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled);");
 		System.out.println("                             under continuous, caps the running set (default cap 8 if N=1)");
 		System.out.println("                             env JUNO_PARALLEL; 8 suits a local API server, keep 1 on a cluster");
@@ -1379,6 +1404,7 @@ public final class ConsoleMain {
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
 				PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.LORA_REPL, prefillBatch, true, null),
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
+		printSharedPrefixPolicy(loop);
 
 		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
 		int[] totalStepsTrained = { 0 };
@@ -2307,6 +2333,7 @@ public final class ConsoleMain {
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
 				PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.CLUSTER_REPL, prefillBatch, true, null),
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
+		printSharedPrefixPolicy(loop);
 
 		startRepl(loop, tokenizer); // calls System.exit(0) on quit — shutdown hook fires from there
 	}
@@ -2461,6 +2488,7 @@ public final class ConsoleMain {
 					+ " (adaptive, free VRAM=" + (gpuCtx.freeVramBytes() / (1024 * 1024)) + " MiB)");
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
 				resolvedPrefillBatch, specOptions, draftPipeline);
+		printSharedPrefixPolicy(loop);
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
@@ -2726,6 +2754,7 @@ public final class ConsoleMain {
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
 				PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.CLUSTER_REPL, prefillBatch, true, null),
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
+		printSharedPrefixPolicy(loop);
 		BatchConfig clusterBatch = resolveBatchConfig();
 		if (clusterBatch.isBatchingEnabled())
 			System.out.println("  " + Color.YELLOW + "WARNING: " + cab.ml.juno.coordinator.ClusterBatchNotice.TEXT

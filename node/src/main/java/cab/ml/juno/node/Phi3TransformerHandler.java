@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.DenseKvTensor;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
@@ -846,9 +847,6 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		int N = x.length;
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
-		int maxPos = 0;
-		for (int pos : positions)
-			maxPos = Math.max(maxPos, pos);
 
 		SessionKvTensor[][] kCaches = new SessionKvTensor[N][];
 		SessionKvTensor[][] vCaches = new SessionKvTensor[N][];
@@ -883,7 +881,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 
 		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.intermediateSize(),
-				kvDim, cfg.numHeads(), maxPos + 1, kvLayout.needsAttentionScratch());
+				kvDim);
 
 		ResidentBatchDecode.Step step = residentBatch != null ? residentBatch.open(N) : null;
 		try {
@@ -950,8 +948,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		if (g == null || !g.attendStreams(mirrors, positions, ws.q, ws.attnOut, layerWindows[li])) {
 			for (int b = 0; b < N; b++) {
 				int seqLen = positions[b] + 1;
-				float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
-				float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
+				KvRows kView = kCacheLayers[b].attentionRows(seqLen);
+				KvRows vView = vCacheLayers[b].attentionRows(seqLen);
 				decodeBatchAttend(ws.q[b], kView, vView, seqLen, ws.attnOut[b], layerWindows[li]);
 			}
 		}
@@ -1023,7 +1021,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 
 		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
-				kvDim, cfg.numHeads(), lastPos + 1, kvLayout.needsAttentionScratch());
+				kvDim);
 		DeviceKvCache[] mirrors = mirrorsFor(requestId);
 
 		PrefillWindowRegion.Window win = openPrefillWindow(W);
@@ -1052,10 +1050,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	 *  LlamaTransformerHandler.BatchWorkspace — eliminates per-layer allocation. */
 	private static final class BatchWorkspace {
 		final float[][] norm1, norm2, q, k, v, attnOut, attnProj, gate, up, hidden, ffnOut;
-		final float[] scores;
-		final float[] kDequant, vDequant;
 
-		BatchWorkspace(int W, int H, int I, int kvDim, int numHeads, int maxSeqLen, boolean quantKv) {
+		BatchWorkspace(int W, int H, int I, int kvDim) {
 			norm1    = new float[W][H];
 			norm2    = new float[W][H];
 			q        = new float[W][H];
@@ -1067,14 +1063,6 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			up       = new float[W][I];
 			hidden   = new float[W][I];
 			ffnOut   = new float[W][H];
-			scores   = new float[numHeads * maxSeqLen];
-			if (quantKv) {
-				kDequant = new float[maxSeqLen * kvDim];
-				vDequant = new float[maxSeqLen * kvDim];
-			} else {
-				kDequant = null;
-				vDequant = null;
-			}
 		}
 
 		/**
@@ -1199,12 +1187,10 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		AttentionEvent attnEvt = new AttentionEvent();
 		attnEvt.begin();
 		if (g == null || !g.attendWindow(mirror, startPos, ws.q, ws.attnOut, window)) {
-			for (int b = 0; b < W; b++) {
-				int seqLen = startPos + b + 1;
-				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
-				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
-				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, window);
-			}
+			KvRows kView = kCacheLayer.attentionRows(startPos + W);
+			KvRows vView = vCacheLayer.attentionRows(startPos + W);
+			GqaWindowAttention.attend(ws.q, kView, vView, startPos, W, ws.attnOut, cfg.numHeads(), cfg.headDim(),
+					cfg.gqaRatio(), cfg.kvDim(), window);
 		}
 		attnEvt.windowSize = W;
 		attnEvt.startPosition = startPos;
@@ -1311,17 +1297,9 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 					+ " on the host path between device matmuls. Lower --gpu-layers to leave the region room.");
 	}
 
-	/** Zero-allocation gqa: writes into pre-allocated out[] using shared scores scratch; {@code window} 0 for all keys. */
 	/** A decode batch's attention for one request: {@link GqaMath#attendPooledAsSerial}, its single-request decode's bits. */
-	private void decodeBatchAttend(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, int window) {
+	private void decodeBatchAttend(float[] q, KvRows kCache, KvRows vCache, int seqLen, float[] out, int window) {
 		GqaMath.attendPooledAsSerial(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
-				cfg.kvDim(), window);
-	}
-
-	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
-			float[] out, float[] scores, int window) {
-		// heads on the worker pool, bit-identical to the serial loop; scores is the serial form's scratch, unused here
-		GqaMath.attendPooled(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
 				cfg.kvDim(), window);
 	}
 
@@ -1441,13 +1419,6 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			vCache[li].ensureCapacity(pos);
 		}
 
-		float[] kScratch = null;
-		float[] vScratch = null;
-		if (kvLayout.needsAttentionScratch()) {
-			kScratch = new float[(pos + 1) * kvDim];
-			vScratch = new float[(pos + 1) * kvDim];
-		}
-
 		DeviceKvCache[] mirrors = mirrorsFor(requestId);
 		ResidentQkvPath region = residentQkv;
 		if (region != null)
@@ -1456,7 +1427,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		// its output there, and the next layer reads it without an upload.
 		try (ResidentQkvPath.Lease lease = region != null ? region.lease() : null) {
 			for (int li = 0; li < L; li++)
-				x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch,
+				x = transformerLayer(x, li, pos, kCache[li], vCache[li],
 						GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)), region, lease);
 		}
 		if (region != null && region.ownsResult(x))
@@ -1561,6 +1532,34 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 	}
 
+	/**
+	 * Host rows through {@link HandlerKvShare}; with GPU attention, the shared rows are copied into the new
+	 * request's device mirror on the layers that attend there, so the request skips the prefix on the device too.
+	 */
+	@Override
+	public boolean shareKvPrefix(String fromId, String toId, int len) {
+		if (!supportsKvPrefixSharing() || !HandlerKvShare.shareHost(kvCacheK, kvCacheV, kvLayout, fromId, toId, len))
+			return false;
+		GpuAttentionMirror g = gpuAttention;
+		if (g != null) {
+			g.evict(toId);
+			HandlerKvShare.uploadMirrors("Phi-3", g.layersFor(toId), kvCacheK.get(toId), kvCacheV.get(toId), len,
+					this::layerOnDevice);
+		}
+		return true;
+	}
+
+	@Override
+	public long hostKvBytesPerToken() {
+		return HandlerKvShare.bytesPerToken(kvLayout, endLayer - startLayer);
+	}
+
+	@Override
+	public boolean supportsKvPrefixSharing() {
+		return HandlerKvShare.supported(kvLayout, gpuAttention != null, kvAdapter);
+	}
+
+
 	private SessionKvTensor[] newKLayers(int L) {
 		return kvLayout.newKLayers(L);
 	}
@@ -1581,8 +1580,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[] transformerLayer(float[] x, int li, int pos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch, DeviceKvCache mirror, ResidentQkvPath region,
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, DeviceKvCache mirror, ResidentQkvPath region,
 			ResidentQkvPath.Lease lease) {
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -1650,8 +1648,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 				attnOut = ds.attnOut;
 		}
 		if (attnOut == null) {
-			float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
-			float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+			KvRows kView = kCacheLayer.attentionRows(seqLen);
+			KvRows vView = vCacheLayer.attentionRows(seqLen);
 			GqaMath.attend(q, kView, vView, seqLen, ds.attnOut, ds.scores(seqLen), cfg.numHeads(), cfg.headDim(),
 					cfg.gqaRatio(), cfg.kvDim(), layerWindows[li]);
 			attnOut = ds.attnOut;

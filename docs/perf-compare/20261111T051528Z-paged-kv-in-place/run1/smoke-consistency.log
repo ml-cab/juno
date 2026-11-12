@@ -1,0 +1,60 @@
+[consistency-smoke] PASS: gguf-info Qwen3.5-0.8B.Q4_K_M.gguf: general.architecture = qwen35
+[consistency-smoke] PASS: local Qwen3.5-0.8B.Q4_K_M.gguf: rejected, error names 'qwen35' (exit 1)
+[consistency-smoke] PASS: cluster pipeline Qwen3.5-0.8B.Q4_K_M.gguf: start fails naming 'qwen35', no node JVMs left (exit 1)
+[consistency-smoke] PASS: cluster tensor Qwen3.5-0.8B.Q4_K_M.gguf: start fails naming 'qwen35', no node JVMs left (exit 1)
+[consistency-smoke] PASS: gguf-info gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf: general.architecture = gemma4
+[consistency-smoke] PASS: local gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf: rejected, error names 'gemma4' (exit 1)
+[consistency-smoke] PASS: cluster pipeline gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf: start fails naming 'gemma4', no node JVMs left (exit 1)
+[consistency-smoke] PASS: cluster tensor gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf: start fails naming 'gemma4', no node JVMs left (exit 1)
+[consistency-smoke] PASS: gguf-info Devstral-Small-2-24B-Instruct-2512-UD-IQ1_S.gguf: general.architecture = mistral3
+[consistency-smoke] PASS: local Devstral-Small-2-24B-Instruct-2512-UD-IQ1_S.gguf: rejected, error names 'mistral3' (exit 1)
+[consistency-smoke] PASS: cluster pipeline Devstral-Small-2-24B-Instruct-2512-UD-IQ1_S.gguf: start fails naming 'mistral3', no node JVMs left (exit 1)
+[consistency-smoke] PASS: cluster tensor Devstral-Small-2-24B-Instruct-2512-UD-IQ1_S.gguf: start fails naming 'mistral3', no node JVMs left (exit 1)
+[consistency-smoke] PASS: gguf-info minimax-m2.5-tiny-24e-iq4_nl-imat.gguf: general.architecture = minimax-m2
+[consistency-smoke] PASS: local minimax-m2.5-tiny-24e-iq4_nl-imat.gguf: rejected, error names 'minimax-m2' (exit 1)
+[consistency-smoke] PASS: cluster pipeline minimax-m2.5-tiny-24e-iq4_nl-imat.gguf: start fails naming 'minimax-m2', no node JVMs left (exit 1)
+[consistency-smoke] PASS: cluster tensor minimax-m2.5-tiny-24e-iq4_nl-imat.gguf: start fails naming 'minimax-m2', no node JVMs left (exit 1)
+[consistency-smoke] PASS: local tinyllama: loads and exits cleanly (exit 0)
+[consistency-smoke] up: static-batch-cpu (pid 2104824)
+[consistency-smoke] baseline (cpu): 0='The capital of France is Paris.' 1='Red.' 2='A spider has six legs.'
+[consistency-smoke] PASS: openai-cpu-round1: prompt 0 matches single-request output
+[consistency-smoke] PASS: openai-cpu-round1: prompt 1 matches single-request output
+[consistency-smoke] PASS: openai-cpu-round1: prompt 2 matches single-request output
+[consistency-smoke] PASS: openai-cpu-round1: prompt 0 matches single-request output
+[consistency-smoke] PASS: openai-cpu-round2: prompt 0 matches single-request output
+[consistency-smoke] PASS: openai-cpu-round2: prompt 0 matches single-request output
+[consistency-smoke] PASS: openai-cpu-round2: prompt 1 matches single-request output
+[consistency-smoke] PASS: openai-cpu-round2: prompt 2 matches single-request output
+[consistency-smoke] PASS: native-cpu-round1: prompt 0 matches single-request output
+[consistency-smoke] PASS: native-cpu-round1: prompt 1 matches single-request output
+[consistency-smoke] PASS: native-cpu-round1: prompt 2 matches single-request output
+[consistency-smoke] PASS: native-cpu-round1: prompt 0 matches single-request output
+[consistency-smoke] PASS: native-cpu-round2: prompt 0 matches single-request output
+[consistency-smoke] PASS: native-cpu-round2: prompt 0 matches single-request output
+[consistency-smoke] PASS: native-cpu-round2: prompt 1 matches single-request output
+[consistency-smoke] PASS: native-cpu-round2: prompt 2 matches single-request output
+[consistency-smoke] PASS: static-batch cpu: session request after batched stateless traffic matches single-request output
+[consistency-smoke] PASS: static-batch cpu: zero prefix-cache hits (lookups=1)
+[consistency-smoke] up: continuous-cpu (pid 2105853)
+[consistency-smoke] PASS: continuous: session request after a stateless request matches it ('The capital of France is Paris.')
+[consistency-smoke] up: static-batch-gpu (pid 2106231)
+[consistency-smoke] baseline (gpu): 0='The capital of France is Paris.' 1='Red.' 2='A spider has six legs.'
+[consistency-smoke] PASS: openai-gpu-round1: prompt 0 matches single-request output
+[consistency-smoke] PASS: openai-gpu-round1: prompt 1 matches single-request output
+[consistency-smoke] PASS: openai-gpu-round1: prompt 2 matches single-request output
+[consistency-smoke] PASS: openai-gpu-round1: prompt 0 matches single-request output
+[consistency-smoke] PASS: openai-gpu-round2: prompt 0 matches single-request output
+[consistency-smoke] PASS: openai-gpu-round2: prompt 0 matches single-request output
+[consistency-smoke] PASS: openai-gpu-round2: prompt 1 matches single-request output
+[consistency-smoke] PASS: openai-gpu-round2: prompt 2 matches single-request output
+[consistency-smoke] PASS: native-gpu-round1: prompt 0 matches single-request output
+[consistency-smoke] PASS: native-gpu-round1: prompt 1 matches single-request output
+[consistency-smoke] PASS: native-gpu-round1: prompt 2 matches single-request output
+[consistency-smoke] PASS: native-gpu-round1: prompt 0 matches single-request output
+[consistency-smoke] PASS: native-gpu-round2: prompt 0 matches single-request output
+[consistency-smoke] PASS: native-gpu-round2: prompt 0 matches single-request output
+[consistency-smoke] PASS: native-gpu-round2: prompt 1 matches single-request output
+[consistency-smoke] PASS: native-gpu-round2: prompt 2 matches single-request output
+[consistency-smoke] PASS: static-batch gpu: session request after batched stateless traffic matches single-request output
+[consistency-smoke] PASS: static-batch gpu: zero prefix-cache hits (lookups=1)
+[consistency-smoke] all checks passed. Output: <repo>/target/consistency-smoke/20261110T235619Z

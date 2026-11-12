@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 import cab.ml.juno.lora.LoraAdapter;
@@ -347,21 +348,13 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 			vC[li].ensureCapacity(pos);
 		}
 
-		float[] kScratch = null;
-		float[] vScratch = null;
-		if (kvLayout.needsAttentionScratch()) {
-			kScratch = new float[(pos + 1) * kvDim];
-			vScratch = new float[(pos + 1) * kvDim];
-		}
-
 		for (int li = 0; li < L; li++)
-			x = inferenceLayer(x, li, pos, kC[li], vC[li], kScratch, vScratch);
+			x = inferenceLayer(x, li, pos, kC[li], vC[li]);
 		return x;
 	}
 
 	private float[] inferenceLayer(float[] x, int li, int pos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer) {
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
 		int kvDim = cfg.kvDim();
@@ -386,8 +379,8 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		vCacheLayer.writeToken(pos, v);
 
 		int seqLen = pos + 1;
-		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
-		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+		KvRows kView = kCacheLayer.attentionRows(seqLen);
+		KvRows vView = vCacheLayer.attentionRows(seqLen);
 		float[] attnOut = Qwen3TransformerHandler.gqa(cfg, q, kView, vView, seqLen, layerWindows[li]);
 		float[] attnProj = LoraResidentWeights.matVec(wo[li], woDev != null ? woDev[li] : null, attnOut, H, qDim);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);

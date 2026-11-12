@@ -28,14 +28,13 @@ class SessionKvLayoutTest {
 
 		SessionKvLayout layout = SessionKvLayout.fromEnv(8);
 		assertThat(layout.usesPaged()).isFalse();
-		assertThat(layout.needsAttentionScratch()).isFalse();
 		SessionKvTensor[] k = layout.newKLayers(2);
 		assertThat(k[0]).isInstanceOf(DenseKvTensor.class);
 		assertThat(layout.policySummary()).contains("kv-page-size ignored");
 	}
 
 	@Test
-	@DisplayName("continuous allocates paged layers and needs scratch")
+	@DisplayName("continuous allocates paged layers, which attention reads page by page")
 	void continuous_paged() {
 		prevSched = System.getProperty(ServeScheduleOptions.ENV);
 		prevPage = System.getProperty(KvPageSizeOptions.ENV);
@@ -44,11 +43,11 @@ class SessionKvLayoutTest {
 
 		SessionKvLayout layout = SessionKvLayout.fromEnv(8);
 		assertThat(layout.usesPaged()).isTrue();
-		assertThat(layout.needsAttentionScratch()).isTrue();
 		SessionKvTensor[] k = layout.newKLayers(1);
 		assertThat(k[0]).isInstanceOf(PagedKvTensor.class);
 		k[0].writeToken(0, new float[8]);
 		assertThat(k[0].capacityTokens()).isEqualTo(4);
+		assertThat(k[0].attentionRows(1).rowsPerPage()).isEqualTo(4);
 		SessionKvLayout.releaseLayers(k);
 	}
 

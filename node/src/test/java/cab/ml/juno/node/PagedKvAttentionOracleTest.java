@@ -31,24 +31,27 @@ import org.junit.jupiter.params.provider.MethodSource;
 import cab.ml.juno.kvcache.DenseKvTensor;
 import cab.ml.juno.kvcache.KvBlockPool;
 import cab.ml.juno.kvcache.KvElementType;
+import cab.ml.juno.kvcache.KvPageTable;
+import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.PagedKvTensor;
 
 /**
- * The oracle a block-table attention read is held to. Today attention over paged KV
- * gathers the pages into a contiguous workspace ({@link PagedKvTensor#viewForAttention})
- * and runs the dense attention math over it. This test pins that down: over the same
- * rows, the gathered view equals a {@link DenseKvTensor}'s view and every CPU attention
- * form ({@link GqaMath#attend}, the decode batch's {@link GqaMath#attendPooledAsSerial},
- * the prefill window's {@link GqaMath#attendPooled} with and without the vector head)
- * gives the same output bits on both.
+ * The oracle the block-table attention read is held to. Attention reads paged KV in place, page by page through
+ * the block table ({@link PagedKvTensor#attentionRows}), and dense KV as one page; the oracle is the earlier path,
+ * the pages gathered into one contiguous array ({@link KvPageTable#gather}, here through
+ * {@link PagedKvTensor#toFloatArray}) and the attention math run over that. Over the same rows, every CPU attention
+ * form ({@link GqaMath#attend}, the decode batch's {@link GqaMath#attendPooledAsSerial}, the prefill window's
+ * {@link GqaMath#attendPooled} with and without the vector head) gives the oracle's output bits reading the pages in
+ * place, and reading the dense tensor in place; and the gathered rows equal the dense tensor's rows.
  *
  * <p>The paged side is laid out the way a running server lays it out: K and V pools
  * shared with a neighbour session whose rows are written in between, so a session's
  * pages are not consecutive blocks; pages recycled from freed sessions, so a page's
  * slots past the written length hold stale rows; and page sizes that leave the last
  * page partly filled. Each context length is read as a prefix of the stored rows, as
- * the prefill window reads them row by row. A reader that walks the block table must
- * meet every case here with the dense output bits.
+ * the prefill window reads them row by row. K and V may be stored in different types
+ * ({@code --cache-type-k} and {@code --cache-type-v} are separate), and the reader decodes
+ * a {@code Q8_0} row inside the attention loop, one head's slice at a time.
  */
 @DisplayName("Paged KV attention - gather oracle")
 class PagedKvAttentionOracleTest {
@@ -79,7 +82,7 @@ class PagedKvAttentionOracleTest {
 	/** Window lengths: 0 is none; 5 starts mid-page for every page size above 1; 64 never binds at N. */
 	private static final int[] WINDOWS = { 0, 1, 5, 64 };
 
-	/** The forms CPU attention takes today; the vector head only where the Vector API module is present. */
+	/** The forms CPU attention takes; the vector head only where the Vector API module is present. */
 	enum Form {
 		SERIAL, POOLED_AS_SERIAL, POOLED_SCALAR, POOLED_VECTOR
 	}
@@ -98,18 +101,22 @@ class PagedKvAttentionOracleTest {
 		final Random rng;
 
 		TwinKv(KvElementType type, int pageSize, int kvDim, long seed) {
+			this(type, type, pageSize, kvDim, seed);
+		}
+
+		TwinKv(KvElementType kType, KvElementType vType, int pageSize, int kvDim, long seed) {
 			this.kvDim = kvDim;
 			this.rng = new Random(seed);
-			kPool = new KvBlockPool(pageSize, kvDim, type);
-			vPool = new KvBlockPool(pageSize, kvDim, type);
+			kPool = new KvBlockPool(pageSize, kvDim, kType);
+			vPool = new KvBlockPool(pageSize, kvDim, vType);
 			churn(kPool);
 			churn(vPool);
 			pagedK = new PagedKvTensor(kPool);
 			pagedV = new PagedKvTensor(vPool);
 			neighbourK = new PagedKvTensor(kPool);
 			neighbourV = new PagedKvTensor(vPool);
-			denseK = new DenseKvTensor(type, kvDim);
-			denseV = new DenseKvTensor(type, kvDim);
+			denseK = new DenseKvTensor(kType, kvDim);
+			denseV = new DenseKvTensor(vType, kvDim);
 		}
 
 		/** Leaves freed pages full of large stale rows, so the session's pages are recycled ones. */
@@ -157,6 +164,16 @@ class PagedKvAttentionOracleTest {
 		return out.stream();
 	}
 
+	/** Every (K type, V type) pair, mixed ones included, at every page size. */
+	static Stream<Arguments> typePairsAndPages() {
+		List<Arguments> out = new ArrayList<>();
+		for (KvElementType kType : KvElementType.values())
+			for (KvElementType vType : KvElementType.values())
+				for (int pageSize : PAGE_SIZES)
+					out.add(Arguments.of(kType, vType, pageSize));
+		return out.stream();
+	}
+
 	@ParameterizedTest(name = "{0}, page {1}")
 	@MethodSource("typesAndPages")
 	@DisplayName("every prefix of the gathered pages equals the dense rows, bit for bit")
@@ -165,22 +182,20 @@ class PagedKvAttentionOracleTest {
 			TwinKv kv = new TwinKv(type, pageSize, s.kvDim(), 11L * pageSize + s.kvDim());
 			kv.writeThrough(N);
 			for (int len = 1; len <= N; len++) {
-				assertBitsEqual(kv.pagedK.viewForAttention(len, new float[len * s.kvDim()]),
-						kv.denseK.viewForAttention(len, new float[len * s.kvDim()]), len * s.kvDim(),
+				assertBitsEqual(kv.pagedK.toFloatArray(len), kv.denseK.toFloatArray(len), len * s.kvDim(),
 						"K, " + s + ", len " + len);
-				assertBitsEqual(kv.pagedV.viewForAttention(len, new float[len * s.kvDim()]),
-						kv.denseV.viewForAttention(len, new float[len * s.kvDim()]), len * s.kvDim(),
+				assertBitsEqual(kv.pagedV.toFloatArray(len), kv.denseV.toFloatArray(len), len * s.kvDim(),
 						"V, " + s + ", len " + len);
 			}
 		}
 	}
 
-	@ParameterizedTest(name = "{0}, page {1}")
-	@MethodSource("typesAndPages")
-	@DisplayName("attention over gathered pages equals attention over dense KV, every form, window and length")
-	void attentionOverGatheredPagesEqualsDense(KvElementType type, int pageSize) {
+	@ParameterizedTest(name = "K {0}, V {1}, page {2}")
+	@MethodSource("typePairsAndPages")
+	@DisplayName("attention reading the pages in place equals attention over the gathered rows, every form, window and length")
+	void attentionReadingPagesInPlaceEqualsGathered(KvElementType kType, KvElementType vType, int pageSize) {
 		for (Shape s : SHAPES) {
-			TwinKv kv = new TwinKv(type, pageSize, s.kvDim(), 13L * pageSize + s.kvDim());
+			TwinKv kv = new TwinKv(kType, vType, pageSize, s.kvDim(), 13L * pageSize + s.kvDim());
 			kv.writeThrough(N);
 			assertAttentionEqual(kv, s, N, "");
 		}
@@ -188,7 +203,7 @@ class PagedKvAttentionOracleTest {
 
 	@ParameterizedTest(name = "{0}, page {1}")
 	@MethodSource("typesAndPages")
-	@DisplayName("after a context shift and a dropped draft, gathered pages still attend as the dense KV")
+	@DisplayName("after a context shift and a dropped draft, the pages read in place still attend as the gathered rows")
 	void afterContextShiftAndDroppedDraft(KvElementType type, int pageSize) {
 		Shape s = SHAPES[1];
 		TwinKv kv = new TwinKv(type, pageSize, s.kvDim(), 17L * pageSize);
@@ -220,7 +235,7 @@ class PagedKvAttentionOracleTest {
 		int first = 7;
 		for (int p = first; p < first + 9; p++)
 			kv.write(p);
-		float[] view = kv.pagedK.viewForAttention(first, new float[first * s.kvDim()]);
+		float[] view = kv.pagedK.toFloatArray(first);
 		for (int i = 0; i < first * s.kvDim(); i++)
 			assertThat(view[i]).as("hole value %d", i).isZero();
 		assertAttentionEqual(kv, s, first + 9, "holes: ");
@@ -240,8 +255,8 @@ class PagedKvAttentionOracleTest {
 		int window = 5;
 		TwinKv kv = new TwinKv(KvElementType.F16, pageSize, s.kvDim(), 23L);
 		kv.writeThrough(N);
-		float[] k = kv.pagedK.viewForAttention(N, new float[N * s.kvDim()]).clone();
-		float[] v = kv.pagedV.viewForAttention(N, new float[N * s.kvDim()]).clone();
+		float[] k = kv.pagedK.toFloatArray(N);
+		float[] v = kv.pagedV.toFloatArray(N);
 		float[] q = queries(s, 1, 29L)[0];
 		int pageFloats = pageSize * s.kvDim();
 
@@ -276,36 +291,58 @@ class PagedKvAttentionOracleTest {
 		return out;
 	}
 
-	/** Attention at every context length {@code [1, len]}, every form and window, paged against dense. */
+	/**
+	 * Attention at every context length {@code [1, len]}, every form and window: the pages read in place and the dense
+	 * tensor read in place each give the oracle's bits, the attention over the pages gathered into one array.
+	 */
 	private static void assertAttentionEqual(TwinKv kv, Shape s, int len, String label) {
 		float[][] qs = queries(s, len, 31L * len + s.kvDim());
-		float[] pagedKScratch = new float[len * s.kvDim()];
-		float[] pagedVScratch = new float[len * s.kvDim()];
-		float[] denseKScratch = new float[len * s.kvDim()];
-		float[] denseVScratch = new float[len * s.kvDim()];
+		float[] oracleOut = new float[s.qDim()];
 		float[] pagedOut = new float[s.qDim()];
 		float[] denseOut = new float[s.qDim()];
 		float[] scores = new float[len];
 		for (int seqLen = 1; seqLen <= len; seqLen++) {
-			float[] pk = kv.pagedK.viewForAttention(seqLen, pagedKScratch);
-			float[] pv = kv.pagedV.viewForAttention(seqLen, pagedVScratch);
-			float[] dk = kv.denseK.viewForAttention(seqLen, denseKScratch);
-			float[] dv = kv.denseV.viewForAttention(seqLen, denseVScratch);
+			float[] gk = kv.pagedK.toFloatArray(seqLen);
+			float[] gv = kv.pagedV.toFloatArray(seqLen);
+			KvRows pk = kv.pagedK.attentionRows(seqLen);
+			KvRows pv = kv.pagedV.attentionRows(seqLen);
+			KvRows dk = kv.denseK.attentionRows(seqLen);
+			KvRows dv = kv.denseV.attentionRows(seqLen);
 			float[] q = qs[seqLen - 1];
 			for (int window : WINDOWS)
 				for (Form form : Form.values()) {
 					if (form == Form.POOLED_VECTOR && !GqaMath.VECTOR_HEAD)
 						continue;
+					String what = label + s + ", seqLen " + seqLen + ", window " + window + ", " + form;
+					attend(form, q, KvRows.of(gk, s.kvDim()), KvRows.of(gv, s.kvDim()), seqLen, oracleOut, scores, s,
+							window);
 					attend(form, q, pk, pv, seqLen, pagedOut, scores, s, window);
+					assertBitsEqual(pagedOut, oracleOut, s.qDim(), what + ", pages read in place");
 					attend(form, q, dk, dv, seqLen, denseOut, scores, s, window);
-					assertBitsEqual(pagedOut, denseOut, s.qDim(),
-							label + s + ", seqLen " + seqLen + ", window " + window + ", " + form);
+					assertBitsEqual(denseOut, oracleOut, s.qDim(), what + ", dense read in place");
+					attendFlat(form, q, gk, gv, seqLen, denseOut, scores, s, window);
+					assertBitsEqual(denseOut, oracleOut, s.qDim(), what + ", float[] form");
 				}
 		}
 	}
 
-	private static void attend(Form form, float[] q, float[] k, float[] v, int seqLen, float[] out, float[] scores,
+	private static void attend(Form form, float[] q, KvRows k, KvRows v, int seqLen, float[] out, float[] scores,
 			Shape s, int window) {
+		switch (form) {
+		case SERIAL -> GqaMath.attend(q, k, v, seqLen, out, scores, s.heads(), s.headDim(), s.gqaRatio(), s.kvDim(),
+				window);
+		case POOLED_AS_SERIAL -> GqaMath.attendPooledAsSerial(q, k, v, seqLen, out, s.heads(), s.headDim(),
+				s.gqaRatio(), s.kvDim(), window);
+		case POOLED_SCALAR -> GqaMath.attendPooled(q, k, v, seqLen, out, s.heads(), s.headDim(), s.gqaRatio(),
+				s.kvDim(), window, false);
+		case POOLED_VECTOR -> GqaMath.attendPooled(q, k, v, seqLen, out, s.heads(), s.headDim(), s.gqaRatio(),
+				s.kvDim(), window, true);
+		}
+	}
+
+	/** The {@code float[]} forms training and the GPU oracle call: a one-page view of the arrays. */
+	private static void attendFlat(Form form, float[] q, float[] k, float[] v, int seqLen, float[] out,
+			float[] scores, Shape s, int window) {
 		switch (form) {
 		case SERIAL -> GqaMath.attend(q, k, v, seqLen, out, scores, s.heads(), s.headDim(), s.gqaRatio(), s.kvDim(),
 				window);
@@ -330,7 +367,7 @@ class PagedKvAttentionOracleTest {
 	private static void assertBitsEqual(float[] actual, float[] expected, int n, String what) {
 		for (int i = 0; i < n; i++)
 			if (Float.floatToRawIntBits(actual[i]) != Float.floatToRawIntBits(expected[i]))
-				throw new AssertionError(what + ": element " + i + " is " + actual[i] + ", dense reads " + expected[i]);
+				throw new AssertionError(what + ": element " + i + " is " + actual[i] + ", the oracle reads " + expected[i]);
 	}
 
 	private static double maxAbsDiff(float[] a, float[] b) {

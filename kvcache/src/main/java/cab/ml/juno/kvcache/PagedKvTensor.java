@@ -19,9 +19,10 @@ package cab.ml.juno.kvcache;
  * Continuous-schedule KV tensor: fixed-size pages from a shared
  * {@link KvBlockPool} via a {@link KvPageTable}.
  *
- * <p>Attention always gathers into a contiguous float workspace (gather tax).
+ * <p>Attention reads the pages in place, walking the block table
+ * ({@link #attentionRows}); nothing is gathered into a contiguous workspace.
  * API mirrors {@link DenseKvTensor} write / view / restore helpers so handlers
- * can dual-path later.
+ * run one path over either.
  */
 public final class PagedKvTensor implements SessionKvTensor {
 
@@ -90,21 +91,14 @@ public final class PagedKvTensor implements SessionKvTensor {
 		table.writeToken(pos, src, srcOff);
 	}
 
-	/**
-	 * Gather positions {@code [0, seqLen)} into {@code scratch} for attention.
-	 * Always copies (paged storage is not a contiguous float array).
-	 */
+	/** The block table's pages, read in place ({@link KvPageTable#rows}). */
 	@Override
-	public float[] viewForAttention(int seqLen, float[] scratch) {
+	public KvRows attentionRows(int seqLen) {
 		if (seqLen < 1)
 			throw new IllegalArgumentException("seqLen must be >= 1");
 		if (seqLen > table.seqLen())
 			throw new IllegalArgumentException("seqLen " + seqLen + " > stored " + table.seqLen());
-		int need = seqLen * table.kvDim();
-		if (scratch == null || scratch.length < need)
-			throw new IllegalArgumentException("scratch must hold seqLen*kvDim floats");
-		table.gather(scratch, seqLen);
-		return scratch;
+		return table.rows();
 	}
 
 	@Override
@@ -120,20 +114,21 @@ public final class PagedKvTensor implements SessionKvTensor {
 			table.appendToken(src, p * table.kvDim());
 	}
 
+	/** Gathers positions {@code [0, seqLen)} from the pages into a new array. */
 	@Override
 	public float[] toFloatArray(int seqLen) {
+		if (seqLen < 1)
+			throw new IllegalArgumentException("seqLen must be >= 1");
+		if (seqLen > table.seqLen())
+			throw new IllegalArgumentException("seqLen " + seqLen + " > stored " + table.seqLen());
 		float[] out = new float[seqLen * table.kvDim()];
-		return viewForAttention(seqLen, out);
+		table.gather(out, seqLen);
+		return out;
 	}
 
 	@Override
 	public int capacityTokens() {
 		return table.pageCount() * table.pageSize();
-	}
-
-	@Override
-	public boolean needsAttentionScratch() {
-		return true;
 	}
 
 	public long allocatedBytes() {
@@ -156,6 +151,14 @@ public final class PagedKvTensor implements SessionKvTensor {
 			throw new IllegalArgumentException("seqLen " + seqLen + " > stored " + table.seqLen());
 		table.truncate(seqLen);
 		table.compact(keep, discard);
+	}
+
+	/**
+	 * A new tensor whose positions {@code [0, len)} are this one's, holding the same pages (copy-on-write, see
+	 * {@link KvPageTable#sharePrefix}). Must not overlap a write to this tensor.
+	 */
+	public PagedKvTensor sharePrefix(int len) {
+		return new PagedKvTensor(table.sharePrefix(len));
 	}
 
 	@Override

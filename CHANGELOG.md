@@ -1,5 +1,45 @@
 ## Status 
 
+**Session 141** - CPU attention reads the KV cache where it is stored; requests share a finished request's prompt KV; a session no longer resumes from another session's prompt
+
+- **A request whose prompt starts like a finished request's starts from that prompt's KV** instead of computing it: many
+  clients sending one system prompt, or two users opening with the same message. The reply is unchanged (TinyLlama, CPU and
+  CUDA, both schedules: every reply equals the server's with sharing off). On the CPU a second request after a 1,000-token
+  system prompt answered in 4.4 s instead of 47.8 s (`static`) and 5.4 s instead of 49.7 s (`continuous`); on a GTX 1080,
+  0.94 s instead of 1.33 s and 1.78 s instead of 4.75 s (unpinned). Finished prompts are kept as KV that nothing writes:
+  on paged KV the same pages, copied only when written; on dense KV a copy. With GPU attention the shared rows are copied
+  into the request's device KV. New flag `--prefix-cache-tokens N` (`JUNO_PREFIX_CACHE_TOKENS`): positions kept, least
+  recently used released first; default a quarter of the heap, at most one context; `0` turns it off. The startup line
+  states the budget. Never shared: requests with an image, `--lora-play`, cluster nodes, and a `q8_0` host KV beside GPU
+  attention; a value above 0 there fails at startup. `/v1/cluster/health` adds `sharedPrefixHits`, `sharedPrefixTokens`,
+  `sharedPrefixHeldTokens` and `sharedPrefixBudget`. New tests: `SessionKvLayoutShareTest`, `KvPrefixShareHandlerTest`,
+  `SharedPrefixPoolTest`, `SharedPrefixOptionsTest`, `VisionAwareForwardPassHandlerShareTest`, and a common-prefix case in
+  `PrefixCacheOwnerTest`; the consistency smoke and kit probe check that repeated prompts count shared-prefix hits.
+
+- **CPU attention no longer copies the KV cache before it reads it.** Paged KV (`--schedule continuous`) is read page by page
+  through the request's block table, with no gather into a contiguous buffer. `q8_0` KV (`--cache-type-k`/`--cache-type-v
+  q8_0`) is decoded one head's slice at a time inside the attention loop, with no decode of the whole cache per layer. Dense
+  F16 KV is read as before. The output is bit for bit what the copied rows gave, on every handler and every CPU attention
+  form (single decode, decode batch, prefill window, LoRA). The GPU's device KV copy is unchanged.
+- **A decode token on paged or `q8_0` KV no longer allocates two arrays the size of the request's cache.** Allocation per
+  token falls to about 0.75x on those lanes; CPU throughput is 0.97x to 1.07x the previous build on TinyLlama at 512 prompt
+  tokens across both schedules and both cache types, and greedy replies are unchanged (unpinned, A/B x3).
+- **A prefill window's attention runs as one pooled call**, each unit taking the query heads that share one KV head, so a
+  `q8_0` row slice is decoded once for all of them rather than once per head.
+- **The paged-KV microbench measures the in-place read.** `scripts/performance-tests/gather-tax-microbench.sh` gates attention
+  over paged KV at no more than 2% slower than over dense KV at 8,192 tokens, batch 8 and page 16 (exit code 2 over it). It
+  reads 6.35% faster there on the reference host, unpinned; the gather path read 6.00% slower. At 32,768 tokens it reads 2.5%
+  to 7.8% slower.
+- New tests: `KvRowsTest`, `GqaWindowAttentionTest`, `Q8_0KvCodecTest`'s slice decode, and a bytecode check that the vector
+  attention head passes no loop-carried vector to a call; the paged KV attention oracle now checks the in-place read.
+- **Fixed: a session could resume from another session's cached prompt.** When a session's prompt started with a prompt
+  another session had cached (two users opening with the same message is enough), it skipped that prefill and decoded over
+  positions it had never written, giving a wrong reply or a failed request; on both schedules. A prefix-cache entry now
+  belongs to the session that cached it and is matched only for that session; two sessions with the same opening prompt
+  each keep their own. A session that returns to an earlier branch of its conversation no longer resumes over positions a
+  later branch overwrote: a session keeps one entry, its latest prompt. New tests: `CrossSessionPrefixHitTest`,
+  `PrefixCacheOwnerTest`.
+
 **Session 140** - A failing cluster node leaves its evidence; the kit's noise reading no longer counts its own children
 
 - **`JUNO_NODE_LOG_DIR` keeps what a local cluster's forked nodes leave when they fail.** Each node appends its standard

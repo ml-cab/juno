@@ -15,17 +15,16 @@
  */
 package cab.ml.juno.kvcache;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Per-request page table over a shared {@link KvBlockPool}.
  *
- * <p>Maps logical token positions to (blockId, slot). {@link #gather} copies
- * the active prefix into a contiguous float workspace for BLAS attention.
+ * <p>Maps logical token positions to (blockId, slot). Attention reads the pages
+ * in place through {@link #rows()}, which this table keeps current as its pages
+ * change; {@link #gather} copies the active prefix into a contiguous float array
+ * (serialization, tests).
  *
  * <p>{@link #sharePrefix} starts a table from this one's first rows without
  * copying them: both hold the same pages, counted by the pool. A page held by
@@ -40,12 +39,15 @@ public final class KvPageTable {
 
 	private final KvBlockPool pool;
 	private final List<Integer> blockIds = new ArrayList<>();
+	/** This table's pages, in table order, as attention reads them. */
+	private final KvRows rows;
 	private int seqLen;
 
 	public KvPageTable(KvBlockPool pool) {
 		if (pool == null)
 			throw new IllegalArgumentException("pool must not be null");
 		this.pool = pool;
+		this.rows = new KvRows(pool.type(), pool.kvDim(), pool.pageSize());
 	}
 
 	/**
@@ -62,6 +64,7 @@ public final class KvPageTable {
 			int id = blockIds.get(i);
 			pool.retain(id);
 			shared.blockIds.add(id);
+			shared.track(i, id);
 		}
 		shared.seqLen = len;
 		return shared;
@@ -71,9 +74,27 @@ public final class KvPageTable {
 	private int writablePage(int page) {
 		int id = blockIds.get(page);
 		int own = pool.exclusive(id);
-		if (own != id)
+		if (own != id) {
 			blockIds.set(page, own);
+			track(page, own);
+		}
 		return own;
+	}
+
+	/** Points the attention view's page {@code page} at block {@code blockId}'s storage. */
+	private void track(int page, int blockId) {
+		if (pool.type() == KvElementType.F16)
+			rows.setPage(page, pool.floatPage(blockId));
+		else
+			rows.setPage(page, pool.bytePage(blockId));
+	}
+
+	/**
+	 * Positions {@code [0, seqLen)} as attention reads them: this table's pages in the pool, in place. Valid until
+	 * the table is next written, truncated or released.
+	 */
+	public KvRows rows() {
+		return rows;
 	}
 
 	public int seqLen() {
@@ -138,6 +159,7 @@ public final class KvPageTable {
 			if (slot == 0) {
 				block = pool.allocate();
 				blockIds.add(block);
+				track(blockIds.size() - 1, block);
 			} else {
 				block = writablePage(blockIds.size() - 1);
 			}
@@ -165,37 +187,17 @@ public final class KvPageTable {
 			throw new IllegalArgumentException("workspace must hold len*kvDim floats");
 		if (len == 0)
 			return;
-		// F16 float path: copy whole pages via FloatBuffer (gather-tax mitigation).
+		int pageSize = pool.pageSize();
+		int kvDim = pool.kvDim();
+		// Through the block ids, not the attention view, so that a copy checks what the view reads.
 		if (pool.type() == KvElementType.F16) {
-			gatherF16Bulk(workspace, len);
+			for (int p = 0, page = 0; p < len; p += pageSize, page++)
+				System.arraycopy(pool.floatPage(blockIds.get(page)), 0, workspace, p * kvDim,
+						Math.min(pageSize, len - p) * kvDim);
 			return;
 		}
-		int pageSize = pool.pageSize();
-		int kvDim = pool.kvDim();
-		for (int p = 0; p < len; p++) {
-			int page = p / pageSize;
-			int slot = p % pageSize;
-			pool.readToken(blockIds.get(page), slot, workspace, p * kvDim);
-		}
-	}
-
-	private void gatherF16Bulk(float[] workspace, int len) {
-		int pageSize = pool.pageSize();
-		int kvDim = pool.kvDim();
-		int fullPages = len / pageSize;
-		int rem = len % pageSize;
-		int dst = 0;
-		for (int pi = 0; pi < fullPages; pi++) {
-			byte[] page = pool.pageBytes(blockIds.get(pi));
-			FloatBuffer fb = ByteBuffer.wrap(page).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-			fb.get(workspace, dst, pageSize * kvDim);
-			dst += pageSize * kvDim;
-		}
-		if (rem > 0) {
-			byte[] page = pool.pageBytes(blockIds.get(fullPages));
-			FloatBuffer fb = ByteBuffer.wrap(page).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-			fb.get(workspace, dst, rem * kvDim);
-		}
+		for (int p = 0; p < len; p++)
+			pool.readToken(blockIds.get(p / pageSize), p % pageSize, workspace, p * kvDim);
 	}
 
 	/** Copy the float row at {@code pos} (must be written) into {@code dst[0, kvDim)}. */
@@ -228,6 +230,7 @@ public final class KvPageTable {
 		int pages = (len + pool.pageSize() - 1) / pool.pageSize();
 		while (blockIds.size() > pages)
 			pool.free(blockIds.remove(blockIds.size() - 1));
+		rows.clearFrom(pages);
 		seqLen = len;
 	}
 
@@ -236,6 +239,7 @@ public final class KvPageTable {
 		for (int id : blockIds)
 			pool.free(id);
 		blockIds.clear();
+		rows.clearFrom(0);
 		seqLen = 0;
 	}
 }

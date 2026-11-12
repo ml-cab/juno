@@ -38,6 +38,43 @@ final class KvTrackingPipeline implements InferencePipeline {
 	private final Map<String, Map<Integer, Integer>> kv = new ConcurrentHashMap<>();
 	private final List<String> underruns = Collections.synchronizedList(new ArrayList<>());
 	private final List<Write> writeLog = Collections.synchronizedList(new ArrayList<>());
+	private final boolean sharing;
+
+	KvTrackingPipeline() {
+		this(false);
+	}
+
+	/** @param sharing whether {@link #shareKvPrefix} copies the source's positions (else it refuses, as the default) */
+	KvTrackingPipeline(boolean sharing) {
+		this.sharing = sharing;
+	}
+
+	@Override
+	public boolean supportsKvPrefixSharing() {
+		return sharing;
+	}
+
+	/** Copies {@code fromId}'s positions {@code [0, len)} to {@code toId}, replacing what it held. */
+	@Override
+	public boolean shareKvPrefix(String fromId, String toId, int len) {
+		Map<Integer, Integer> src = kv.get(fromId);
+		if (!sharing || src == null || fromId.equals(toId))
+			return false;
+		Map<Integer, Integer> copy = new ConcurrentHashMap<>();
+		for (int p = 0; p < len; p++) {
+			Integer t = src.get(p);
+			if (t == null)
+				return false;
+			copy.put(p, t);
+		}
+		kv.put(toId, copy);
+		return true;
+	}
+
+	/** Keys holding KV whose name starts with {@code prefix}. */
+	List<String> keysStartingWith(String prefix) {
+		return kv.keySet().stream().filter(k -> k.startsWith(prefix)).sorted().toList();
+	}
 
 	@Override
 	public float[] forward(String requestId, int[] tokens, int startPos) {

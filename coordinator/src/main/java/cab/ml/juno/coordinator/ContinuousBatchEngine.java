@@ -175,11 +175,22 @@ final class ContinuousBatchEngine {
 		int startPos = 0;
 		if (hasSession && window.movedKv())
 			dropSessionKv(kvCache, pipeline, kvKey);
-		var prefixMatch = kvCache.findLongestPrefix(promptIds);
+		// Only this request's own entry: another session's positions are not under kvKey.
+		var prefixMatch = kvCache.findLongestPrefix(promptIds, kvKey);
 		if (hasSession && !loraPlay && !window.movedKv() && prefixMatch.isHit()) {
 			startPos = prefixMatch.matchedTokens();
 			log.info("Prefix cache hit: " + startPos + "/" + promptIds.length + " tokens cached (session=" + kvKey
 					+ ")");
+		}
+		SharedPrefixPool shared = loop.sharedPrefixes();
+		if (startPos == 0 && shared != null) {
+			// The session's own entry, if any, no longer describes its KV once shared rows replace it.
+			if (hasSession)
+				kvCache.invalidatePrefix(kvKey);
+			startPos = shared.shareInto(kvKey, promptIds);
+			if (startPos > 0)
+				log.info("Shared prefix: " + startPos + "/" + promptIds.length + " tokens from an earlier prompt (kvKey="
+						+ kvKey + ")");
 		}
 
 		pending.consumer().onPrefillStart(promptIds.length);
@@ -370,11 +381,17 @@ final class ContinuousBatchEngine {
 				// serve the session's next turn as a prefix.
 				dropSessionKv(kvCache, pipeline, s.kvKey);
 			} else if (s.hasSession) {
-				kvCache.cachePrefix(java.util.Arrays.copyOf(s.allTokens, s.promptLen), s.promptLen, s.kvKey);
+				int[] prompt = java.util.Arrays.copyOf(s.allTokens, s.promptLen);
+				kvCache.cachePrefix(prompt, s.promptLen, s.kvKey);
+				if (loop.sharedPrefixes() != null)
+					loop.sharedPrefixes().retain(s.kvKey, prompt);
 			} else {
 				// No cachePrefix call: the KV released here is the only KV this slot owned, so
 				// a trie entry registered for it would dangle immediately and a later session
-				// request with the same prompt would match it and skip prefill.
+				// request with the same prompt would match it and skip prefill. The shared pool
+				// keeps its own copy of the prompt first.
+				if (loop.sharedPrefixes() != null && !s.window.movedKv())
+					loop.sharedPrefixes().retain(s.kvKey, java.util.Arrays.copyOf(s.allTokens, s.promptLen));
 				kvCache.evict(s.kvKey);
 				pipeline.evict(s.kvKey);
 			}

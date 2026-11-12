@@ -25,11 +25,13 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Gather-tax microbench for dual KV path (dense vs paged gather + GQA).
+ * Paged-KV attention microbench for the dual KV path: attention over dense KV against attention over paged KV.
  *
- * <p>Matrix: ctx ∈ {2k, 8k, 32k} × batch ∈ {1, 8, 32}, optional page sizes.
- * Prints absolute ns and gather overhead as % of (gather + attention).
- * Budget gate: ≤ ~15% at batch 8 / ctx 8k.
+ * <p>Matrix: ctx in {2k, 8k, 32k} x batch in {1, 8, 32}, optional page sizes. Attention reads both layouts in place
+ * ({@link SessionKvTensor#attentionRows}): the dense rows as one page, the paged rows page by page through the block
+ * table. The {@code gather_ms} column is kept for comparison with earlier reports, when the paged path first copied
+ * the pages into a contiguous workspace; it reads zero by construction. {@code paged_vs_dense%} is the cost of
+ * walking the pages. Gate: {@code paged_vs_dense%} at most 2% at batch 8 / ctx 8k.
  *
  * <p>Shapes match TinyLlama-class GQA (heads=32, kvHeads=4, headDim=64).
  */
@@ -46,10 +48,11 @@ public final class GatherTaxMicrobench {
 	public static final int[] DEFAULT_BATCH = { 1, 8, 32 };
 	public static final int[] DEFAULT_PAGES = { 16, 64, 128 };
 
-	/** Proceed-to-continuous reference cell. */
+	/** Reference cell of the gate. */
 	public static final int GATE_CTX = 8192;
 	public static final int GATE_BATCH = 8;
-	public static final double GATE_MAX_GATHER_PCT = 15.0;
+	/** Paged attention's cost over dense at the reference cell, percent. */
+	public static final double GATE_MAX_PAGED_OVER_DENSE_PCT = 2.0;
 
 	private GatherTaxMicrobench() {
 	}
@@ -64,7 +67,7 @@ public final class GatherTaxMicrobench {
 			long denseTotalNs,
 			long pagedTotalNs) {
 
-		/** Gather share of paged (gather + attention), percent. */
+		/** Gather share of paged (gather + attention), percent; zero since the pages are read in place. */
 		public double gatherPctOfPaged() {
 			long den = gatherNs + pagedAttnNs;
 			if (den <= 0)
@@ -115,11 +118,11 @@ public final class GatherTaxMicrobench {
 		}
 		Cell gate = findCell(cells, GATE_CTX, GATE_BATCH, pages[0]);
 		if (gate != null) {
-			double pct = gate.gatherPctOfPaged();
+			double pct = gate.pagedOverDensePct();
 			System.err.printf(Locale.ROOT,
-					"[gather-tax] gate ctx=%d batch=%d page=%d gatherPct=%.2f (budget ≤ %.0f)%n",
-					gate.ctx(), gate.batch(), gate.pageSize(), pct, GATE_MAX_GATHER_PCT);
-			if (pct > GATE_MAX_GATHER_PCT)
+					"[gather-tax] gate ctx=%d batch=%d page=%d pagedVsDensePct=%.2f (budget <= %.0f)%n",
+					gate.ctx(), gate.batch(), gate.pageSize(), pct, GATE_MAX_PAGED_OVER_DENSE_PCT);
+			if (pct > GATE_MAX_PAGED_OVER_DENSE_PCT)
 				System.exit(2);
 		}
 	}
@@ -168,94 +171,74 @@ public final class GatherTaxMicrobench {
 			q[i] = (i % 17) * 0.01f;
 		float[] out = new float[Q_DIM];
 		float[] scores = new float[ctx];
-		float[] kScratch = new float[ctx * KV_DIM];
-		float[] vScratch = new float[ctx * KV_DIM];
 
 		// Warmup
 		for (int w = 0; w < warmup; w++) {
-			timeDense(denseK, denseV, q, out, scores, ctx, batch);
-			timePaged(pagedK, pagedV, q, out, scores, kScratch, vScratch, ctx, batch);
+			time(denseK, denseV, q, out, scores, ctx, batch);
+			time(pagedK, pagedV, q, out, scores, ctx, batch);
 		}
 
 		long denseAttn = 0;
-		long gather = 0;
 		long pagedAttn = 0;
 		for (int i = 0; i < iters; i++) {
-			denseAttn += timeDense(denseK, denseV, q, out, scores, ctx, batch);
-			long[] gp = timePagedSplit(pagedK, pagedV, q, out, scores, kScratch, vScratch, ctx, batch);
-			gather += gp[0];
-			pagedAttn += gp[1];
+			denseAttn += time(denseK, denseV, q, out, scores, ctx, batch);
+			pagedAttn += time(pagedK, pagedV, q, out, scores, ctx, batch);
 		}
 		denseAttn /= iters;
-		gather /= iters;
 		pagedAttn /= iters;
-		return new Cell(ctx, batch, pageSize, denseAttn, gather, pagedAttn, denseAttn, gather + pagedAttn);
+		return new Cell(ctx, batch, pageSize, denseAttn, 0, pagedAttn, denseAttn, pagedAttn);
 	}
 
-	/** Returns {gatherNs, attnNs} averaged over the batch streams. */
-	private static long[] timePagedSplit(PagedKvTensor k, PagedKvTensor v, float[] q, float[] out,
-			float[] scores, float[] kScratch, float[] vScratch, int ctx, int batch) {
-		long g = 0;
-		long a = 0;
-		for (int b = 0; b < batch; b++) {
-			long t0 = System.nanoTime();
-			k.viewForAttention(ctx, kScratch);
-			v.viewForAttention(ctx, vScratch);
-			long t1 = System.nanoTime();
-			gqaInto(q, kScratch, vScratch, ctx, out, scores);
-			long t2 = System.nanoTime();
-			g += (t1 - t0);
-			a += (t2 - t1);
-		}
-		return new long[] { g, a };
-	}
-
-	private static long timePaged(PagedKvTensor k, PagedKvTensor v, float[] q, float[] out,
-			float[] scores, float[] kScratch, float[] vScratch, int ctx, int batch) {
-		long[] parts = timePagedSplit(k, v, q, out, scores, kScratch, vScratch, ctx, batch);
-		return parts[0] + parts[1];
-	}
-
-	private static long timeDense(DenseKvTensor k, DenseKvTensor v, float[] q, float[] out,
-			float[] scores, int ctx, int batch) {
+	/** Attention of {@code batch} streams over the tensors' rows, read in place, in nanoseconds. */
+	private static long time(SessionKvTensor k, SessionKvTensor v, float[] q, float[] out, float[] scores, int ctx,
+			int batch) {
 		long ns = 0;
 		for (int b = 0; b < batch; b++) {
 			long t0 = System.nanoTime();
-			float[] kView = k.viewForAttention(ctx, null);
-			float[] vView = v.viewForAttention(ctx, null);
-			gqaInto(q, kView, vView, ctx, out, scores);
+			gqaInto(q, k.attentionRows(ctx), v.attentionRows(ctx), ctx, out, scores);
 			ns += System.nanoTime() - t0;
 		}
 		return ns;
 	}
 
 	/**
-	 * Same structure as handler {@code gqaInto} (grouped-query attention into
-	 * preallocated buffers). Kept here so the microbench does not depend on node.
+	 * Grouped-query attention into preallocated buffers over {@code F16} rows read in place, walking the pages as
+	 * the handlers' serial decode attention does. Kept here so the microbench does not depend on node.
 	 */
-	static void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
-			float[] out, float[] scores) {
+	static void gqaInto(float[] q, KvRows k, KvRows v, int seqLen, float[] out, float[] scores) {
 		float scale = (float) (1.0 / Math.sqrt(HEAD_DIM));
 		java.util.Arrays.fill(out, 0f);
 		int gqaR = NUM_HEADS / NUM_KV_HEADS;
+		int kRows = k.rowsPerPage();
+		int vRows = v.rowsPerPage();
 		for (int h = 0; h < NUM_HEADS; h++) {
 			int kvHead = h / gqaR;
 			int qBase = h * HEAD_DIM;
 			int kBase = kvHead * HEAD_DIM;
-			for (int t = 0; t < seqLen; t++) {
-				float dot = 0f;
-				int kOffset = t * KV_DIM + kBase;
-				for (int d = 0; d < HEAD_DIM; d++)
-					dot += q[qBase + d] * kCache[kOffset + d];
-				scores[t] = dot * scale;
+			for (int t = 0; t < seqLen;) {
+				int page = t / kRows;
+				int slot = t - page * kRows;
+				int end = t + Math.min(seqLen - t, kRows - slot);
+				float[] rows = k.floatPage(page);
+				for (int kOffset = slot * KV_DIM + kBase; t < end; t++, kOffset += KV_DIM) {
+					float dot = 0f;
+					for (int d = 0; d < HEAD_DIM; d++)
+						dot += q[qBase + d] * rows[kOffset + d];
+					scores[t] = dot * scale;
+				}
 			}
 			softmax(scores, seqLen);
 			int outBase = h * HEAD_DIM;
-			for (int t = 0; t < seqLen; t++) {
-				int vOffset = t * KV_DIM + kBase;
-				float w = scores[t];
-				for (int d = 0; d < HEAD_DIM; d++)
-					out[outBase + d] += w * vCache[vOffset + d];
+			for (int t = 0; t < seqLen;) {
+				int page = t / vRows;
+				int slot = t - page * vRows;
+				int end = t + Math.min(seqLen - t, vRows - slot);
+				float[] rows = v.floatPage(page);
+				for (int vOffset = slot * KV_DIM + kBase; t < end; t++, vOffset += KV_DIM) {
+					float w = scores[t];
+					for (int d = 0; d < HEAD_DIM; d++)
+						out[outBase + d] += w * rows[vOffset + d];
+				}
 			}
 		}
 	}
@@ -281,14 +264,15 @@ public final class GatherTaxMicrobench {
 
 	public static String formatReport(List<Cell> cells) {
 		StringBuilder sb = new StringBuilder();
-		sb.append("# Gather-tax microbench\n\n");
+		sb.append("# Gather-tax microbench (paged KV read in place)\n\n");
 		sb.append("Geometry: TinyLlama-like GQA heads=").append(NUM_HEADS)
 				.append(" kvHeads=").append(NUM_KV_HEADS)
 				.append(" headDim=").append(HEAD_DIM)
 				.append(" kvDim=").append(KV_DIM).append(".\n");
-		sb.append("Dense F16 attention has no gather; paged path gathers K+V then runs the same GQA.\n");
-		sb.append("Gate: gather ≤ ~").append((int) GATE_MAX_GATHER_PCT)
-				.append("% of (gather+attn) at batch ").append(GATE_BATCH)
+		sb.append("Attention reads both layouts in place: dense F16 rows as one page, paged rows page by page.\n");
+		sb.append("gather_ms is zero by construction (nothing is gathered).\n");
+		sb.append("Gate: paged_vs_dense <= ").append((int) GATE_MAX_PAGED_OVER_DENSE_PCT)
+				.append("% at batch ").append(GATE_BATCH)
 				.append(" / ctx ").append(GATE_CTX).append(".\n\n");
 		sb.append("| ctx | batch | page | dense_attn_ms | gather_ms | paged_attn_ms | gather% | paged_vs_dense% |\n");
 		sb.append("|----:|------:|-----:|-------------:|----------:|--------------:|--------:|----------------:|\n");
@@ -305,11 +289,11 @@ public final class GatherTaxMicrobench {
 		Cell gate = findCell(cells, GATE_CTX, GATE_BATCH, cells.isEmpty() ? 16 : cells.get(0).pageSize());
 		sb.append('\n');
 		if (gate != null) {
-			boolean ok = gate.gatherPctOfPaged() <= GATE_MAX_GATHER_PCT;
+			boolean ok = gate.pagedOverDensePct() <= GATE_MAX_PAGED_OVER_DENSE_PCT;
 			sb.append("**Budget decision (page=").append(gate.pageSize()).append("):** ")
 					.append(ok ? "PASS" : "FAIL")
-					.append(String.format(Locale.ROOT, " — gather %.2f%% at ctx=%d batch=%d.%n",
-							gate.gatherPctOfPaged(), gate.ctx(), gate.batch()));
+					.append(String.format(Locale.ROOT, " - paged_vs_dense %.2f%% at ctx=%d batch=%d.%n",
+							gate.pagedOverDensePct(), gate.ctx(), gate.batch()));
 		}
 		return sb.toString();
 	}

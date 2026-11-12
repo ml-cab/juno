@@ -1,0 +1,49 @@
+[prefill-smoke] candidate jar: <repo>/juno-player/target/juno-player-0.1.2-shaded.jar (8f58887fd342cbe7)
+[prefill-smoke] baseline jar: <baseline-tree>/juno-player/target/juno-player-0.1.2-shaded.jar (96ee5784b914097c)
+[prefill-smoke] up: tinyllama-static-candidate (pid 2083358)
+[prefill-smoke] tinyllama: 128 -> 2 notes + 19 filler words (target 128 prompt tokens)
+[prefill-smoke] tinyllama: 512 -> 17 notes + 21 filler words (target 512 prompt tokens)
+[prefill-smoke] tinyllama: 2048-token length capped at 2024 (context 2048, 16 generated tokens)
+[prefill-smoke] tinyllama: 2048 -> 76 notes + 4 filler words (target 2024 prompt tokens)
+[prefill-smoke] PASS: tinyllama-static-candidate 128: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-static-candidate 128: prompt_tokens 128 within 10% of 128
+[prefill-smoke] PASS: tinyllama-static-candidate 128: streamed text equals non-streamed (TTFT 4088.646484375 ms)
+[prefill-smoke] PASS: tinyllama-static-candidate 512: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-static-candidate 512: prompt_tokens 512 within 10% of 512
+[prefill-smoke] PASS: tinyllama-static-candidate 512: streamed text equals non-streamed (TTFT 17447.8935546875 ms)
+[prefill-smoke] PASS: tinyllama-static-candidate 2048: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-static-candidate 2048: prompt_tokens 2024 within 10% of 2024
+[prefill-smoke] PASS: tinyllama-static-candidate 2048: streamed text equals non-streamed (TTFT 83677.48388671875 ms)
+[prefill-smoke] up: tinyllama-static-baseline (pid 2091014)
+[prefill-smoke] PASS: tinyllama static 128: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama static 512: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama static 2048: greedy text identical to the baseline build
+[prefill-smoke] up: tinyllama-continuous-candidate (pid 2094694)
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: prompt_tokens 128 within 10% of 128
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: streamed text equals non-streamed (TTFT 4571.417236328125 ms)
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: prompt_tokens 512 within 10% of 512
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: streamed text equals non-streamed (TTFT 19056.455078125 ms)
+[prefill-smoke] PASS: tinyllama-continuous-candidate 2048: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-continuous-candidate 2048: prompt_tokens 2024 within 10% of 2024
+[prefill-smoke] PASS: tinyllama-continuous-candidate 2048: streamed text equals non-streamed (TTFT 86245.2822265625 ms)
+[prefill-smoke] up: tinyllama-continuous-baseline (pid 2098659)
+[prefill-smoke] PASS: tinyllama continuous 128: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama continuous 512: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama continuous 2048: greedy text identical to the baseline build
+
+model      schedule    build       tokens   actual    ttft_ms  recall
+tinyllama  static      candidate      128      128       4089    true
+tinyllama  static      candidate      512      512      17448    true
+tinyllama  static      candidate     2024     2024      83677    true
+tinyllama  static      baseline       128      128       4508    true
+tinyllama  static      baseline       512      512      19150    true
+tinyllama  static      baseline      2024     2024      78327    true
+tinyllama  continuous  candidate      128      128       4571    true
+tinyllama  continuous  candidate      512      512      19056    true
+tinyllama  continuous  candidate     2024     2024      86245    true
+tinyllama  continuous  baseline       128      128       4705    true
+tinyllama  continuous  baseline       512      512      17851    true
+tinyllama  continuous  baseline      2024     2024      83402    true
+[prefill-smoke] all checks passed. Output: <repo>/target/prefill-smoke/20261110T233609Z

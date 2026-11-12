@@ -166,6 +166,27 @@ public interface InferencePipeline {
 	}
 
 	/**
+	 * Starts {@code toId}'s KV on every stage from positions {@code [0, len)} of {@code fromId}'s (see
+	 * {@link ForwardPassHandler#shareKvPrefix}), so {@code toId}'s prefill begins at {@code len}. Returns false,
+	 * holding nothing new under {@code toId}, where any stage cannot; the caller then prefills in full.
+	 *
+	 * <p>Default: false (a pipeline whose stages are remote shares nothing).
+	 */
+	default boolean shareKvPrefix(String fromId, String toId, int len) {
+		return false;
+	}
+
+	/** Whether {@link #shareKvPrefix} can succeed on this pipeline; false by default. */
+	default boolean supportsKvPrefixSharing() {
+		return false;
+	}
+
+	/** Host KV bytes one position takes across the whole model, K and V; 0 when unknown (remote stages). */
+	default long hostKvBytesPerToken() {
+		return 0;
+	}
+
+	/**
 	 * Positions a request may occupy across the whole pipeline: the lowest
 	 * {@link ForwardPassHandler#contextLimit()} of its handlers.
 	 */

@@ -333,6 +333,11 @@ wait per layer, downloading K, V and the layer output.
 | `BatchDecodeAnnouncementTest` (new, no GPU): a handler outside the region announces the host-driven batch once | regression-style: written with the wiring; failed once in the full suite for its own reason (an earlier test in the JVM had taken the once-per-surface slot), fixed in the test | 1 pass |
 | `ProbeSelfTests#consistencyProbeBatchOfEightFillsABatchFromThePrompts`, `CoverageTest` | written with the probe | pass |
 
+*(2026-11-10: `KQuantGemvRowsTest` failed 2 of 7 in a tester's own build on an NVIDIA GeForce MX150 (sm_61, Linux), for Q5_K and
+Q6_K at 512x2048 with `n=1`. At `n=1` both sides are the single-row GEMV, so the first GEMV on a newly uploaded matrix differed
+from the second. Cause not established, and not reproduced here. Recorded as finding 4 in
+[Tier 02F](TIER-02F-hardware-validation-kit.md)'s 2026-11-10 record of the tester's error files.)*
+
 *Deviation from "Tests to write", recorded:* the region-against-host-driven test asked for random K-quant weights. Random weights hold the
 stronger equality (`ResidentBatchDecodeTest` against the single region, bit for bit); against the host-driven batch, whose norms run
 another path, the comparison runs on real weights at its tolerance.

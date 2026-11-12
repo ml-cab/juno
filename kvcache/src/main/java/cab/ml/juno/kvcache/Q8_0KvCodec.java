@@ -88,6 +88,27 @@ public final class Q8_0KvCodec {
 		}
 	}
 
+	/**
+	 * Decode elements {@code [from, from + n)} of the row encoded at {@code src[rowOff..)} into
+	 * {@code dst[dstOff, dstOff + n)}: the values {@link #decode} gives for them, bit for bit. Attention calls this
+	 * with one head's slice of a stored row, which may start and end anywhere in a block. No range checks beyond the
+	 * arrays' own: the caller is the attention loop.
+	 */
+	public static void decodeRange(byte[] src, int rowOff, int from, int n, float[] dst, int dstOff) {
+		int e = from;
+		int end = from + n;
+		int j = dstOff - from;
+		while (e < end) {
+			int block = e / QK;
+			int bo = rowOff + block * BLOCK_BYTES;
+			float d = Float.float16ToFloat((short) ((src[bo] & 0xff) | ((src[bo + 1] & 0xff) << 8)));
+			int stop = Math.min(end, (block + 1) * QK);
+			int qs = bo + 2 - block * QK; // src index of element e's quant is qs + e
+			for (; e < stop; e++)
+				dst[j + e] = d * src[qs + e];
+		}
+	}
+
 	/** Max |encode→decode − original| over {@code n} elements. */
 	public static float maxAbsError(float[] src, int srcOff, int n) {
 		byte[] enc = new byte[encodedBytes(n)];

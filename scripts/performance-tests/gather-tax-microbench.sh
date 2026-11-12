@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Gather-tax microbench (block KV / continuous path).
-# See docs/infra-plan/PLAN-Infra-Tier14.md — budget ≤ ~15% gather at batch 8 / ctx 8k.
+# Paged-KV attention microbench (block KV / continuous path): attention over dense KV against
+# attention reading the pages in place; gather_ms is zero by construction.
+# Gate: paged_vs_dense <= 2% at batch 8 / ctx 8k (exit code 2 when over).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"

@@ -352,6 +352,17 @@ are explicit no-ops on the embeddings path itself (batch input is processed sequ
 
 **Pre-bulk baseline** (per-token byte unpack): gate cell was **10.72%** ([`20260910T213121Z-gather-tax.md`](perf-compare/20260910T213121Z-gather-tax.md)); still PASS, then page-bulk F16 gather applied.
 
+**2026-11-10: attention reads the pages in place; the gather is gone.** CPU attention now reads each request's K and V rows where they are stored: paged KV page by page through its block table, `q8_0` KV decoded one head's slice at a time inside the attention loop, dense KV as one page. Nothing is copied into a contiguous buffer, and the per-token scratch arrays are gone. Output is bit for bit what the gathered rows gave. The microbench now times attention reading the pages in place against attention over dense rows, and gates `paged_vs_dense%` at **<= 2%** at ctx 8k / batch 8 / page 16 (exit code 2 over it). Unpinned reading ([`perf-compare/20261111T051528Z-paged-kv-in-place/`](perf-compare/20261111T051528Z-paged-kv-in-place/INDEX.md)):
+
+| Cell | paged_vs_dense%, in place | paged_vs_dense%, gather then attend (before) |
+|------|--------------------------:|---------------------------------------------:|
+| batch **8** / ctx **8k** / page **16** | **-6.35%** | +6.00% |
+| ctx 8k, every batch and page | -3.4% to -10.4% | +4.8% to +6.6% |
+| ctx 2k / page 16 | +4.0% to +10.5% | +5.9% to +10.0% |
+| ctx 32k, every batch and page | +2.5% to +7.8% | +3.4% to +5.0% |
+
+At 32k and page 16 the in-place read costs more than the gather did (+7.6% against +4.9%); recorded, outside the gate's cell. End to end on TinyLlama at 512 prompt tokens (same reading, A/B x3), CPU pp and tg are 0.97x to 1.07x the gather build on both schedules and both cache types, allocation per token 0.75x to 0.97x, and greedy replies are equal.
+
 **Cross-feature smoke** ([`target/tier14-smoke/20260910T220100Z/`](../target/tier14-smoke/20260910T220100Z/)):
 
 | Gate | Result |

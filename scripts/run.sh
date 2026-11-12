@@ -237,6 +237,7 @@ cmd_cluster() {
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local schedule="${JUNO_SCHEDULE:-}"
   local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
+  local prefix_cache_tokens="${JUNO_PREFIX_CACHE_TOKENS:-}"
   local grammar_file="${JUNO_GRAMMAR_FILE:-}"
   local json_schema_file="${JUNO_JSON_SCHEMA_FILE:-}"
   local use_gpu="true"
@@ -281,6 +282,7 @@ cmd_cluster() {
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
       --schedule)         schedule="$2";     shift 2 ;;
       --kv-page-size)     kv_page_size="$2"; shift 2 ;;
+      --prefix-cache-tokens) prefix_cache_tokens="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -331,6 +333,7 @@ cmd_cluster() {
         echo "                               (default auto: on wherever CUDA is present)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
+        echo "    --prefix-cache-tokens N    prompt positions kept for shared prefixes (default: context; 0 = off)"
         echo "    --prefill-batch N          max prompt tokens per prefill window (default 32)"
         echo ""
         echo "  Backend:"
@@ -429,6 +432,8 @@ cmd_cluster() {
   [[ -n "$schedule" ]] && schedule_arg="--schedule $schedule"
   local kv_page_size_arg=""
   [[ -n "$kv_page_size" ]] && kv_page_size_arg="--kv-page-size $kv_page_size"
+  local prefix_cache_tokens_arg=""
+  [[ -n "$prefix_cache_tokens" ]] && prefix_cache_tokens_arg="--prefix-cache-tokens $prefix_cache_tokens"
   if [[ -n "$grammar_file" && -n "$json_schema_file" ]]; then
     err "--grammar-file and --json-schema-file are mutually exclusive"
   fi
@@ -470,6 +475,7 @@ cmd_cluster() {
     ${cache_type_v_arg} \
     ${schedule_arg} \
     ${kv_page_size_arg} \
+    ${prefix_cache_tokens_arg} \
     ${grammar_file_arg} \
     ${json_schema_file_arg} \
     ${health_flag} \
@@ -513,6 +519,7 @@ cmd_local() {
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local schedule="${JUNO_SCHEDULE:-}"
   local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
+  local prefix_cache_tokens="${JUNO_PREFIX_CACHE_TOKENS:-}"
   local prefill_batch="${JUNO_PREFILL_BATCH:-}"
   local spec_type="${JUNO_SPEC_TYPE:-}"
   local context_shift="${JUNO_CONTEXT_SHIFT:-}"
@@ -568,6 +575,7 @@ cmd_local() {
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
       --schedule)         schedule="$2";     shift 2 ;;
       --kv-page-size)     kv_page_size="$2"; shift 2 ;;
+      --prefix-cache-tokens) prefix_cache_tokens="$2"; shift 2 ;;
       --prefill-batch)    prefill_batch="$2"; shift 2 ;;
       --spec-type)        spec_type="$2";     shift 2 ;;
       --context-shift)    context_shift="$2"; shift 2 ;;
@@ -629,6 +637,7 @@ cmd_local() {
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
+        echo "    --prefix-cache-tokens N    prompt positions kept for shared prefixes (default: context; 0 = off)"
         echo "    --prefill-batch N          max prompt tokens per prefill window (default: sized to"
         echo "                               the whole prompt on GPU with --schedule static; 32 otherwise)"
         echo "    --context-shift on|off     when a request fills the context, drop the oldest tokens after"
@@ -737,6 +746,8 @@ cmd_local() {
   [[ -n "$schedule" ]] && schedule_arg="--schedule $schedule"
   local kv_page_size_arg=""
   [[ -n "$kv_page_size" ]] && kv_page_size_arg="--kv-page-size $kv_page_size"
+  local prefix_cache_tokens_arg=""
+  [[ -n "$prefix_cache_tokens" ]] && prefix_cache_tokens_arg="--prefix-cache-tokens $prefix_cache_tokens"
   local prefill_batch_arg=""
   [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
   local spec_type_arg=""
@@ -796,6 +807,7 @@ cmd_local() {
     ${cache_type_v_arg} \
     ${schedule_arg} \
     ${kv_page_size_arg} \
+    ${prefix_cache_tokens_arg} \
     ${prefill_batch_arg} \
     ${spec_type_arg} \
     ${context_shift_arg} \

@@ -205,6 +205,30 @@ public final class RequestScheduler {
 		return generationLoop.kvCache().prefixHits();
 	}
 
+	/** Requests started from a finished request's kept prompt since startup; 0 when sharing is off. */
+	public long sharedPrefixHits() {
+		SharedPrefixPool p = generationLoop.sharedPrefixes();
+		return p == null ? 0 : p.hits();
+	}
+
+	/** Prompt positions those requests did not compute. */
+	public long sharedPrefixTokens() {
+		SharedPrefixPool p = generationLoop.sharedPrefixes();
+		return p == null ? 0 : p.sharedTokens();
+	}
+
+	/** Prompt positions kept for sharing now. */
+	public long sharedPrefixHeldTokens() {
+		SharedPrefixPool p = generationLoop.sharedPrefixes();
+		return p == null ? 0 : p.heldTokens();
+	}
+
+	/** The most prompt positions kept for sharing; 0 when sharing is off. */
+	public int sharedPrefixBudget() {
+		SharedPrefixPool p = generationLoop.sharedPrefixes();
+		return p == null ? 0 : p.budgetTokens();
+	}
+
 	/** {@code prefixHits / prefixLookups}, or {@code 0} when no lookups. */
 	public double prefixHitRate() {
 		return generationLoop.kvCache().prefixHitRate();

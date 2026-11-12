@@ -127,6 +127,21 @@ class CpuKernelVectorEscapeTest {
 		assertThat(carriedReceivers(bytes)).as("Vector API calls on a loop-carried vector in CpuIntegerGemm").isEmpty();
 	}
 
+	/**
+	 * The same rule for the attention head, whose dot products and weighted value sums carry their accumulators
+	 * across every key and, reading paged KV in place, across every page: a carried vector is only an argument.
+	 */
+	@Test
+	void attentionHeadCallsNothingOnALoopCarriedVector() throws IOException {
+		byte[] bytes;
+		try (InputStream in = GqaVectorHead.class.getResourceAsStream("GqaVectorHead.class")) {
+			bytes = in.readAllBytes();
+		}
+		assertThat(vectorLocals(bytes)).as("vector locals in GqaVectorHead's local variable tables (needs javac -g)")
+				.isPositive();
+		assertThat(carriedReceivers(bytes)).as("Vector API calls on a loop-carried vector in GqaVectorHead").isEmpty();
+	}
+
 	/** Vector-typed entries in the class's local variable tables; zero when it was compiled without them. */
 	static int vectorLocals(byte[] classBytes) {
 		int n = 0;

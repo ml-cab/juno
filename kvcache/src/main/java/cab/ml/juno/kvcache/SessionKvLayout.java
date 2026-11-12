@@ -22,7 +22,7 @@ import java.util.Optional;
  *
  * <p>{@code --schedule static} (default): dense {@link DenseKvTensor} layers;
  * {@code --kv-page-size} is unused. {@code --schedule continuous}: shared
- * {@link PagedKvArena} + gather-to-workspace.
+ * {@link PagedKvArena}, read page by page in place.
  */
 public final class SessionKvLayout {
 
@@ -104,11 +104,6 @@ public final class SessionKvLayout {
 		return Optional.ofNullable(arena);
 	}
 
-	/** Scratch required for q8_0 dequant and/or paged gather. */
-	public boolean needsAttentionScratch() {
-		return usesPaged() || cacheTypes.usesQuantized();
-	}
-
 	/**
 	 * A request's K layers: paged from the arena, or dense, the layers a released request
 	 * left ({@link #retireKLayers}) when there are some, else new ones.
@@ -152,6 +147,50 @@ public final class SessionKvLayout {
 	}
 
 	/** Release all tensors in a request's layer array (paged returns pages). */
+	/**
+	 * K layers for a new request whose positions {@code [0, len)} hold {@code src}'s rows, so it continues from
+	 * them without computing them: on the paged layout the same pages, shared copy-on-write; on the dense layout a
+	 * copy of the stored rows. Returns null, holding nothing, when a source layer has fewer than {@code len} rows.
+	 * The source must not be written meanwhile.
+	 */
+	public SessionKvTensor[] sharePrefixK(SessionKvTensor[] src, int len) {
+		return sharePrefix(src, len, retiredK, cacheTypes.typeK());
+	}
+
+	/** V layers, as {@link #sharePrefixK}. */
+	public SessionKvTensor[] sharePrefixV(SessionKvTensor[] src, int len) {
+		return sharePrefix(src, len, retiredV, cacheTypes.typeV());
+	}
+
+	private SessionKvTensor[] sharePrefix(SessionKvTensor[] src, int len, DenseKvRecycler recycler,
+			KvElementType type) {
+		if (src == null || src.length == 0 || len < 1)
+			return null;
+		for (SessionKvTensor t : src)
+			if (rowsHeld(t) < len)
+				return null;
+		if (usesPaged()) {
+			SessionKvTensor[] out = new SessionKvTensor[src.length];
+			for (int i = 0; i < src.length; i++)
+				out[i] = ((PagedKvTensor) src[i]).sharePrefix(len);
+			return out;
+		}
+		SessionKvTensor[] out = recycler.take(src.length, type);
+		if (out == null)
+			out = DenseKvTensor.layers(src.length, type, kvDim);
+		for (int i = 0; i < src.length; i++)
+			((DenseKvTensor) out[i]).copyPrefixFrom((DenseKvTensor) src[i], len);
+		return out;
+	}
+
+	private static int rowsHeld(SessionKvTensor t) {
+		if (t instanceof PagedKvTensor p)
+			return p.seqLen();
+		if (t instanceof DenseKvTensor d)
+			return d.writtenTokens();
+		return 0;
+	}
+
 	public static void releaseLayers(SessionKvTensor[] layers) {
 		if (layers == null)
 			return;

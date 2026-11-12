@@ -795,6 +795,32 @@ components:
           type: boolean
           description: True if a reshard is currently in progress
           example: false
+        prefixLookups:
+          type: integer
+          format: int64
+          description: Prefix-cache lookups by requests resuming from their own session's KV, since startup
+        prefixHits:
+          type: integer
+          format: int64
+          description: Those lookups that found the session's earlier prompt
+        prefixHitRate:
+          type: number
+          description: prefixHits / prefixLookups, 0 without lookups
+        sharedPrefixHits:
+          type: integer
+          format: int64
+          description: Requests started from a finished request's kept prompt, since startup; 0 when sharing is off
+        sharedPrefixTokens:
+          type: integer
+          format: int64
+          description: Prompt positions those requests did not compute
+        sharedPrefixHeldTokens:
+          type: integer
+          format: int64
+          description: Prompt positions kept for sharing now
+        sharedPrefixBudget:
+          type: integer
+          description: The most prompt positions kept for sharing (--prefix-cache-tokens); 0 when sharing is off
         uptimeSecs:
           type: integer
           format: int64

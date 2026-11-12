@@ -22,7 +22,8 @@ import java.lang.foreign.ValueLayout;
  * Handler-facing per-layer KV tensor for one request.
  *
  * <p>Implemented by {@link DenseKvTensor} (static schedule) and
- * {@link PagedKvTensor} (continuous schedule + gather).
+ * {@link PagedKvTensor} (continuous schedule). Attention reads either in place
+ * through {@link #attentionRows}: no copy, no dequantization scratch.
  */
 public interface SessionKvTensor {
 
@@ -54,14 +55,16 @@ public interface SessionKvTensor {
 	}
 
 	/**
-	 * Float view of positions {@code [0, seqLen)} for attention.
-	 *
-	 * @param scratch required when {@link #needsAttentionScratch()} is true
+	 * Positions {@code [0, seqLen)} as attention reads them: the stored rows in place ({@link KvRows}), the pool's
+	 * pages for a paged tensor and the backing array for a dense one, never a copy. Valid until the tensor is next
+	 * written. {@code 1 <= seqLen}; a paged tensor needs {@code seqLen} rows written, and a dense one reads zero at
+	 * positions its current request has not written.
 	 */
-	float[] viewForAttention(int seqLen, float[] scratch);
+	KvRows attentionRows(int seqLen);
 
 	void loadFloatPrefix(float[] src, int seqLen);
 
+	/** A copy of positions {@code [0, seqLen)} as floats, {@code kvDim} per row (serialization, tests). */
 	float[] toFloatArray(int seqLen);
 
 	/**
@@ -69,12 +72,6 @@ public interface SessionKvTensor {
 	 * (block granularity).
 	 */
 	int capacityTokens();
-
-	/**
-	 * True when {@link #viewForAttention} must copy into {@code scratch}
-	 * (q8_0 dequant or paged gather).
-	 */
-	boolean needsAttentionScratch();
 
 	/** Return pages to the pool (paged); no-op for dense. */
 	void release();

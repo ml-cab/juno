@@ -1,0 +1,9 @@
+1 short stateless capital	6.076445	The capital of France is Paris. 
+2 short stateless color	1.147289	Red. 
+3 short stateless capital again	1.150189	The capital of France is Paris. 
+4 short session user-a capital	1.097212	The capital of France is Paris. 
+5 short session user-b capital	1.077377	The capital of France is Paris. 
+6 long stateless rule 3	49.034659	Item 3 is held by Shelf 1. 
+7 long stateless rule 7	5.377344	The shelf holding item 7 is the one with the name "She 
+8 long session user-c rule 3	3.839910	Item 3 is held by Shelf 1. 
+9 long stateless rule 12	5.288409	Item 12 is held by the shelf named "Shepherd 

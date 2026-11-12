@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.DenseKvTensor;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
@@ -319,21 +320,13 @@ public final class Phi3LoraTrainableHandler implements LoraTrainingHandler {
 			vC[li].ensureCapacity(pos);
 		}
 
-		float[] kScratch = null;
-		float[] vScratch = null;
-		if (kvLayout.needsAttentionScratch()) {
-			kScratch = new float[(pos + 1) * kvDim];
-			vScratch = new float[(pos + 1) * kvDim];
-		}
-
 		for (int li = 0; li < L; li++)
-			x = inferenceLayer(x, li, pos, kC[li], vC[li], kScratch, vScratch);
+			x = inferenceLayer(x, li, pos, kC[li], vC[li]);
 		return x;
 	}
 
 	private float[] inferenceLayer(float[] x, int li, int pos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer) {
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
 
@@ -355,8 +348,8 @@ public final class Phi3LoraTrainableHandler implements LoraTrainingHandler {
 		vCacheLayer.writeToken(pos, v);
 
 		int seqLen = pos + 1;
-		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
-		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+		KvRows kView = kCacheLayer.attentionRows(seqLen);
+		KvRows vView = vCacheLayer.attentionRows(seqLen);
 		float[] attnOut = gqa(q, kView, vView, seqLen, layerWindows[li]);
 		float[] attnProj = LoraResidentWeights.matVec(wo[li], woDev != null ? woDev[li] : null, attnOut, H, H);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);
@@ -904,12 +897,17 @@ public final class Phi3LoraTrainableHandler implements LoraTrainingHandler {
 
 	// ── Math helpers ──────────────────────────────────────────────────────────
 
-	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
+	private float[] gqa(float[] q, KvRows kCache, KvRows vCache, int seqLen, int window) {
 		float[] out = new float[cfg.numHeads() * cfg.headDim()];
 		// heads on the worker pool, bit-identical to the serial loop
 		GqaMath.attendPooled(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
 				cfg.kvDim(), window);
 		return out;
+	}
+
+	/** {@link #gqa(float[], KvRows, KvRows, int, int)} over the ephemeral float[] caches. */
+	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
+		return gqa(q, KvRows.of(kCache, cfg.kvDim()), KvRows.of(vCache, cfg.kvDim()), seqLen, window);
 	}
 
 	private static float[] softmaxCopy(float[] logits) {

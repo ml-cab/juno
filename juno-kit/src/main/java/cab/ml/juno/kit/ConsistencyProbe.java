@@ -38,7 +38,10 @@ import cab.ml.juno.tokenizer.ChatMessage;
  * <li>local mode loads a supported model and exits cleanly;</li>
  * <li>static batching ({@code --parallel 2}) never resumes from KV it did not write: with prompts repeated
  * across and within batches, every OpenAI and native answer equals that prompt's single-request answer, a
- * session request after the batched traffic does too, and stateless traffic gets no prefix-cache hit;</li>
+ * session request after the batched traffic does too, and stateless traffic never resumes from its own key; a
+ * repeated prompt starts from the kept prompt of its first request (a shared-prefix hit is counted), and since that
+ * first answer was computed with nothing shared, the repeats' equality with it is the shared-equals-unshared
+ * check;</li>
  * <li>native streaming ({@code /v1/inference/stream}) joins to the native blocking answer;</li>
  * <li>on the continuous schedule, a session request repeating a stateless one prefills in full and equals it.</li>
  * </ul>
@@ -116,7 +119,9 @@ final class ConsistencyProbe implements KitProbe {
 			throws Exception {
 		String label = "static batching, " + mode + ": ";
 		List<String> args = JunoProcess.localArgs(model, MAX_TOKENS);
-		args.addAll(List.of("--parallel", "2", "--batch-window-ms", "300", "--" + mode));
+		// Shared prompt prefixes on (the kit's servers start with them off), so repeated prompts share.
+		args.addAll(List.of("--parallel", "2", "--batch-window-ms", "300", "--" + mode, "--prefix-cache-tokens",
+				"4096"));
 		try (JunoProcess s = JunoProcess.serve(work.resolve("static-batch-" + mode), heap, args, START)) {
 			JunoHttpClient client = new JunoHttpClient(s.base());
 			String modelId = s.modelId();
@@ -140,6 +145,11 @@ final class ConsistencyProbe implements KitProbe {
 			long hits = health.path("prefixHits").asLong(-1);
 			checks.add(new ProbeReport.Check(label + "no prefix-cache hit for stateless traffic", hits == 0,
 					hits + " hits, " + health.path("prefixLookups").asLong(-1) + " lookups"));
+			long shared = health.path("sharedPrefixHits").asLong(-1);
+			checks.add(new ProbeReport.Check(label + "repeated prompts start from a kept prompt (shared-prefix hits"
+					+ " counted; their answers equal the unshared first answer above)", shared > 0,
+					shared + " shared-prefix hits, " + health.path("sharedPrefixTokens").asLong(-1)
+							+ " positions not recomputed"));
 			String blocking = nativeText(s, modelId, PROMPTS.get(1));
 			String streamed = nativeStream(s, modelId, PROMPTS.get(1));
 			checks.add(new ProbeReport.Check(label + "native streaming joins to the native blocking answer",

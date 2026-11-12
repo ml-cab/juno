@@ -120,9 +120,8 @@ class SessionKvReuseTest {
 		assertThat(two).isCloseTo(2f, org.assertj.core.data.Offset.offset(1e-3f));
 		assertThat(row).containsOnly(two);
 
-		// A view past what the session wrote reads zero there too.
-		float[] scratch = new float[12 * KV_DIM];
-		float[] view = t.viewForAttention(12, scratch);
+		// Rows past what the session wrote read zero there too.
+		float[] view = t.toFloatArray(12);
 		for (int p = 6; p < 12; p++)
 			for (int d = 0; d < KV_DIM; d++)
 				assertThat(view[p * KV_DIM + d]).as("position %d past the last write", p).isZero();

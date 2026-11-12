@@ -18,9 +18,9 @@ package cab.ml.juno.kvcache;
 /**
  * Serving schedule policy for dual KV path selection and the continuous engine.
  *
- * <p>{@code --schedule static} (default): dense in-process KV (no gather); static
+ * <p>{@code --schedule static} (default): dense in-process KV; static
  * micro-batch collector (SSE isolated).
- * {@code --schedule continuous}: paged KV + gather-to-workspace and, on
+ * {@code --schedule continuous}: paged KV, read by attention page by page in place, and, on
  * local/single-shard, the running-set scheduler. Cluster launchers auto-fallback
  * to static.
  */

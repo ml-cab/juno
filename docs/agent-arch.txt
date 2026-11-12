@@ -3,16 +3,28 @@ Juno multi-module Maven project (JDK 25).
 Module dependency (excerpt):
   kvcache — CpuKVCache, GpuKVCache, KVCacheManager, PrefixCache,
         KvElementType / CacheTypeOptions (--cache-type-k/v; f16 = float32 path),
-        Q8_0KvCodec, DenseKvTensor (in-process K/V; q8_0 packs per token;
-        attention dequants to float scratch). NodeKVCacheAdapter (node) flushes
-        typed payloads into the manager.
+        Q8_0KvCodec, DenseKvTensor (in-process K/V; q8_0 packs per token).
+        NodeKVCacheAdapter (node) flushes typed payloads into the manager.
         KvBlockPool / KvPageTable / PagedKvTensor / PagedKvArena / PagedKvCodec /
         KvPageSizeOptions / ServeScheduleOptions / SessionKvTensor /
-        SessionKvLayout / GatherTaxMicrobench / KvContextShift
+        SessionKvLayout / KvRows / GatherTaxMicrobench / KvContextShift
         (paged KV for continuous schedule; dense remains default static path;
         handlers dual-path via SessionKvLayout; manager may hold a shared
-        PagedKvArena; adapter flushes dense or paged blobs; gather-tax gate
-        PASS — see docs/performance.md / perf-compare/*-gather-tax.md).
+        PagedKvArena; adapter flushes dense or paged blobs).
+        CPU attention reads host KV in place: SessionKvTensor.attentionRows(seqLen)
+        returns a KvRows, the stored rows as pages of rowsPerPage rows (row t is row
+        t % rowsPerPage of page t / rowsPerPage). A paged tensor's view is its block
+        table's pool pages in table order, which KvPageTable keeps current on every
+        page change (append, copy-on-write, sharePrefix, truncate, release); a dense
+        tensor's is its backing array as one page (KvRows.ONE_PAGE), repointed when
+        it grows. F16 pages are float arrays (kvDim floats per row; KvBlockPool stores
+        F16 pages as float[]), Q8_0 pages byte arrays of packed rows, decoded one
+        head's slice at a time inside the attention loop (Q8_0KvCodec.decodeRange, the
+        values decode gives). Nothing is gathered into a contiguous workspace and no
+        dequantization scratch is allocated; KvPageTable.gather and toFloatArray copy
+        (serialization, tests). GatherTaxMicrobench times attention over dense KV
+        against attention reading the pages in place (paged_vs_dense%, gate <= 2% at
+        ctx 8192 / batch 8; gather_ms is zero by construction).
         KvBlockPool counts holders per page: allocate holds once, retain adds a
         holder, free drops one and recycles the page with its last holder;
         liveBlocks/allocatedBytes count distinct pages. A page with more than
@@ -22,9 +34,10 @@ Module dependency (excerpt):
         lock). KvPageTable.sharePrefix(len) starts a table holding this table's
         first pages, no copy; every write (append into a partly filled page,
         overwrite, compact's destination) goes through writablePage, so a table
-        writing into a shared page first takes its own copy (copy-on-write).
-        Nothing shares pages across sessions yet: PrefixCache wiring is the
-        cross-session sharing step.
+        writing into a shared page first takes its own copy (copy-on-write), and
+        its attention view then reads that copy while the other table reads the
+        original. Nothing shares pages across sessions yet: PrefixCache wiring is
+        the cross-session sharing step.
         Dense host KV is reused across requests: SessionKvLayout.retireKLayers/retireVLayers
         hand an evicted request's dense layers to a DenseKvRecycler (one set per side, the
         larger capacity kept), and newKLayers/newVLayers take them before allocating; paged
@@ -525,13 +538,46 @@ Membership: fixed at cluster launch. ModelRegistry is in-memory (two ConcurrentH
   Hazelcast-backed RegistryService and Hazelcast leader election was never built and has
   been removed (the proto RPCs and the dependency).
 
-Prefix cache and KV ownership: prefix reuse is session-scoped. A PrefixCache trie entry names
+Prefix cache and KV ownership: resuming from a trie hit is session-scoped (across requests,
+  see "Shared prompt prefixes" below). A PrefixCache trie entry names
   KV that must still exist in the pipeline when the entry is hit, so it is written only for
   session requests (whose KV is kept under the session id). GenerationLoop.generate() and
-  ContinuousBatchEngine act on a trie hit only for requests that carry a session id.
+  ContinuousBatchEngine act on a trie hit only for requests that carry a session id, and look up
+  with the request's own KV key (findLongestPrefix(tokens, kvKey)): an entry belongs to the key
+  that cached it, so a session never resumes from positions another session wrote, even when
+  its prompt starts with that session's cached prompt. Several keys may cache the same tokens
+  (a node holds a set of owner keys). A key holds one entry, its latest prompt: caching again
+  replaces it, since a turn that branched off an earlier prompt overwrote that prompt's
+  positions past the branch; invalidate walks only that key's path (CrossSessionPrefixHitTest,
+  PrefixCacheOwnerTest).
   GenerationLoop.generateBatch() (static multi-request batching) keys each request's KV by
-  its own request id and evicts it on completion, so it never reads or writes the trie and
-  prefills every prompt in full.
+  its own request id and evicts it on completion, so it never reads or writes the session trie.
+
+Shared prompt prefixes (coordinator SharedPrefixPool, --prefix-cache-tokens / kvcache
+  SharedPrefixOptions): when a request finishes (generate, generateBatch, ContinuousBatchEngine
+  completeSlot; not after a context shift or cut), its prompt's positions are shared into a pool
+  key ("juno-shared-prefix#n") with InferencePipeline.shareKvPrefix(from, to, len), and the pool's
+  own PrefixCache records the prompt under that key. Nothing writes under a pool key, so a held
+  prompt never changes. At admission, a request with no own-session hit asks the pool
+  (findLongestCommonPrefix: the longest opening it has in common with any held prompt, whether or
+  not that prompt ends there; at least MIN_SHARED_TOKENS = 16, at most promptLen - 1) and starts
+  its prefill there. Held prompts are released least recently used first past the budget (default
+  a quarter of the max heap at hostKvBytesPerToken, at most one context). One lock covers lookup,
+  share and release. Off (SharedPrefixPool.Setup summary, printed at startup by ConsoleMain) on a
+  pipeline whose supportsKvPrefixSharing() is false, or under --lora-play; an explicit budget
+  above 0 there fails at startup. Counters on /v1/cluster/health (sharedPrefix*).
+  Node side: ForwardPassHandler.shareKvPrefix / supportsKvPrefixSharing / hostKvBytesPerToken
+  (defaults false / false / 0); LocalInferencePipeline shares on each distinct handler and evicts
+  the target everywhere if one refuses. The five inference handlers go through HandlerKvShare:
+  SessionKvLayout.sharePrefixK/V (paged: PagedKvTensor.sharePrefix over KvPageTable.sharePrefix,
+  pages held once more and copied on first write; dense: DenseKvTensor.copyPrefixFrom, stored bytes
+  copied) and, with GPU attention, HandlerKvShare.uploadMirrors into the request's device mirror on
+  the layers that attend there. Refused: a q8_0 host KV beside GPU attention (the device copy would
+  hold q8_0-rounded rows), a node KV adapter (cluster), the LoRA handlers (interface default), and
+  VisionAwareForwardPassHandler for any request with an image (the placeholder token ids are the
+  same for every image). Tests: SessionKvLayoutShareTest, KvPrefixShareHandlerTest (every family,
+  both schedules and host types, bit for bit), SharedPrefixPoolTest, PrefixCacheOwnerTest,
+  SharedPrefixOptionsTest, VisionAwareForwardPassHandlerShareTest.
 
 Generation failures and prompt encoding: every dispatch path (RequestScheduler's single and
   batch paths and its batch collector, ContinuousBatchEngine's admit, slot finish and engine loop)
@@ -670,6 +716,26 @@ GPU FFI (node module — Panama project, JEP 454):
         bit-identical to attend (GqaMathPooledTest). attendPooledAsSerial(...) runs every head through
         the serial body with or without the module: a decode batch attends this way, because a
         request decoded alone attends through attend. attend itself stays the scalar oracle.
+        Every form takes K and V as KvRows and walks them page by page: a page's run of rows goes
+        through the loop the whole cache did when it was one array, so the output bits do not depend
+        on the page size or on dense against paged storage; a Q8_0 head slice is decoded into a
+        per-thread row (GqaMath.row) and scored or added as one row. The float[] forms (LoRA
+        training's ephemeral caches, the GPU kernels' oracle tests) read their arrays as one page.
+        PagedKvAttentionOracleTest holds every form, window, page size and K/V type pair to the
+        attention over the gathered rows, bit for bit; PagedKvHandlerOracleTest holds the 9 handler
+        families' continuous paged logits to their static dense logits. GqaVectorHead passes a
+        carried accumulator only as an argument (o0 = term.add(o0)) and reads its lanes through
+        zero(F).add(o0), the same bits, so no lane operation is called on a loop-carried vector
+        (CpuKernelVectorEscapeTest checks the bytecode).
+  GqaWindowAttention — a prefill window's CPU attention in one pooled call (Llama, Phi-2, Phi-3,
+        Qwen3 prefill windows when the GPU did not attend): row b of the window attends keys up to
+        startPos + b. The pool's units are (row, KV head) pairs, entered once per window and layer
+        instead of once per row; a unit runs the gqaRatio query heads sharing one KV head, so a Q8_0
+        key or value slice is decoded once for all of them (a per-head unit decodes it once per
+        head). Each head scores and sums exactly as GqaMath.attendPooled's head does (GqaVectorHead
+        or the serial body, chosen the same way), so every row's output is that row's attendPooled
+        bits (GqaWindowAttentionTest: paged and dense, every K/V type pair, page size, window and
+        window start, both head forms).
   SlidingWindow — the file's sliding-window attention: <arch>.attention.sliding_window (width;
         absent/0 = none) and <arch>.attention.sliding_window_pattern (absent = every layer; boolean
         array of block_count entries, true = windowed; or integer period N, layer i global when

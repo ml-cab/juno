@@ -2,6 +2,11 @@
 
 PERF_SCRIPTS="${PERF_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
+# Readings send the same prompt run after run; with shared prompt prefixes on, every run after the first would start
+# from the first run's kept prompt and measure a prefill it skipped. Off unless the caller sets it (a jar without the
+# setting ignores it, so A/B runs against older builds stay comparable). smoke-consistency.sh turns it back on.
+export JUNO_PREFIX_CACHE_TOKENS="${JUNO_PREFIX_CACHE_TOKENS:-0}"
+
 perf_load_scenarios() {
     local scenarios="${PERF_SCRIPTS}/scenarios.yaml"
     local key val conv_n=0

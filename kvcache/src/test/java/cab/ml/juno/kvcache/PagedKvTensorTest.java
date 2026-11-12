@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class PagedKvTensorTest {
 
 	@Test
-	@DisplayName("F16 gather matches DenseKvTensor writes")
+	@DisplayName("F16 rows gathered from the pages match DenseKvTensor writes")
 	void f16_matches_dense() {
 		int kvDim = 8;
 		int pageSize = 4;
@@ -25,9 +25,8 @@ class PagedKvTensorTest {
 			dense.writeToken(p, tok);
 			paged.writeToken(p, tok);
 		}
-		float[] scratch = new float[6 * kvDim];
-		float[] denseView = dense.viewForAttention(6, null);
-		float[] pagedView = paged.viewForAttention(6, scratch);
+		float[] denseView = dense.toFloatArray(6);
+		float[] pagedView = paged.toFloatArray(6);
 		assertThat(pagedView).hasSize(6 * kvDim);
 		for (int i = 0; i < 6 * kvDim; i++)
 			assertThat(pagedView[i]).isEqualTo(denseView[i]);
@@ -56,8 +55,7 @@ class PagedKvTensorTest {
 		assertThat(q8Arena.kPool().allocatedBytes() * 2L)
 				.isLessThanOrEqualTo(f16Arena.kPool().allocatedBytes());
 
-		float[] scratch = new float[tokens * kvDim];
-		float[] got = q8.viewForAttention(tokens, scratch);
+		float[] got = q8.toFloatArray(tokens);
 		for (int i = 0; i < kvDim; i++)
 			assertThat(got[i]).isCloseTo((float) Math.sin(i * 0.01), within(0.05f));
 	}
@@ -73,7 +71,7 @@ class PagedKvTensorTest {
 		t.writeToken(0, tok);
 		t.writeToken(2, tok); // fills pos 1 with zeros
 		assertThat(t.seqLen()).isEqualTo(3);
-		float[] view = t.viewForAttention(3, new float[24]);
+		float[] view = t.toFloatArray(3);
 		assertThat(view[8]).isZero(); // hole at pos 1
 		assertThat(view[16]).isEqualTo(1f);
 		t.release();

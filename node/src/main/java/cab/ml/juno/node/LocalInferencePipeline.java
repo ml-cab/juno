@@ -155,6 +155,43 @@ public final class LocalInferencePipeline implements InferencePipeline {
 			stage.handler().evict(requestId);
 	}
 
+	/**
+	 * Shares on every distinct handler once (a handler serving several stages holds all their layers under one id).
+	 * If one cannot, {@code toId} is evicted everywhere, so no stage keeps a prefix the others lack.
+	 */
+	@Override
+	public boolean shareKvPrefix(String fromId, String toId, int len) {
+		Set<ForwardPassHandler> done = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (NodeStage stage : stages) {
+			if (!done.add(stage.handler()))
+				continue;
+			if (!stage.handler().shareKvPrefix(fromId, toId, len)) {
+				evict(toId);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** Summed over distinct handlers, as each holds its own layers' KV. */
+	@Override
+	public long hostKvBytesPerToken() {
+		Set<ForwardPassHandler> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		long sum = 0;
+		for (NodeStage stage : stages)
+			if (seen.add(stage.handler()))
+				sum += stage.handler().hostKvBytesPerToken();
+		return sum;
+	}
+
+	@Override
+	public boolean supportsKvPrefixSharing() {
+		for (NodeStage stage : stages)
+			if (!stage.handler().supportsKvPrefixSharing())
+				return false;
+		return true;
+	}
+
 	@Override
 	public int contextLimit() {
 		int limit = Integer.MAX_VALUE;

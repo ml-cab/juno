@@ -2176,6 +2176,8 @@ unit suite in it throughout, so this session built and tested nothing. `check-pl
   own evidence.
 - **Owner decision 2026-11-10: (a) and (b).** The owner asked the tester for the three error files; no answer yet. (b) is done
   (the next entry).
+- *(2026-11-10, later: the files arrived. The machine ran out of commit memory, and all three nodes aborted in the same
+  second. See the record "the tester's three error files; a Linux laptop with an MX150".)*
 
 **Finding 2: the noise sampler counts part of the probe's own child JVMs as other programs' CPU (kit defect; not yet fixed).**
 - `LoadSampler` samples once a second. It counts as the probe's own CPU the last-seen CPU time of the kit, the probe and the
@@ -2316,3 +2318,157 @@ forward pass, MatVec, KV or batching path is touched, so no performance gate app
 4. A macOS run.
 
 **Next for the executor:** read the tester's error files when they arrive; `ingest` the next zip.
+
+### 2026-11-10: the tester's three error files; a Linux laptop with an MX150
+
+**Plan against code, verified at HEAD `74f75d78`.** The previous entry's change is committed there. Another session is
+running a LoRA performance comparison on this host, so this session built, tested and ran nothing, and `ingest` waits.
+
+**What arrived.** `docs/winUser/`, untracked:
+- `hs_err_pid10932.log`, `hs_err_pid3096.log` and `hs_err_pid18676.log`: the three node JVMs' error files from the Windows
+  clean run's failed check 8 (finding 1). They are not scrubbed: the paths hold the Windows user name, and each file holds
+  an environment block.
+- `juno-kit-results-2gb-vram.zip`: a second tester's whole results folder from a Linux laptop. It is not scrubbed (17 of
+  its files hold that user's name). The kit's own zip inside it, `juno-kit-results-linux-amd64-20261110T142832Z.zip`,
+  holds neither the user name nor the host name.
+- `mvn.log`: that tester's own Maven build with unit tests on the same laptop. It holds their home path.
+- The folder stays out of the tree. Only the kit's zip will be ingested.
+
+**Finding 1, cause: the Windows machine ran out of commit memory.**
+- All three nodes aborted in the same second, 03:45:59 local time, 20.9 s to 22.1 s after they started. Each file opens
+  with "There is insufficient memory for the Java Runtime Environment to continue. Native memory allocation (malloc)
+  failed to allocate 65536 bytes" (524288 for node-1) and "Error detail: ReallocateHeap". In each, the failing thread is
+  a ZGC young-generation worker, at the start of a collection.
+- The three files read the machine the same way: "system-wide physical 16108M (1160M free)" and "TotalPageFile size
+  21360M (AvailPageFile size 0M)".
+  - On Windows those page-file figures are the commit limit (RAM plus page file) and the commit left, and none was left.
+  - The page file was about 5.1 GiB and had not grown; that run started with 3.1 GiB of free disk.
+- The nodes' heaps at the abort were 1810, 1790 and 1748 MiB committed, against `-Xmx4g` each.
+  - Node-3 had about 1030 MiB in use after loading, at 4.6 s.
+  - It then ran no collection until 20.9 s, when 1748 MiB were in use. Under a 4 GiB ceiling, ZGC let the request's
+    garbage pile up rather than collect.
+- Of the 20.9 GiB commit limit, the three nodes held about 5.7 GiB: their heaps, plus about 150 MiB of private memory
+  each. The coordinator holds at most about 4.3 GiB, so 11 GiB or more was held by the kit's JVM, Windows and the
+  tester's own programs. Which of those held it is not in the files. Hyper-V is enabled on that machine, and the files do not say whether a VM was running.
+- **So it is not a defect in the request path.** The machine had no commit left, and a JVM that cannot allocate native
+  memory aborts. Juno's part is how much it may take: the tensor-parallel probe's four JVMs may hold up to 16 GiB of
+  heap on a 15.7 GiB machine, and each node's heap grows toward its ceiling before it collects. Running
+  `./juno cluster --pType tensor` on a 16 GB laptop with a small page file exposes a user the same way.
+- The previous entry's change would have kept this evidence. Each node's `-XX:ErrorFile` now points into the run folder,
+  which is packed with the environment block left out, and the coordinator's warning on stop names dead nodes with
+  their exit codes.
+
+**Decision for the owner: finding 1's remedy.**
+- (a) Record it and change nothing. It was seen once in three Windows runs, on the run with the least free disk, and
+  most of the memory was held outside Juno.
+- (b) Give forked nodes `-XX:SoftMaxHeapSize`, derived from the model the way `NodeHeapSize` derives `-Xmx`. ZGC then
+  collects to stay under it, and grows past it only when the live set needs more. This is an engine change in
+  `ClusterHarness`, test first, and it changes every cluster node's GC behaviour, so it needs the cluster ITs and a
+  tensor-parallel live run.
+- (c) A kit preflight: before a cluster probe, compare the memory left (commit on Windows, available memory elsewhere)
+  with what the probe's JVMs may take, and skip the probe with that reason. Its skips would then depend on what else
+  the tester is running.
+- **Recommendation: (a).** Neither change is shown to prevent a repeat on a machine this full, and the kit now captures a
+  repeat. Revisit (b) if another machine shows it.
+
+**Finding 3: on the Linux laptop every throughput reading was withheld (kit; JFR's clock is wrong there).**
+- Run `20261110T142832Z`, suite `quick`, Juno `9dda5f7d` on a "modified tree", kit jar `3a84952eb367ce3c`.
+  - Hardware: Linux 6.17 on an i7-8550U (4 cores, 8 threads, 7.66 GiB), with an NVIDIA GeForce MX150 (2 GiB, driver
+    535.288.01).
+  - Software: Corretto 25.0.2, kernel clocksource `tsc`.
+  - Ran 11 probes in 16:27 against an estimate of 19 to 26 min.
+- All four throughput probes report DONE with no reading ("no valid repetition"): `facts.prefillRepsWithheld` and
+  `generateRepsWithheld` are 3 of 3 in each.
+- In all 24 repetitions, the JFR spans add up to more than the request's own wall-clock time.
+  - Prefill lane: 1.1037 to 1.1066 times the request (CPU 1.1062 to 1.1066).
+  - Generation lane: 1.1014 to 1.1018 (CPU) and 1.0826 to 1.0845 (GPU).
+  - A prefill request is almost all prefill, so JFR's clock reads at least 1.1066 times the wall clock, steadily.
+- **Cause.** On a CPU with an invariant TSC, HotSpot converts JFR's counter ticks at the CPU's maximum qualified
+  frequency, which it parses from the brand string, and never measures the counter. That is `rdtsc_x86.cpp`, `initialize_frequency()`, in the JDK 25 sources:
+  "for invariant tsc platforms, take the maximum qualified cpu frequency".
+  - This CPU's brand string says "@ 1.80GHz"; the readings put its counter at about 1.99 GHz.
+  - The kit's rule, taken from the harness, switches JFR to the OS clock only when the kernel's clocksource is not
+    `tsc`. Here it is `tsc`.
+- **The guard catches a counter that runs fast, not one that runs slow.** `Rep.consistent()` allows the spans to fall up
+  to 300 ms plus 3 ms per generated token short of the request.
+  - A request of 1.3 s (the GPU's 512-token prefill here) would pass spans about 20% short. Prefill t/s would then read
+    about 25% high, with nothing flagged.
+  - A host whose counter runs slower than its brand string reads that way today.
+- Wall-clock times from the same facts, not readings:
+  - CPU: 128-token prefill requests 6.3 to 6.5 s, 512-token 26.2 to 27.3 s, 64 generated tokens 11.2 to 11.8 s.
+  - GPU: 512-token prefill 1.30 to 1.33 s, 2048-token 7.13 to 7.23 s, 64 generated tokens 2.03 to 2.04 s.
+
+**Decision for the owner: finding 3.**
+- (a) Run every JFR-reading probe on the OS clock (`-XX:-UseFastUnorderedTimeStamps`) on every host. One line in
+  `JvmLauncher`. Cost: `juno-perf.jfc` records `juno.MatVec` per matmul at 0 ms threshold, and `perf-lib.sh` measured
+  0.7 against 3 microseconds per event on the reference host. If each of TinyLlama's 155 matmuls per token records one
+  event, that is about 0.4 ms per token, a few percent of a fast GPU's decode step. Not measured.
+- (b) Check the clock once per host. During detection, a short JVM times a JFR event around a sleep against
+  `System.nanoTime`, and the kit adds the OS-clock flag where the two differ by more than 1%. Hosts whose counter is
+  right keep the cheap clock, and a slow counter is caught too. The result goes into `host.json`.
+- In both: a reading probe whose every repetition is withheld reports that, with the reason, instead of DONE.
+- **Recommendation: (b).** It fixes both directions without the per-event cost, and the extra detection step takes about
+  a second. Test first: the rule is a pure function of two durations. Not addressed by either: the harness
+  (`perf-lib.sh`) has the same rule. The reference host's readings pass the guard, but the slow-counter case cannot be
+  ruled out from that alone.
+
+**Finding 4: `KQuantGemvRowsTest` fails on the MX150 (engine, GPU; cause not established).**
+- The tester's own `mvn` build stopped at `node`: 1315 tests, 2 failures, 131 skipped.
+  - Every other test in `node` passed or was skipped on this Pascal laptop GPU (sm_61). The GPU classes that passed
+    include `KQuantMmqParityTest`, `KQuantGemmParityTest` (40) and `CudaSgemmIntoTest` (20).
+  - The two failures are both `rowsAreBitIdenticalToSingleRowGemv`: "type 13 512x2048 n=1 row 0: element 243 is NaN,
+    one request's GEMV gives 19.424862" and "type 14 512x2048 n=1 row 0: element 151 is 13.226353, one request's GEMV
+    gives -9.974794".
+  - Q4_K passed. Q5_K and Q6_K passed at the three smaller shapes and every batch size.
+- At `n=1`, `sgemvRowsInto` does not use the batch kernel. It calls `sgemvInto`, the same single-row path the test
+  compares against. So two identical single-row GEMVs on one matrix and one input gave different results.
+  - The wrong one is the first GEMV on a newly uploaded matrix.
+  - The single-row kernels (`q4k_gemv.cu`) are deterministic: one block per output row, a shared-memory reduction, no
+    atomics.
+- **Hypothesis, not proven.**
+  - The upload: `DeviceQ4KMatrix.upload` copies with `gpuMemcpy` from pageable memory (a confined arena). CUDA documents
+    that such a host-to-device copy "will return once the pageable buffer has been copied to the staging memory for DMA
+    transfer to device memory, but the DMA to final destination may not have completed".
+  - The read: `CudaMatVec` launches on a stream created non-blocking, which is not ordered after the legacy default
+    stream the copy uses. So the first kernel can read part of the matrix before it lands.
+  - It fits: the first call is wrong and the second right, a stale half-precision scale reads as NaN, and a laptop GPU
+    has a slow link.
+  - It does not fit cleanly: `KQuantMmqParityTest`'s larger uploads (3001x1280) passed the same upload-then-GEMV sequence
+    on that GPU.
+- Exposure: a served model's weights are uploaded at load, long before a forward pass reads them. Nothing shown here
+  reaches a reply. Tier 02H's tests passed on this host's GTX 1080, also sm_61, on a x16 link.
+
+**Decision for the owner: finding 4.**
+- (a) Ask the tester to run `mvn test -pl node -Dtest=KQuantGemvRowsTest` five times and send the surefire reports for
+  that class. A race varies from run to run; a kernel defect repeats the same element.
+- (b) Here, once nothing is measuring on this host: a GPU test that uploads a matrix of the failing sizes and runs a GEMV
+  at once, many times, against a GEMV after a synchronize. If it fails here, synchronize after each upload (once per
+  weight at load) and see it pass. If it does not fail on this x16 link, the tester's re-run of a branch is the only
+  check.
+- **Recommendation: (a) first, since it costs one message, then (b).**
+
+**Found, recorded, not changed.**
+- An 8 GB machine shows 7.66 GiB, and `Requirements` compares whole bytes against 8 GiB. So the laptop skipped 10
+  probes, every live check, consistency, quality and the hot path among them. This was known from the 2026-10-31 macOS
+  runner note. The reference host and 16 GB testers cover those probes.
+- 256-bit over 128-bit on the i7-8550U: Q4_K 1.42x on 1 thread and 1.58x on 8, Q6_K 1.22x and 1.41x. This is the first
+  host where 256-bit reads 1.4x or more in three of four shapes; the Windows i5-1240P read 1.14x to 1.30x. The owner
+  decision of 2026-11-09 stands. Recorded, not scored.
+- `cpu.kernel-width` read NOISY at 6% to 7% other CPU. The run's kit predates the sampler fix.
+- The first NVIDIA GPU other than the reference host's to go through the kit: packed K-quant PASS on both schedules, and
+  kernel timing PASS, with the longest kernel at 268.75 ms (Mistral 7B attention over 2048 keys, limit 500 ms).
+
+**Tests.** None run; no code changed. **Docs.** This record, and a dated line in Tier 02H.
+
+**Out-of-tier changes:** [Tier 02H](TIER-02H-batched-gpu-decode.md) gains a dated line on finding 4.
+
+**Exit criteria:** 9 of 13, unchanged.
+
+**Owed to the owner:**
+1. Keep `docs/winUser/` out of every commit: delete it, or move it outside the repository. Nothing in `.gitignore`
+   covers it.
+2. Decisions on findings 1, 3 and 4.
+3. A macOS run.
+
+**Next for the executor:** `ingest` the Linux zip once no measurement runs on this host; then findings 1, 3 and 4 as the
+owner decides.

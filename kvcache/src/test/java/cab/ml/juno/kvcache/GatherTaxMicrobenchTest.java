@@ -43,10 +43,41 @@ class GatherTaxMicrobenchTest {
 		float[] out1 = new float[GatherTaxMicrobench.Q_DIM];
 		float[] out2 = new float[GatherTaxMicrobench.Q_DIM];
 		float[] scores = new float[seq];
-		GatherTaxMicrobench.gqaInto(q, k, v, seq, out1, scores);
-		GatherTaxMicrobench.gqaInto(q, k, v, seq, out2, scores);
+		KvRows kRows = KvRows.of(k, GatherTaxMicrobench.KV_DIM);
+		KvRows vRows = KvRows.of(v, GatherTaxMicrobench.KV_DIM);
+		GatherTaxMicrobench.gqaInto(q, kRows, vRows, seq, out1, scores);
+		GatherTaxMicrobench.gqaInto(q, kRows, vRows, seq, out2, scores);
 		for (int i = 0; i < out1.length; i++)
 			assertThat(out2[i]).isCloseTo(out1[i], within(0f));
+	}
+
+	@Test
+	@DisplayName("attention reading the pages in place gives the dense rows' output bits")
+	void paged_equals_dense() {
+		int seq = 70; // 4 full pages of 16 and a partial one
+		DenseKvTensor dk = new DenseKvTensor(KvElementType.F16, GatherTaxMicrobench.KV_DIM);
+		DenseKvTensor dv = new DenseKvTensor(KvElementType.F16, GatherTaxMicrobench.KV_DIM);
+		PagedKvArena arena = new PagedKvArena(16, GatherTaxMicrobench.KV_DIM, KvElementType.F16, KvElementType.F16);
+		PagedKvTensor pk = arena.newK();
+		PagedKvTensor pv = arena.newV();
+		float[] tok = new float[GatherTaxMicrobench.KV_DIM];
+		for (int t = 0; t < seq; t++) {
+			for (int i = 0; i < tok.length; i++)
+				tok[i] = ((t * 37 + i * 11) % 101) * 0.01f - 0.5f;
+			dk.writeToken(t, tok);
+			pk.writeToken(t, tok);
+			dv.writeToken(t, tok);
+			pv.writeToken(t, tok);
+		}
+		float[] q = new float[GatherTaxMicrobench.Q_DIM];
+		for (int i = 0; i < q.length; i++)
+			q[i] = (i % 7) * 0.01f;
+		float[] dense = new float[GatherTaxMicrobench.Q_DIM];
+		float[] paged = new float[GatherTaxMicrobench.Q_DIM];
+		float[] scores = new float[seq];
+		GatherTaxMicrobench.gqaInto(q, dk.attentionRows(seq), dv.attentionRows(seq), seq, dense, scores);
+		GatherTaxMicrobench.gqaInto(q, pk.attentionRows(seq), pv.attentionRows(seq), seq, paged, scores);
+		assertThat(paged).containsExactly(dense);
 	}
 
 	@Test
@@ -58,9 +89,9 @@ class GatherTaxMicrobenchTest {
 		assertThat(cells).hasSize(2);
 		for (GatherTaxMicrobench.Cell c : cells) {
 			assertThat(c.denseAttnNs()).isPositive();
-			assertThat(c.gatherNs()).isPositive();
+			assertThat(c.gatherNs()).as("attention reads the pages in place: no gather").isZero();
 			assertThat(c.pagedAttnNs()).isPositive();
-			assertThat(c.gatherPctOfPaged()).isBetween(0.0, 100.0);
+			assertThat(c.gatherPctOfPaged()).isZero();
 		}
 		String md = GatherTaxMicrobench.formatReport(cells);
 		assertThat(md).contains("Gather-tax microbench").contains("| 256 |");

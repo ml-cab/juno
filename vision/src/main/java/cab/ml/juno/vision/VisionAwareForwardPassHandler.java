@@ -357,6 +357,28 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
         textHandler.evict(requestId);
     }
 
+    /**
+     * Delegates when neither request carries an image. A request with an image is never a source or a target of a
+     * shared prefix: its image positions hold that image's patch embeddings, while their token ids are the same
+     * placeholder for every image, so a prefix match would not mean the same KV.
+     */
+    @Override
+    public boolean shareKvPrefix(String fromId, String toId, int len) {
+        if (requestsWithImages.contains(fromId) || requestsWithImages.contains(toId))
+            return false;
+        return textHandler.shareKvPrefix(fromId, toId, len);
+    }
+
+    @Override
+    public boolean supportsKvPrefixSharing() {
+        return textHandler.supportsKvPrefixSharing();
+    }
+
+    @Override
+    public long hostKvBytesPerToken() {
+        return textHandler.hostKvBytesPerToken();
+    }
+
     @Override
     public int contextLimit() {
         return textHandler.contextLimit();

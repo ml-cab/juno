@@ -62,6 +62,40 @@ class Q8_0KvCodecTest {
 		assertThat(Q8_0KvCodec.compressionRatioVsF32(1024 * 256)).isGreaterThanOrEqualTo(2.0);
 	}
 
+	/**
+	 * Attention decodes one head's slice of a stored row at a time, and a slice can start and end anywhere in a
+	 * block (head widths 8, 16, 24 and 80 all cut blocks). Every slice must read the values the whole-row decode
+	 * gives, bit for bit, at the row's offset inside a larger page.
+	 */
+	@Test
+	@DisplayName("decodeRange gives decode's values for every slice of a row, bit for bit")
+	void decode_range_matches_decode() {
+		java.util.Random rng = new java.util.Random(41);
+		for (int n : new int[] { 1, 31, 32, 33, 48, 80, 96, 256 }) {
+			float[] src = new float[n];
+			for (int i = 0; i < n; i++)
+				src[i] = (float) rng.nextGaussian() * (1 + (i % 7));
+			int rowBytes = Q8_0KvCodec.encodedBytes(n);
+			int rowOff = 3 * rowBytes; // the row sits inside a page, after three others
+			byte[] page = new byte[5 * rowBytes];
+			Q8_0KvCodec.encode(src, 0, n, page, rowOff);
+			float[] whole = new float[n];
+			Q8_0KvCodec.decode(page, rowOff, whole, 0, n);
+			float[] got = new float[n + 2];
+			for (int from = 0; from < n; from++)
+				for (int len = 1; from + len <= n; len++) {
+					java.util.Arrays.fill(got, Float.NaN);
+					Q8_0KvCodec.decodeRange(page, rowOff, from, len, got, 1);
+					for (int i = 0; i < len; i++)
+						if (Float.floatToRawIntBits(got[1 + i]) != Float.floatToRawIntBits(whole[from + i]))
+							throw new AssertionError("n " + n + ", slice [" + from + ", " + (from + len) + "): element "
+									+ (from + i) + " reads " + got[1 + i] + ", decode reads " + whole[from + i]);
+					assertThat(got[0]).as("nothing written before dstOff").isNaN();
+					assertThat(got[1 + len]).as("nothing written past the slice").isNaN();
+				}
+		}
+	}
+
 	@Test
 	@DisplayName("rejects bad ranges")
 	void rejects_bad_ranges() {

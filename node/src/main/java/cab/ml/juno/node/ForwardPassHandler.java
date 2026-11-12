@@ -357,4 +357,26 @@ public interface ForwardPassHandler {
 	 */
 	default void evict(String requestId) {
 	}
+
+	/**
+	 * Starts {@code toId}'s KV from positions {@code [0, len)} of {@code fromId}'s, as if {@code toId} had computed
+	 * them itself, so its prefill can begin at {@code len}. Whatever {@code toId} held before is released. Returns
+	 * false, changing nothing, where this handler cannot: the caller then prefills {@code toId} in full.
+	 * {@code fromId}'s KV must not be written meanwhile.
+	 *
+	 * <p>Default: false, so a handler that does not override it is never handed a prefix it did not compute.
+	 */
+	default boolean shareKvPrefix(String fromId, String toId, int len) {
+		return false;
+	}
+
+	/** Whether {@link #shareKvPrefix} can succeed on this handler; false by default. */
+	default boolean supportsKvPrefixSharing() {
+		return false;
+	}
+
+	/** Host KV bytes one position takes across this handler's layers, K and V; 0 when unknown. */
+	default long hostKvBytesPerToken() {
+		return 0;
+	}
 }

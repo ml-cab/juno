@@ -24,6 +24,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
@@ -373,13 +374,6 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             vCaches[i] = vCache;
         }
 
-        float[] kDequant = null;
-        float[] vDequant = null;
-        if (kvLayout.needsAttentionScratch()) {
-            kDequant = new float[(maxPos + 1) * kvDim];
-            vDequant = new float[(maxPos + 1) * kvDim];
-        }
-
         for (int li = 0; li < L; li++) {
             SessionKvTensor[] kLayers = new SessionKvTensor[N];
             SessionKvTensor[] vLayers = new SessionKvTensor[N];
@@ -387,7 +381,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
                 kLayers[i] = kCaches[i][li];
                 vLayers[i] = vCaches[i][li];
             }
-            x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, kDequant, vDequant);
+            x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers);
         }
 
         if (a != null) {
@@ -401,8 +395,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
     }
 
     private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
-            SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers,
-            float[] kDequant, float[] vDequant) {
+            SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers) {
         int N = x.length;
         int H = cfg.hiddenDim();
         int kvDim = cfg.kvDim();
@@ -439,8 +432,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         float[][] attnOut = new float[N][];
         for (int b = 0; b < N; b++) {
             int seqLen = positions[b] + 1;
-            float[] kView = kCacheLayers[b].viewForAttention(seqLen, kDequant);
-            float[] vView = vCacheLayers[b].viewForAttention(seqLen, vDequant);
+            KvRows kView = kCacheLayers[b].attentionRows(seqLen);
+            KvRows vView = vCacheLayers[b].attentionRows(seqLen);
             attnOut[b] = gqa(q[b], kView, vView, seqLen, layerWindows[li]);
         }
 
@@ -517,18 +510,11 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             vCache[li].ensureCapacity(lastPos);
         }
 
-        float[] kDequant = null;
-        float[] vDequant = null;
-        if (kvLayout.needsAttentionScratch()) {
-            kDequant = new float[(lastPos + 1) * kvDim];
-            vDequant = new float[(lastPos + 1) * kvDim];
-        }
-
         log.info("[phi2-trace] runLayersBatch windowSize=" + W + " startPos=" + startPos
                 + " initial-x: " + stats(x[0], cfg.hiddenDim()));
 
         for (int li = 0; li < L; li++)
-            x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], kDequant, vDequant);
+            x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li]);
 
         if (a != null) {
             int seqLen = lastPos + 1;
@@ -597,8 +583,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
      * core — see the comment at that call site for why it's safe to do so.
      */
     private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-            SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-            float[] kDequant, float[] vDequant) {
+            SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer) {
         int W     = x.length;
         int H     = cfg.hiddenDim();
         int kvDim = cfg.kvDim();
@@ -639,13 +624,11 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
         long t2 = System.nanoTime(); // rope + cache write done
 
-        float[][] attnOut = new float[W][];
-        for (int b = 0; b < W; b++) {
-            int seqLen = startPos + b + 1;
-            float[] kView = kCacheLayer.viewForAttention(seqLen, kDequant);
-            float[] vView = vCacheLayer.viewForAttention(seqLen, vDequant);
-            attnOut[b] = gqa(q[b], kView, vView, seqLen, layerWindows[li]);
-        }
+        float[][] attnOut = new float[W][cfg.numHeads() * cfg.headDim()];
+        KvRows kView = kCacheLayer.attentionRows(startPos + W);
+        KvRows vView = vCacheLayer.attentionRows(startPos + W);
+        GqaWindowAttention.attend(q, kView, vView, startPos, W, attnOut, cfg.numHeads(), cfg.headDim(),
+                cfg.gqaRatio(), cfg.kvDim(), layerWindows[li]);
 
         long t3 = System.nanoTime(); // attention (gqa over all W positions) done
 
@@ -751,6 +734,23 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         if (a != null) a.evict(requestId);
     }
 
+    /** Host rows through {@link HandlerKvShare}; this handler attends on the CPU only. */
+    @Override
+    public boolean shareKvPrefix(String fromId, String toId, int len) {
+        return supportsKvPrefixSharing() && HandlerKvShare.shareHost(kvCacheK, kvCacheV, kvLayout, fromId, toId, len);
+    }
+
+    @Override
+    public long hostKvBytesPerToken() {
+        return HandlerKvShare.bytesPerToken(kvLayout, endLayer - startLayer);
+    }
+
+    @Override
+    public boolean supportsKvPrefixSharing() {
+        return HandlerKvShare.supported(kvLayout, false, kvAdapter);
+    }
+
+
     // ── Initial activation ────────────────────────────────────────────────────
 
     private float[] getInitialActivation(ForwardRequest request) {
@@ -794,17 +794,10 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             vCache[li].ensureCapacity(pos);
         }
 
-        float[] kScratch = null;
-        float[] vScratch = null;
-        if (kvLayout.needsAttentionScratch()) {
-            kScratch = new float[(pos + 1) * kvDim];
-            vScratch = new float[(pos + 1) * kvDim];
-        }
-
         if (pos <= 1 || pos == 729 || pos == 730)
             log.info("[phi2-trace] runLayers pos=" + pos + " initial-x: " + stats(x, cfg.hiddenDim()));
         for (int li = 0; li < L; li++)
-            x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch);
+            x = transformerLayer(x, li, pos, kCache[li], vCache[li]);
 
         if (a != null) {
             int seqLen = pos + 1;
@@ -849,8 +842,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
      * </pre>
      */
     private float[] transformerLayer(float[] x, int li, int pos,
-            SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-            float[] kScratch, float[] vScratch) {
+            SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer) {
         int H     = cfg.hiddenDim();
         int kvDim = cfg.kvDim();
 
@@ -879,8 +871,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         vCacheLayer.writeToken(pos, v);
 
         int seqLen = pos + 1;
-        float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
-        float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+        KvRows kView = kCacheLayer.attentionRows(seqLen);
+        KvRows vView = vCacheLayer.attentionRows(seqLen);
         float[] attnOut  = gqa(q, kView, vView, seqLen, layerWindows[li]);
         float[] attnProj = LlamaTransformerHandler.matVec(wo[li], attnOut, H, H);
         if (woBias[li] != null)
@@ -948,7 +940,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
     // ── GQA (GqaMath; window 0 for all keys) ─────────────────────────────────
 
-    private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
+    private float[] gqa(float[] q, KvRows kCache, KvRows vCache, int seqLen, int window) {
         float[] out = new float[cfg.numHeads() * cfg.headDim()];
         // heads on the worker pool, bit-identical to the serial loop
         GqaMath.attendPooled(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
