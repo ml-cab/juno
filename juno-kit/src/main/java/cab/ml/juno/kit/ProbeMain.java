@@ -74,6 +74,7 @@ public final class ProbeMain {
 		case "LongPromptProbe" -> new LongPromptProbe();
 		case "CpuHotPathProbe" -> new CpuHotPathProbe();
 		case "QualityProbe" -> new QualityProbe();
+		case "KvQualityProbe" -> new KvQualityProbe();
 		case "ParallelProbe" -> new ParallelProbe();
 		case "ScheduleProbe" -> new ScheduleProbe();
 		case "MixedPrefillProbe" -> new MixedPrefillProbe();

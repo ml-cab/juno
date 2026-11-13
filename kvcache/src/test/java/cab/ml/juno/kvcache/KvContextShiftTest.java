@@ -50,7 +50,10 @@ class KvContextShiftTest {
 				Arguments.of("PagedKvTensor f16", (Supplier<SessionKvTensor>) () -> new PagedKvTensor(
 						new KvBlockPool(PAGE, KV_DIM, KvElementType.F16))),
 				Arguments.of("PagedKvTensor q8_0", (Supplier<SessionKvTensor>) () -> new PagedKvTensor(
-						new KvBlockPool(PAGE, KV_DIM, KvElementType.Q8_0))));
+						new KvBlockPool(PAGE, KV_DIM, KvElementType.Q8_0))),
+				Arguments.of("DenseKvTensor q4_0", (Supplier<SessionKvTensor>) () -> new DenseKvTensor(KvElementType.Q4_0, KV_DIM)),
+				Arguments.of("PagedKvTensor q4_0", (Supplier<SessionKvTensor>) () -> new PagedKvTensor(
+						new KvBlockPool(PAGE, KV_DIM, KvElementType.Q4_0))));
 	}
 
 	private static float[] row(int p) {

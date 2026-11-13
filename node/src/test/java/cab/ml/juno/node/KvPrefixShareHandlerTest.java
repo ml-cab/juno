@@ -67,7 +67,7 @@ class KvPrefixShareHandlerTest {
 		List<Arguments> out = new ArrayList<>();
 		PagedKvHandlerOracleTest.families().forEach(f -> {
 			for (String schedule : new String[] { "static", "continuous" })
-				for (String type : new String[] { "f16", "q8_0" })
+				for (String type : new String[] { "f16", "q8_0", "q4_0" })
 					out.add(Arguments.of(f, schedule, type));
 		});
 		return out.stream();

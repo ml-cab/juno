@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KvRows;
+import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
@@ -441,6 +442,11 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	@Override
 	public boolean shareKvPrefix(String fromId, String toId, int len) {
 		return supportsKvPrefixSharing() && HandlerKvShare.shareHost(kvCacheK, kvCacheV, kvLayout, fromId, toId, len);
+	}
+
+	@Override
+	public PagedKvArena pagedKvArena() {
+		return HandlerKvShare.pagedArena(kvLayout);
 	}
 
 	@Override

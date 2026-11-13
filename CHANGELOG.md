@@ -1,5 +1,85 @@
 ## Status 
 
+**Session 145** - A 4-bit KV cache type, `q4_0`, about 7.1x smaller than the float cache, with its quality measured per model
+
+- **`--cache-type-k q4_0` and `--cache-type-v q4_0`** store the host KV in the 4-bit GGUF block format: 18 bytes per 32
+  values, an FP16 scale set by the block's largest value and a 4-bit step per value, about 7.1x smaller than the float32
+  rows `f16` keeps and 1.9x smaller than `q8_0`. It goes wherever `q8_0` goes: dense KV (`static`) and paged KV
+  (`continuous`), context shift (moved keys re-encoded), prompt sharing (pages shared or rows copied as stored), flushed
+  KV blocks (a block names each side's type), `--lora-play`. CPU attention reads the packed rows in place, decoding one
+  head's slice at a time inside the attention loop, bit for bit what decoding the whole row gives.
+- **Quality, measured on the four sweep models** (CPU; mean NLL over a fixed 2,048-token text against the `f16` cache, and
+  the share of 512 greedy tokens where the two caches pick the same token):
+
+  | Model | `q4_0` K and V | `q8_0` K and V | `q8_0` K, `q4_0` V |
+  |---|---|---|---|
+  | TinyLlama 1.1B | 1.030x, 97.1% | 1.000x, 99.8% | 1.000x, 98.8% |
+  | Qwen2.5-3B | 2.02x, 83.6% | 1.001x, 99.2% | 1.006x, 99.8% |
+  | Phi-3.5-mini | 1.035x, 98.1% | 0.999x, 99.8% | 1.002x, 99.6% |
+  | Mistral 7B | 1.006x, 99.0% | 0.999x, 99.8% | 0.997x, 99.6% |
+
+  Four-bit keys lose most: a block's one scale follows its largest value, and Qwen2.5-3B falls apart with them. Four-bit
+  values cost almost nothing beside 8-bit keys, so the 4-bit setting held to the quality bar (NLL at most 1.02x, agreement
+  at least 97%) is `--cache-type-k q8_0 --cache-type-v q4_0`: it meets both on all four models and stores 0.76x of
+  `q8_0`'s bytes. The how-to gives the per-model figures.
+- **`--cache-type-k q4_0` prints a startup warning** naming the measured loss and the `q8_0` keys alternative, on every
+  launch (console, server, cluster node logs); the setting stays, since some models lose little with it. `q4_0` values
+  print nothing.
+- **A GPU launch now says what a quantized cache type does there.** GPU attention reads its own FP16 copy of each request's
+  KV, so with `q8_0` or `q4_0` the layers attending on the GPU read unquantized rows and that copy keeps its size; the type
+  sets the host rows, which serve CPU attention and session flush and restore. A startup warning says so; it was silent for
+  `q8_0`. CPU launches, ROCm, `--gpu-attention off` and the CPU-only handlers apply the type in full and print nothing.
+- The quantized row decode now goes through one dispatch for every reader; the `f16` and `q8_0` paths read 1.004x and
+  1.001x prefill, 0.997x and 0.995x decode of the build before on TinyLlama at 512 tokens, replies equal (CPU, unpinned).
+- Hardware validation kit: `kv-quality.<model>` on the four sweep models (CPU suite) scores the text once with an `f16`
+  host KV and once with `q8_0` keys and `q4_0` values, each in a JVM of its own, held to 1.02x.
+- New tests: `Q4_0KvCodecTest` (the published block layout on a hand-worked block, clamping, the error against float rows
+  and against the uniform-quantization model, every slice equal to the whole-row decode), `DeviceKvTypeNoticeTest`,
+  `KvKeyPrecisionNoticeTest`, `KvQuantQualityLiveTest` (opt-in, `-Djuno.test.kvQuality=true`; gates `q8_0` keys with
+  `q4_0` values, reads any other pair on request), the kit probe's self-test, and `q4_0` added to the
+  paged-against-dense, in-place-against-gathered, prefix-sharing, reclaim, context-shift, write-rows and flush tests.
+
+**Session 144** - Long GPU prompts run attention and the packed matmul in bounded launches, so no single kernel trips a display driver's watchdog
+
+- **A GPU prefill window's attention and its packed K-quant matmuls now run as several launches of bounded work** instead
+  of one launch each, on the device prefill region and on the host-staged window path. A window's attention grows with
+  the square of its length: on a GTX 1080 one launch over Mistral 7B's heads read 37 ms at 2,048 tokens and 597 ms at
+  8,192, and would pass the two-second watchdog a display driver holds a GPU to (the Windows default, for a GPU that drives
+  a display) near 16,000 tokens, resetting the device and failing the request. Attention now splits between whole blocks
+  of query rows and the matmul between whole 64-row tiles, each launch keeping the geometry the whole window would have,
+  so the output is bit for bit one launch's. The budgets keep the heaviest launch under 400 ms on the slowest GPU a kit
+  run has measured (a GeForce MX150, scaled from its 2,048-token readings) at any length up to 32,768 positions; a window
+  of up to 2,048 positions on the standing sweep models is still one launch. Decode launches are unchanged. On a GTX 1080
+  at 32,768 tokens a window's attention runs in 98 to 212 launches, the slowest 58 ms, and Mistral 7B's matmuls in runs
+  of 3,392 rows, the slowest 42 ms. Greedy replies on Mistral 7B at 8,192 tokens are identical to the build before, on
+  both schedules, and time to first token is unchanged (unpinned).
+- The hardware validation kit's `gpu.kernel-timing` probe times the slowest launch the prefill paths make, and adds a
+  check at the longest window the device KV holds, 32,768 tokens, against the same 500 ms bar.
+- New tests: `BoundedLaunchesTest` (the split: whole blocks, each launch within its budget, every row once, one launch
+  for a sweep window, the budgets against the MX150's readings), `BoundedLaunchParityTest` (GPU: a split launch equals one
+  launch bit for bit, attention over one cache and over separate caches, with and without a sliding window, and the
+  tiled GEMM), a longest-window case in `GpuKernelTimingsTest`, and the probe's second check in its self-test.
+
+**Session 143** - Idle KV pages give their memory back to the heap; `--lora-play` no longer keeps every finished request's KV
+
+- **Paged KV pages left unused for a whole reclaim period are released** (`--schedule continuous`). A page every request has
+  released stays in the pool and is reused first, so steady traffic keeps reusing its pages; once the load drops, the pages
+  nobody took for a whole period give their memory back to the heap, from a background thread. Before, the pool kept its peak
+  forever: on TinyLlama a burst of eight requests left 9,504 idle pages (175 MB) held after the last one finished; two idle
+  periods later they are released and the pool holds the one live session's 19.5 MB (CPU and CUDA). Pages in use, a
+  session's and a kept prompt's included, are never moved or touched, and replies are unchanged. The period is one minute
+  (`-Djuno.kv.reclaimPeriodMs=MS`, `0` turns it off; an invalid value stops startup with an error naming it). A pass running
+  beside decoding adds at most 0.96 ms to a decode step's KV writes at 8,192 tokens and a batch of 8, on every sweep model's
+  page count (budget 5 ms; `scripts/performance-tests/kv-reclaim-microbench.sh`, unpinned). `/v1/cluster/health` adds
+  `kvPagesLive`, `kvPagesIdle`, `kvPagesReclaimed` and `kvPageBytes`. Free page ids are kept as `int`s, so allocating and
+  freeing a page no longer boxes one.
+- **Fixed: under `--lora-play` every finished request's KV stayed held for the life of the process**, on both schedules: the
+  LoRA handlers did not drop a request's KV when it ended. They now release it as every other handler does.
+- New tests: `KvBlockPoolReclaimTest`, `KvPageReclaimerTest`, `KvPageCountsTest`, `IntRingTest`,
+  `KvReclaimPauseMicrobenchTest`, `PagedKvReclaimHandlerTest`, `HandlerEvictReleasesKvTest`,
+  `LocalInferencePipelineKvArenaTest`, and a health case in `InferenceApiServerTest`. The kit's schedule probe checks on the
+  continuous schedule that idle pages are reclaimed and a greedy reply is unchanged after the reclaim.
+
 **Session 142** - The hardware validation kit checks JFR's clock on each machine; a reading with no valid repetition is no longer `DONE`
 
 - **The kit checks once per machine that JFR's clock agrees with the operating system's.** Where the CPU's timestamp

@@ -1,0 +1,13 @@
+[INFO] Running cab.ml.juno.node.KvQuantQualityLiveTest
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+INFO: Phi-3 shard loaded — 32 layers, with embeddings, with output projection
+KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 nll=1.36110 ppl=3.9005 self_agree_generated=512/512 s=3210.6
+INFO: schedule=static cache-type-k=q8_0 cache-type-v=q8_0 kv-page-size ignored (dense)
+INFO: Phi-3 shard loaded — 32 layers, with embeddings, with output projection
+KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 nll=1.35939 nll_f16=1.36110 ratio=0.99875 ppl=3.8938 greedy_agree=511/512 (99.80%) first_disagree=58 text_argmax_agree_first512=509 (99.4%) s=2231.0
+INFO: schedule=static cache-type-k=q8_0 cache-type-v=q4_0 kv-page-size ignored (dense)
+INFO: Phi-3 shard loaded — 32 layers, with embeddings, with output projection
+KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0/q4_0 nll=1.36385 nll_f16=1.36110 ratio=1.00202 ppl=3.9112 greedy_agree=510/512 (99.61%) first_disagree=26 text_argmax_agree_first512=507 (99.0%) s=2507.7
+[WARNING] Tests run: 4, Failures: 0, Errors: 0, Skipped: 3, Time elapsed: 7950 s -- in cab.ml.juno.node.KvQuantQualityLiveTest
+[WARNING] Tests run: 4, Failures: 0, Errors: 0, Skipped: 3
+[INFO] BUILD SUCCESS

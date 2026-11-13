@@ -41,11 +41,17 @@ public final class PagedKvArena {
 		this.vPool = new KvBlockPool(pageSize, kvDim, typeV);
 	}
 
-	/** Factory matching CLI page size + cache-type policy. */
+	/**
+	 * Factory matching CLI page size + cache-type policy: the serving arena, whose pools release their idle
+	 * pages' storage in the background ({@link KvPageReclaimer}).
+	 */
 	public static PagedKvArena fromOptions(KvPageSizeOptions page, int kvDim, CacheTypeOptions types) {
 		if (page == null || types == null)
 			throw new IllegalArgumentException("page and types must not be null");
-		return new PagedKvArena(page.pageSize(), kvDim, types.typeK(), types.typeV());
+		PagedKvArena arena = new PagedKvArena(page.pageSize(), kvDim, types.typeK(), types.typeV());
+		KvPageReclaimer.register(arena.kPool);
+		KvPageReclaimer.register(arena.vPool);
+		return arena;
 	}
 
 	public int pageSize() {

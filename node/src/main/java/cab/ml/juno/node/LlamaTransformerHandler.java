@@ -27,6 +27,7 @@ import java.util.Optional;
 import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KvRows;
+import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
@@ -419,6 +420,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				if (gqa != null) {
 					log.info("GPU-resident attention path active (gpu-attention="
 							+ GpuAttentionOptions.fromEnv().policyLabel() + ")");
+					DeviceKvTypeNotice.announce("Llama", cab.ml.juno.kvcache.CacheTypeOptions.fromEnv());
 				} else {
 					log.warning("--gpu-attention requested on " + cuda.gpuContext().backendLabel()
 							+ " backend — not yet implemented there, falling back to scalar CPU attention");
@@ -1104,6 +1106,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		HandlerKvShare.uploadMirrors("Llama", deviceLayersFor(toId, endLayer - startLayer), kvCacheK.get(toId),
 				kvCacheV.get(toId), len, this::layerGpuResident);
 		return true;
+	}
+
+	@Override
+	public PagedKvArena pagedKvArena() {
+		return HandlerKvShare.pagedArena(kvLayout);
 	}
 
 	@Override

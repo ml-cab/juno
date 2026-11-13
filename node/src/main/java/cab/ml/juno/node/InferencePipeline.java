@@ -19,6 +19,7 @@ package cab.ml.juno.node;
 import java.util.List;
 
 import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.PagedKvArena;
 
 /**
  * Contract for executing a forward pass through a pipeline of transformer
@@ -184,6 +185,14 @@ public interface InferencePipeline {
 	/** Host KV bytes one position takes across the whole model, K and V; 0 when unknown (remote stages). */
 	default long hostKvBytesPerToken() {
 		return 0;
+	}
+
+	/**
+	 * The page arenas this pipeline's paged host KV comes from, each once ({@link ForwardPassHandler#pagedKvArena});
+	 * empty when the KV is dense or remote.
+	 */
+	default List<PagedKvArena> pagedKvArenas() {
+		return List.of();
 	}
 
 	/**

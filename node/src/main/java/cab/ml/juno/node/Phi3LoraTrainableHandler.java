@@ -25,6 +25,7 @@ import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 import cab.ml.juno.lora.LoraAdapter;
@@ -279,6 +280,22 @@ public final class Phi3LoraTrainableHandler implements LoraTrainingHandler {
 		return k == null ? null : new SessionKvTensor[][] { k, kvCacheV.get(requestId) };
 	}
 
+
+	/**
+	 * Drops {@code requestId}'s KV: paged layers return their pages to the pool, dense layers go with the map entry.
+	 * Without it every finished request's KV stayed held for the life of the process. The layers are released
+	 * rather than kept for the next request, since this handler does not track which requests have a pass running.
+	 */
+	@Override
+	public void evict(String requestId) {
+		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
+		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
+	}
+
+	@Override
+	public PagedKvArena pagedKvArena() {
+		return HandlerKvShare.pagedArena(kvLayout);
+	}
 
 	@Override
 	public boolean isReady() {

@@ -21,7 +21,7 @@ import java.util.Arrays;
 
 /**
  * Dense per-layer KV tensor for one request: float32 ({@link KvElementType#F16})
- * or packed {@link KvElementType#Q8_0}.
+ * or packed {@link KvElementType#Q8_0} / {@link KvElementType#Q4_0} rows ({@link KvRowCodec}).
  *
  * <p>Attention reads the backing array in place as one page ({@link #attentionRows}):
  * {@code F16} rows as stored floats, {@code Q8_0} rows decoded inside the attention
@@ -45,7 +45,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 	private final KvElementType type;
 	private final int kvDim;
 	private float[] f32;
-	private byte[] q8;
+	/** Packed rows of a {@code Q8_0} or {@code Q4_0} tensor, {@link #bytesPerToken()} bytes each. */
+	private byte[] packed;
 	/** The backing array as attention reads it; repointed when the array grows. */
 	private final KvRows rows;
 	private int capacityTokens;
@@ -121,11 +122,11 @@ public final class DenseKvTensor implements SessionKvTensor {
 		writtenTokens = Math.max(writtenTokens, pos + 1);
 		switch (type) {
 		case F16 -> System.arraycopy(src, srcOff, f32, pos * kvDim, kvDim);
-		case Q8_0 -> Q8_0KvCodec.encode(src, srcOff, kvDim, q8, pos * bytesPerToken());
+		case Q8_0, Q4_0 -> KvRowCodec.encode(type, src, srcOff, kvDim, packed, pos * bytesPerToken());
 		}
 	}
 
-	/** F16 is one bulk copy into the backing array; Q8_0 encodes a row at a time. */
+	/** F16 is one bulk copy into the backing array; Q8_0 and Q4_0 encode a row at a time. */
 	@Override
 	public void writeRows(int startPos, int rows, MemorySegment src, long srcOffset) {
 		if (rows < 1)
@@ -153,9 +154,9 @@ public final class DenseKvTensor implements SessionKvTensor {
 			throw new IllegalArgumentException("src shorter than seqLen*kvDim");
 		switch (type) {
 		case F16 -> System.arraycopy(src, 0, f32, 0, n);
-		case Q8_0 -> {
+		case Q8_0, Q4_0 -> {
 			for (int p = 0; p < seqLen; p++)
-				Q8_0KvCodec.encode(src, p * kvDim, kvDim, q8, p * bytesPerToken());
+				KvRowCodec.encode(type, src, p * kvDim, kvDim, packed, p * bytesPerToken());
 		}
 		}
 		writtenTokens = Math.max(writtenTokens, seqLen);
@@ -174,12 +175,9 @@ public final class DenseKvTensor implements SessionKvTensor {
 		return rows;
 	}
 
-	/** Packed bytes for one token (q8_0 pads {@code kvDim} to QK blocks). */
+	/** Stored bytes for one token (q8_0 and q4_0 pad {@code kvDim} to 32-value blocks). */
 	public int bytesPerToken() {
-		return switch (type) {
-		case F16 -> kvDim * Float.BYTES;
-		case Q8_0 -> Q8_0KvCodec.encodedBytes(kvDim);
-		};
+		return KvRowCodec.rowBytes(type, kvDim);
 	}
 
 	/** Copy positions {@code [0, seqLen)} into a new float array (flush / tests). */
@@ -191,10 +189,10 @@ public final class DenseKvTensor implements SessionKvTensor {
 		float[] out = new float[seqLen * kvDim];
 		switch (type) {
 		case F16 -> System.arraycopy(f32, 0, out, 0, out.length);
-		case Q8_0 -> {
+		case Q8_0, Q4_0 -> {
 			int bpt = bytesPerToken();
 			for (int p = 0; p < seqLen; p++)
-				Q8_0KvCodec.decode(q8, p * bpt, out, p * kvDim, kvDim);
+				KvRowCodec.decode(type, packed, p * bpt, out, p * kvDim, kvDim);
 		}
 		}
 		return out;
@@ -203,7 +201,7 @@ public final class DenseKvTensor implements SessionKvTensor {
 	public int allocatedBytes() {
 		return switch (type) {
 		case F16 -> f32.length * Float.BYTES;
-		case Q8_0 -> q8.length;
+		case Q8_0, Q4_0 -> packed.length;
 		};
 	}
 
@@ -214,7 +212,7 @@ public final class DenseKvTensor implements SessionKvTensor {
 		exposeThrough(pos + 1);
 		switch (type) {
 		case F16 -> System.arraycopy(f32, pos * kvDim, dst, 0, kvDim);
-		case Q8_0 -> Q8_0KvCodec.decode(q8, pos * bytesPerToken(), dst, 0, kvDim);
+		case Q8_0, Q4_0 -> KvRowCodec.decode(type, packed, pos * bytesPerToken(), dst, 0, kvDim);
 		}
 	}
 
@@ -226,9 +224,9 @@ public final class DenseKvTensor implements SessionKvTensor {
 		int moved = seqLen - keep - discard;
 		switch (type) {
 		case F16 -> System.arraycopy(f32, (keep + discard) * kvDim, f32, keep * kvDim, moved * kvDim);
-		case Q8_0 -> {
+		case Q8_0, Q4_0 -> {
 			int bpt = bytesPerToken();
-			System.arraycopy(q8, (keep + discard) * bpt, q8, keep * bpt, moved * bpt);
+			System.arraycopy(packed, (keep + discard) * bpt, packed, keep * bpt, moved * bpt);
 		}
 		}
 	}
@@ -250,7 +248,7 @@ public final class DenseKvTensor implements SessionKvTensor {
 		ensureCapacity(len - 1);
 		switch (type) {
 		case F16 -> System.arraycopy(src.f32, 0, f32, 0, len * kvDim);
-		case Q8_0 -> System.arraycopy(src.q8, 0, q8, 0, len * bytesPerToken());
+		case Q8_0, Q4_0 -> System.arraycopy(src.packed, 0, packed, 0, len * bytesPerToken());
 		}
 		writtenTokens = len;
 	}
@@ -280,7 +278,7 @@ public final class DenseKvTensor implements SessionKvTensor {
 			return;
 		switch (type) {
 		case F16 -> Arrays.fill(f32, writtenTokens * kvDim, tokens * kvDim, 0f);
-		case Q8_0 -> Arrays.fill(q8, writtenTokens * bytesPerToken(), tokens * bytesPerToken(), (byte) 0);
+		case Q8_0, Q4_0 -> Arrays.fill(packed, writtenTokens * bytesPerToken(), tokens * bytesPerToken(), (byte) 0);
 		}
 		writtenTokens = tokens;
 	}
@@ -289,14 +287,14 @@ public final class DenseKvTensor implements SessionKvTensor {
 		capacityTokens = tokens;
 		switch (type) {
 		case F16 -> rows.setPage(0, f32 = new float[tokens * kvDim]);
-		case Q8_0 -> rows.setPage(0, q8 = new byte[tokens * Q8_0KvCodec.encodedBytes(kvDim)]);
+		case Q8_0, Q4_0 -> rows.setPage(0, packed = new byte[tokens * bytesPerToken()]);
 		}
 	}
 
 	private void grow(int newTokens) {
 		switch (type) {
 		case F16 -> rows.setPage(0, f32 = Arrays.copyOf(f32, newTokens * kvDim));
-		case Q8_0 -> rows.setPage(0, q8 = Arrays.copyOf(q8, newTokens * Q8_0KvCodec.encodedBytes(kvDim)));
+		case Q8_0, Q4_0 -> rows.setPage(0, packed = Arrays.copyOf(packed, newTokens * bytesPerToken()));
 		}
 		capacityTokens = newTokens;
 	}

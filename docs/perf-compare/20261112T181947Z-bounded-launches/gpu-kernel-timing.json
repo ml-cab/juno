@@ -1,0 +1,103 @@
+{
+  "id" : "gpu.kernel-timing",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "longest single kernel at a 2048-token window <= 500 ms (the 2 s display-driver watchdog / 4)",
+    "passed" : true,
+    "detail" : "prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys: slowest of 5 launches 37.75 ms, median 37.58 ms"
+  }, {
+    "name" : "longest single kernel at a 32768-token window, the longest prefill window, <= 500 ms (the 2 s display-driver watchdog / 4)",
+    "passed" : true,
+    "detail" : "prefill attention, qwen2.5-3b 16/2/128 heads, 32768 rows over up to 32768 keys, slowest of 98 launches (rows 7584 to 8320): slowest of 5 launches 57.94 ms, median 57.51 ms"
+  } ],
+  "readings" : [ {
+    "name" : "prefill attention, tinyllama-1.1b 32/4/64 heads, 2048 rows over up to 2048 keys",
+    "unit" : "ms",
+    "values" : [ 16.43449592590332, 15.850496292114258, 16.244735717773438, 16.4454402923584, 16.335872650146484 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, qwen2.5-3b 16/2/128 heads, 2048 rows over up to 2048 keys",
+    "unit" : "ms",
+    "values" : [ 20.199424743652344, 19.785728454589844, 19.86252784729004, 19.773439407348633, 19.376127243041992 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, phi-3.5-mini 32/32/96 heads, 2048 rows over up to 2048 keys",
+    "unit" : "ms",
+    "values" : [ 35.22614288330078, 35.26758575439453, 35.20614242553711, 34.73612976074219, 34.49241638183594 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys",
+    "unit" : "ms",
+    "values" : [ 37.638145446777344, 37.33100891113281, 37.581825256347656, 37.196800231933594, 37.749759674072266 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 2048 rows",
+    "unit" : "ms",
+    "values" : [ 22.48294448852539, 22.163455963134766, 22.774784088134766, 23.65500831604004, 23.28371238708496 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 2048 rows",
+    "unit" : "ms",
+    "values" : [ 23.767040252685547, 25.62828826904297, 25.337440490722656, 25.190399169921875, 25.48428726196289 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "LM head GEMV, qwen2.5-3b output 151936x2048 Q6_K, 1 row",
+    "unit" : "ms",
+    "values" : [ 1.9046399593353271, 1.922719955444336, 1.8903039693832397, 1.903615951538086, 1.8909120559692383 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, tinyllama-1.1b 32/4/64 heads, 32768 rows over up to 32768 keys, slowest of 98 launches (rows 7584 to 8320)",
+    "unit" : "ms",
+    "values" : [ 41.74233627319336, 41.4463996887207, 40.802303314208984, 41.27231979370117, 40.88115310668945 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, qwen2.5-3b 16/2/128 heads, 32768 rows over up to 32768 keys, slowest of 98 launches (rows 7584 to 8320)",
+    "unit" : "ms",
+    "values" : [ 57.91743850708008, 57.51193618774414, 57.94099044799805, 57.39904022216797, 57.430015563964844 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, phi-3.5-mini 32/32/96 heads, 32768 rows over up to 32768 keys, slowest of 212 launches (rows 5856 to 6336)",
+    "unit" : "ms",
+    "values" : [ 51.51801681518555, 51.42835235595703, 51.93318557739258, 51.145729064941406, 50.709503173828125 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill attention, mistral-7b 32/8/128 heads, 32768 rows over up to 32768 keys, slowest of 212 launches (rows 5856 to 6336)",
+    "unit" : "ms",
+    "values" : [ 53.338111877441406, 54.281982421875, 54.414337158203125, 54.440513610839844, 54.951934814453125 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 32768 rows, 3392 rows a launch, heaviest of 10",
+    "unit" : "ms",
+    "values" : [ 38.207489013671875, 38.49318313598633, 38.16038513183594, 37.912574768066406, 37.93715286254883 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 32768 rows, 3392 rows a launch, heaviest of 10",
+    "unit" : "ms",
+    "values" : [ 42.26425552368164, 40.597503662109375, 40.202239990234375, 40.89651107788086, 41.803775787353516 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "longestTokens" : 32768,
+    "device" : "NVIDIA GeForce GTX 1080",
+    "longestKernel" : "prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys",
+    "longestWindowKernel" : "prefill attention, qwen2.5-3b 16/2/128 heads, 32768 rows over up to 32768 keys, slowest of 98 launches (rows 7584 to 8320)",
+    "tokens" : 2048,
+    "longestMs" : 37.749759674072266,
+    "limitMs" : 500.0,
+    "longestWindowMs" : 57.94099044799805
+  }
+}

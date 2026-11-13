@@ -64,7 +64,7 @@ final class ProbeCatalog {
 			Map.entry("gpu.schedule.tinyllama", 1002), Map.entry("gpu.mixed-prefill.tinyllama", 936),
 			Map.entry("gpu.prefill-batch.tinyllama", 922), Map.entry("gpu.lora.tinyllama", 4066),
 			Map.entry("gpu.vision.moondream2", 118), Map.entry("gpu.unit-tests", 4144),
-			Map.entry("gpu.kernel-timing", 152));
+			Map.entry("gpu.kernel-timing", 514));
 
 	static long deviceMinimum(int peakMiB) {
 		return (long) ((peakMiB + 511) / 512 * 512) << 20;
@@ -127,8 +127,8 @@ final class ProbeCatalog {
 						Requirements.cuda(6L << 30), List.of(tiny.id()), 80, 2, "PackedKquantProbe",
 						Map.of("schedule", "continuous"), 2400, tiny.heap()),
 				new Probe("gpu.kernel-timing",
-						"Longest single GPU kernels at the sweep models' shapes, 2048-token window, against the "
-								+ "display-driver watchdog",
+						"Longest single GPU kernels at the sweep models' shapes, 2048-token and longest windows, "
+								+ "against the display-driver watchdog",
 						ProbeKind.CHECK, QUICK_GPU, Requirements.cuda(4L << 30), List.of(), 10, 1,
 						"GpuKernelTimingProbe", Map.of(), 900, "2g"),
 				live("qwen2.5-3b", "Qwen2.5-3B", false, "16g", 24, 505),
@@ -182,6 +182,10 @@ final class ProbeCatalog {
 				quality("qwen2.5-3b", CPU, 1430, 2),
 				quality("phi-3.5-mini", CPU, 4170, 2),
 				quality("mistral-7b", CPU, 2840, 2),
+				kvQuality("tinyllama-1.1b", CPU, 400, 2),
+				kvQuality("qwen2.5-3b", CPU, 1300, 2),
+				kvQuality("phi-3.5-mini", CPU, 3800, 3),
+				kvQuality("mistral-7b", CPU, 2600, 2),
 				throughput("tinyllama-1.1b", 2048, false, CPU, 6, 465, 2),
 				throughput("tinyllama-1.1b", 128, true, GPU, 6, 10, 2),
 				throughput("qwen2.5-3b", 128, false, CPU, 8, 150, 2),
@@ -261,6 +265,14 @@ final class ProbeCatalog {
 		return new Probe("quality." + modelId, "Mean NLL over 2048 tokens, integer and float-activation kernels, "
 				+ m.title(), ProbeKind.CHECK, suites, Requirements.cpu(8L << 30), List.of(modelId), cost, priority,
 				"QualityProbe", Map.of("childHeap", m.heap()), Math.max(7200, 3 * cost), "512m");
+	}
+
+	/** Mean NLL over the quality text on one model, q8_0 keys with q4_0 values against an f16 host KV, CPU. */
+	private static Probe kvQuality(String modelId, Set<String> suites, int cost, int priority) {
+		CatalogModel m = CatalogModel.byId(modelId);
+		return new Probe("kv-quality." + modelId, "Mean NLL over 2048 tokens, q8_0 K and q4_0 V host KV against f16 host KV, "
+				+ m.title(), ProbeKind.CHECK, suites, Requirements.cpu(8L << 30), List.of(modelId), cost, priority,
+				"KvQualityProbe", Map.of("childHeap", m.heap()), Math.max(7200, 3 * cost), "512m");
 	}
 
 	/** The throughput harness's two lanes, prefill at {@code nPrompt} and generation, on one model and backend. */

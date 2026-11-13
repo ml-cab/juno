@@ -28,6 +28,7 @@ import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
@@ -1547,6 +1548,11 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 					this::layerOnDevice);
 		}
 		return true;
+	}
+
+	@Override
+	public PagedKvArena pagedKvArena() {
+		return HandlerKvShare.pagedArena(kvLayout);
 	}
 
 	@Override

@@ -25,7 +25,7 @@ import java.util.stream.IntStream;
  * {@code discard} positions; rotating the cached keys is exact for rotary
  * embeddings and avoids recomputing the kept tokens.
  *
- * <p>Works on any {@link SessionKvTensor} (dense or paged, f16 or q8_0). A q8_0
+ * <p>Works on any {@link SessionKvTensor} (dense or paged, f16, q8_0 or q4_0). A quantized
  * key row is re-encoded after rotation, which adds one rounding step per shift.
  */
 public final class KvContextShift {

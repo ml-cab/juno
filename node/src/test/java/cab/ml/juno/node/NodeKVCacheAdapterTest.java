@@ -248,6 +248,36 @@ class NodeKVCacheAdapterTest {
         }
     }
 
+    @Test
+    void flush_paged_q4_round_trips_the_rows_the_tensor_read() {
+        var arena = new cab.ml.juno.kvcache.PagedKvArena(4, KV_DIM,
+                cab.ml.juno.kvcache.KvElementType.Q4_0,
+                cab.ml.juno.kvcache.KvElementType.Q8_0);
+        manager = new KVCacheManager(
+                new GpuKVCache(1024 * 1024L),
+                new CpuKVCache(64),
+                cab.ml.juno.kvcache.LayerRange.all(),
+                arena);
+        adapter = new NodeKVCacheAdapter(manager);
+
+        var k = arena.newK();
+        var v = arena.newV();
+        float[] tok = new float[KV_DIM];
+        for (int p = 0; p < SEQ_LEN; p++) {
+            for (int i = 0; i < KV_DIM; i++)
+                tok[i] = (float) Math.cos(p + i * 0.7) * (p + 1);
+            k.writeToken(p, tok);
+            v.writeToken(p, tok);
+        }
+        adapter.flush(REQUEST_ID, ABS_LAYER, k, v, SEQ_LEN);
+
+        var k2 = arena.newK();
+        var v2 = arena.newV();
+        assertThat(adapter.tryRestorePaged(REQUEST_ID, ABS_LAYER, KV_DIM, k2, v2)).isTrue();
+        assertThat(k2.toFloatArray(SEQ_LEN)).containsExactly(k.toFloatArray(SEQ_LEN));
+        assertThat(v2.toFloatArray(SEQ_LEN)).containsExactly(v.toFloatArray(SEQ_LEN));
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /** Allocate a float[] with seqLen * kvDim elements all set to {@code value}. */

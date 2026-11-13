@@ -29,7 +29,7 @@ import cab.ml.juno.kvcache.KVKey;
 import cab.ml.juno.kvcache.KvElementType;
 import cab.ml.juno.kvcache.PagedKvCodec;
 import cab.ml.juno.kvcache.PagedKvTensor;
-import cab.ml.juno.kvcache.Q8_0KvCodec;
+import cab.ml.juno.kvcache.KvRowCodec;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
 /**
@@ -211,10 +211,7 @@ public final class NodeKVCacheAdapter {
 	}
 
 	private static int bytesPerToken(KvElementType type, int kvDim) {
-		return switch (type) {
-		case F16 -> kvDim * Float.BYTES;
-		case Q8_0 -> Q8_0KvCodec.encodedBytes(kvDim);
-		};
+		return KvRowCodec.rowBytes(type, kvDim);
 	}
 
 	private static void encodeTensorPayload(DenseKvTensor t, int seqLen, byte[] dst, int dstOff) {
@@ -226,10 +223,10 @@ public final class NodeKVCacheAdapter {
 			for (float f : floats)
 				bb.putFloat(f);
 		}
-		case Q8_0 -> {
+		case Q8_0, Q4_0 -> {
 			int bpt = t.bytesPerToken();
 			for (int p = 0; p < seqLen; p++)
-				Q8_0KvCodec.encode(floats, p * t.kvDim(), t.kvDim(), dst, dstOff + p * bpt);
+				KvRowCodec.encode(t.type(), floats, p * t.kvDim(), t.kvDim(), dst, dstOff + p * bpt);
 		}
 		}
 	}
@@ -243,10 +240,10 @@ public final class NodeKVCacheAdapter {
 			for (int i = 0; i < out.length; i++)
 				out[i] = bb.getFloat();
 		}
-		case Q8_0 -> {
-			int bpt = Q8_0KvCodec.encodedBytes(kvDim);
+		case Q8_0, Q4_0 -> {
+			int bpt = KvRowCodec.rowBytes(type, kvDim);
 			for (int p = 0; p < seqLen; p++)
-				Q8_0KvCodec.decode(data, off + p * bpt, out, p * kvDim, kvDim);
+				KvRowCodec.decode(type, data, off + p * bpt, out, p * kvDim, kvDim);
 		}
 		}
 		return out;

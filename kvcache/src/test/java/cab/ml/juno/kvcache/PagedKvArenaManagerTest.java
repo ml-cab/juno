@@ -58,6 +58,39 @@ class PagedKvArenaManagerTest {
 		}
 	}
 
+	/**
+	 * A flushed block names each side's type in its header; a {@code q4_0} side is stored as its packed rows and
+	 * restores to the rows the live tensor read, bit for bit.
+	 */
+	@Test
+	@DisplayName("a q4_0 side flushes packed and restores the rows the tensor read")
+	void q4_blob_roundtrip() {
+		int kvDim = 64;
+		int seqLen = 6;
+		PagedKvArena arena = new PagedKvArena(4, kvDim, KvElementType.F16, KvElementType.Q4_0);
+		PagedKvTensor k = arena.newK();
+		PagedKvTensor v = arena.newV();
+		float[] tok = new float[kvDim];
+		for (int p = 0; p < seqLen; p++) {
+			for (int i = 0; i < kvDim; i++)
+				tok[i] = (float) Math.sin(p * 7 + i * 0.3) * (1 + p);
+			k.writeToken(p, tok);
+			v.writeToken(p, tok);
+		}
+		byte[] data = PagedKvCodec.encode(k, v, seqLen);
+		assertThat(data.length).isEqualTo(4 + seqLen * kvDim * Float.BYTES + seqLen * Q4_0KvCodec.encodedBytes(kvDim));
+		KVKey key = new KVKey("req-q4", 0);
+		Instant now = Instant.now();
+		KVBlock blk = new KVBlock(key, data, seqLen, 0, now, now, k.type(), v.type());
+		assertThat(blk.vType()).isEqualTo(KvElementType.Q4_0);
+
+		PagedKvTensor k2 = arena.newK();
+		PagedKvTensor v2 = arena.newV();
+		PagedKvCodec.decodeInto(blk, kvDim, k2, v2);
+		assertThat(k2.toFloatArray(seqLen)).containsExactly(k.toFloatArray(seqLen));
+		assertThat(v2.toFloatArray(seqLen)).containsExactly(v.toFloatArray(seqLen));
+	}
+
 	@Test
 	@DisplayName("evict clears tiers; released tensors free pool pages")
 	void evict_and_release() {

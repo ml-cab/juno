@@ -22,6 +22,7 @@ package cab.ml.juno.node;
 import java.util.Optional;
 
 import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.PagedKvArena;
 
 /**
  * Executes the transformer forward pass for this node's assigned layers.
@@ -378,5 +379,13 @@ public interface ForwardPassHandler {
 	/** Host KV bytes one position takes across this handler's layers, K and V; 0 when unknown. */
 	default long hostKvBytesPerToken() {
 		return 0;
+	}
+
+	/**
+	 * The page arena this handler's paged host KV comes from (continuous schedule), for the KV page figures the
+	 * health endpoint reports; null when its KV is dense or it keeps none.
+	 */
+	default PagedKvArena pagedKvArena() {
+		return null;
 	}
 }

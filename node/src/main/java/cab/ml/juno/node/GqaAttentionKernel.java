@@ -77,6 +77,11 @@ final class GqaAttentionKernel {
 		return headDim > 0 && headDim <= MAX_HEAD_DIM && (headDim & 3) == 0;
 	}
 
+	/** The head width the entry that runs {@code headDim} holds in registers: 64, 128 or 256. */
+	static int registerWidth(int headDim) {
+		return headDim <= 64 ? 64 : headDim <= 128 ? 128 : MAX_HEAD_DIM;
+	}
+
 	/**
 	 * Query rows per block: a tile of consecutive rows reads each staged key once,
 	 * which needs every row of it to attend over the same cache. So a window of
@@ -184,7 +189,8 @@ final class GqaAttentionKernel {
 			throw new IllegalArgumentException("window must be >= 0 (got " + window + ")");
 
 		CudaDriverBindings drv = CudaDriverBindings.instance();
-		MemorySegment fn = headDim <= 64 ? fnD64 : headDim <= 128 ? fnD128 : fnD256;
+		int width = registerWidth(headDim);
+		MemorySegment fn = width == 64 ? fnD64 : width == 128 ? fnD128 : fnD256;
 		int gridX = (batch + rowsPerBlock - 1) / rowsPerBlock;
 
 		try (Arena arena = Arena.ofConfined()) {
@@ -214,6 +220,38 @@ final class GqaAttentionKernel {
 							MemorySegment.NULL),
 					"cuLaunchKernel(gqa_attention)");
 		}
+	}
+
+	/**
+	 * As {@link #launch}, split into launches of at most {@code budget} work each ({@link BoundedLaunches}), the
+	 * split falling between whole blocks of {@code rowsPerBlock} rows, every launch with the same
+	 * {@code rowsPerBlock}: the output is bit for bit one launch's. {@code hostSeqLens} holds the values of the
+	 * device {@code seqLens} table. A window within the budget is the single {@link #launch} it was.
+	 *
+	 * @return the number of launches made
+	 */
+	int launchBounded(MemorySegment qBatch, MemorySegment kPtrs, MemorySegment vPtrs, MemorySegment seqLens,
+			MemorySegment outBatch, int[] hostSeqLens, int batch, int numHeads, int gqaRatio, int headDim, int kvDim,
+			int rowsPerBlock, int window, long budget, MemorySegment stream) {
+		long workPerKey = BoundedLaunches.attentionWorkPerKey(numHeads, headDim);
+		int end = BoundedLaunches.attentionEnd(0, hostSeqLens, batch, rowsPerBlock, window, workPerKey, budget);
+		if (end >= batch) {
+			launch(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim, kvDim, rowsPerBlock,
+					window, stream);
+			return 1;
+		}
+		long rowBytes = (long) numHeads * headDim * Float.BYTES;
+		long ptrBytes = ADDRESS.byteSize();
+		int launches = 0;
+		for (int start = 0; start < batch; start = end) {
+			if (launches > 0)
+				end = BoundedLaunches.attentionEnd(start, hostSeqLens, batch, rowsPerBlock, window, workPerKey, budget);
+			launch(qBatch.asSlice(start * rowBytes), kPtrs.asSlice(start * ptrBytes), vPtrs.asSlice(start * ptrBytes),
+					seqLens.asSlice((long) start * Integer.BYTES), outBatch.asSlice(start * rowBytes), end - start,
+					numHeads, gqaRatio, headDim, kvDim, rowsPerBlock, window, stream);
+			launches++;
+		}
+		return launches;
 	}
 
 	private static MemorySegment pointerArg(Arena arena, MemorySegment value) {

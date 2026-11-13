@@ -53,6 +53,7 @@ feature:context-shift	Context shift opt-in, decode-time shift and the limit erro
 feature:long-prompt	Long prompts, streamed text equal to blocking	long-prompt.*, gpu.long-prompt.*
 feature:static-batching	--parallel micro-batching: batched replies equal single ones	consistency.tinyllama, gpu.consistency.tinyllama, parallel.tinyllama, gpu.parallel.tinyllama
 feature:session-reuse	x_juno_session_id prefix reuse	schedule.tinyllama, gpu.schedule.tinyllama
+feature:kv-page-reclaim	Idle paged KV pages released after a reclaim period, counted on the health endpoint, replies unchanged	schedule.tinyllama, gpu.schedule.tinyllama	the continuous server runs with -Djuno.kv.reclaimPeriodMs=500
 feature:mixed-prefill	Prefill chunks inside continuous decode steps	mixed-prefill.tinyllama, gpu.mixed-prefill.tinyllama
 feature:prefill-batch	--prefill-batch	prefill-batch.tinyllama, gpu.prefill-batch.tinyllama
 feature:gpu-residency	Device-resident decode	gpu.residency.tinyllama
@@ -60,6 +61,7 @@ feature:batched-gpu-decode	A decode batch runs in the device region: replies equ
 feature:packed-kquant	Packed K-quant matmul	gpu.packed-kquant.*
 feature:cpu-integer-kernels	CPU integer kernels and their vector width	cpu.hot-path.*, cpu.kernel-width
 feature:quality	Mean NLL per model	quality.*
+feature:kv-q4-0	q4_0 values with q8_0 keys in the host KV: mean NLL against an f16 host KV per sweep model	kv-quality.*	CPU backend, so attention reads the stored rows; held to 1.02x the f16 NLL; q4_0 keys are a warned setting, not scored
 feature:throughput	Prefill and generation throughput, allocation and GC	cpu.throughput.*, gpu.throughput.*
 feature:lora-merge	A trained adapter merged into a GGUF and served	lora.tinyllama, gpu.lora.tinyllama
 feature:unit-tests	Every module's unit tests and the GPU test groups	cpu.unit-tests, gpu.unit-tests, rocm.unit-tests

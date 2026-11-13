@@ -22,6 +22,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 
+import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
 
@@ -182,6 +183,19 @@ public final class LocalInferencePipeline implements InferencePipeline {
 			if (seen.add(stage.handler()))
 				sum += stage.handler().hostKvBytesPerToken();
 		return sum;
+	}
+
+	/** Each distinct arena once, in stage order: handlers may repeat across stages or share one arena. */
+	@Override
+	public List<PagedKvArena> pagedKvArenas() {
+		Set<PagedKvArena> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		List<PagedKvArena> out = new ArrayList<>();
+		for (NodeStage stage : stages) {
+			PagedKvArena a = stage.handler().pagedKvArena();
+			if (a != null && seen.add(a))
+				out.add(a);
+		}
+		return out;
 	}
 
 	@Override

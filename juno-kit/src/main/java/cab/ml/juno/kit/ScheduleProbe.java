@@ -37,12 +37,17 @@ import cab.ml.juno.player.JunoHttpClient;
  * session of {@code turns} turns under a shared system prompt and {@code x_juno_session_id} (first against later
  * turn latency, prefix-cache lookups and hits from the health endpoint, counted over that session alone). Checks:
  * the health endpoint reports the schedule asked for, every request answers, and on the continuous schedule the
- * recording shows decode steps shared by concurrent requests.
+ * recording shows decode steps shared by concurrent requests. The continuous server also releases idle KV pages
+ * every {@value #RECLAIM_PERIOD_MS} ms: once the workloads end and the health endpoint counts pages reclaimed, a
+ * greedy request taken before them gets the same reply again, on pages made after the reclaim.
  */
 final class ScheduleProbe implements KitProbe {
 
 	static final String SYSTEM_PROMPT = "You are a helpful assistant that answers briefly and accurately.";
 	private static final Duration START = Duration.ofMinutes(10);
+	/** The continuous server's KV page reclaim period, short so that the probe sees pages released. */
+	static final int RECLAIM_PERIOD_MS = 500;
+	private static final Duration RECLAIM_WAIT = Duration.ofSeconds(30);
 
 	@Override
 	public ProbeReport run(String id, Map<String, String> args) throws Exception {
@@ -61,18 +66,26 @@ final class ScheduleProbe implements KitProbe {
 			List<String> a = JunoProcess.localArgs(model, maxTokens);
 			a.addAll(List.of(gpu ? "--gpu" : "--cpu", "--parallel", parallel, "--batch-window-ms",
 					args.getOrDefault("batchWindowMs", "50"), "--schedule", schedule, "--jfr", "30m"));
-			JunoProcess s = JunoProcess.serve(work.resolve(schedule), heap, a, START);
+			boolean continuous = schedule.equals("continuous");
+			List<String> props = continuous ? List.of("-Djuno.kv.reclaimPeriodMs=" + RECLAIM_PERIOD_MS) : List.of();
+			JunoProcess s = JunoProcess.serve(work.resolve(schedule), heap, props, a, START);
 			ConcurrentChats.Round tps;
 			List<StreamTiming.Result> streams;
 			List<Double> turnMs = new ArrayList<>();
 			int turnsOk = 0;
 			long lookups;
 			long hits;
+			String beforeReclaim = null;
+			String afterReclaim = null;
+			long reclaimed = 0;
+			long liveAfter = 0;
 			try {
 				String got = s.get("/v1/cluster/health").json().path("schedule").asText("");
 				checks.add(new ProbeReport.Check(schedule + ": the server runs the " + schedule + " schedule",
 						got.equals(schedule), "the health endpoint reports '" + got + "'"));
 				String m = s.modelId();
+				if (continuous)
+					beforeReclaim = greedy(s, m, maxTokens);
 				ConcurrentChats.run(s, m, ParallelProbe.PROMPT, sessions, maxTokens);
 				tps = ConcurrentChats.run(s, m, ParallelProbe.PROMPT, sessions, maxTokens);
 				streams = StreamTiming.concurrent(new JunoHttpClient(s.base()), m,
@@ -96,6 +109,17 @@ final class ScheduleProbe implements KitProbe {
 				JsonNode after = s.get("/v1/cluster/health").json();
 				lookups = after.path("prefixLookups").asLong(0) - before.path("prefixLookups").asLong(0);
 				hits = after.path("prefixHits").asLong(0) - before.path("prefixHits").asLong(0);
+				if (continuous) {
+					long deadline = System.nanoTime() + RECLAIM_WAIT.toNanos();
+					JsonNode h = s.get("/v1/cluster/health").json();
+					while (h.path("kvPagesReclaimed").asLong(0) == 0 && System.nanoTime() < deadline) {
+						Thread.sleep(200);
+						h = s.get("/v1/cluster/health").json();
+					}
+					reclaimed = h.path("kvPagesReclaimed").asLong(0);
+					liveAfter = h.path("kvPagesLive").asLong(0);
+					afterReclaim = greedy(s, m, maxTokens);
+				}
 			} finally {
 				s.close();
 			}
@@ -104,7 +128,14 @@ final class ScheduleProbe implements KitProbe {
 					tps.allOk() && streamsOk == sessions && turnsOk == turns, "blocking " + (tps.allOk() ? "all"
 							: tps.failures()) + "; streams " + streamsOk + "/" + sessions + "; turns " + turnsOk + "/"
 							+ turns));
-			if (schedule.equals("continuous")) {
+			if (continuous) {
+				boolean same = beforeReclaim != null && beforeReclaim.equals(afterReclaim);
+				checks.add(new ProbeReport.Check("continuous: idle KV pages reclaimed, replies unchanged",
+						reclaimed > 0 && same, reclaimed + " pages reclaimed within " + RECLAIM_WAIT.toSeconds()
+								+ " s, " + liveAfter + " still live (the session's); the greedy reply after the"
+								+ " reclaim " + (same ? "equals" : "differs from") + " the one before"));
+				facts.put("continuous.kvPagesReclaimed", reclaimed);
+				facts.put("continuous.kvPagesLiveAfterReclaim", liveAfter);
 				JsonNode jfr = s.metrics();
 				double maxBatch = jfr.path("juno.ContinuousStep.max_decode_batch").asDouble(0);
 				double shared = jfr.path("juno.ContinuousStep.shared_steps").asDouble(0);
@@ -134,5 +165,14 @@ final class ScheduleProbe implements KitProbe {
 		facts.put("backend", gpu ? "gpu" : "cpu");
 		return new ProbeReport(id, ProbeKind.CHECK, checks.stream().allMatch(ProbeReport.Check::passed), checks,
 				readings, facts);
+	}
+
+	/** One greedy chat reply to the parallel probe's prompt; null when the request fails. */
+	private static String greedy(JunoProcess s, String model, int maxTokens) throws Exception {
+		ObjectNode body = Json.MAPPER.createObjectNode().put("model", model).put("max_tokens", maxTokens)
+				.put("temperature", 0).put("stream", false);
+		body.putArray("messages").addObject().put("role", "user").put("content", ParallelProbe.PROMPT);
+		JunoProcess.Answer ans = s.post(GrammarProbe.PATH, body.toString());
+		return ans.status() == 200 ? GrammarProbe.content(ans) : null;
 	}
 }

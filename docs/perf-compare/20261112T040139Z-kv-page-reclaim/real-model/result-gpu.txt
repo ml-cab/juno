@@ -1,0 +1,10 @@
+{"at":"1 started","kvPagesLive":0,"kvPagesIdle":0,"kvPagesReclaimed":0,"kvPageBytes":0,"prefixHits":0}
+{"at":"2 after one request and a session turn","kvPagesLive":1188,"kvPagesIdle":0,"kvPagesReclaimed":44,"kvPageBytes":19464192,"prefixHits":0}
+{"at":"3 after a burst of 8 concurrent requests","kvPagesLive":1188,"kvPagesIdle":9504,"kvPagesReclaimed":44,"kvPageBytes":175177728,"prefixHits":0}
+{"at":"4 idle for over two reclaim periods","kvPagesLive":1188,"kvPagesIdle":0,"kvPagesReclaimed":9548,"kvPageBytes":19464192,"prefixHits":0}
+{"at":"5 after the same request and the session's next turn","kvPagesLive":1188,"kvPagesIdle":1188,"kvPagesReclaimed":9548,"kvPageBytes":38928384,"prefixHits":1}
+reply before reclaim	The shelf holding item 3 is the one that contains the book. 
+reply after reclaim	The shelf holding item 3 is the one that contains the book. 
+equal	yes
+session turn 1	The shelf holding item 5 is the one that contains it. 
+session turn 2	The shelf holding item 5 is the one that contains it. 

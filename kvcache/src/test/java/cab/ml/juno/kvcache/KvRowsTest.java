@@ -161,7 +161,8 @@ class KvRowsTest {
 			t.writeToken(p, row(rng));
 		KvRows rows = t.attentionRows(12);
 		for (int p = 6; p < 12; p++)
-			assertThat(readRow(rows, p)).as("position %d past the new request's writes", p).containsOnly(0f);
+			for (float v : readRow(rows, p)) // zeroed q4_0 storage decodes as -0: zero, with the scale's sign
+				assertThat(v == 0f).as("position %d past the new request's writes reads %s", p, v).isTrue();
 	}
 
 	@Test
@@ -198,7 +199,7 @@ class KvRowsTest {
 		}
 	}
 
-	/** Row {@code t} as attention reads it: page {@code t / rowsPerPage}, decoded in place for Q8_0. */
+	/** Row {@code t} as attention reads it: page {@code t / rowsPerPage}, decoded in place for Q8_0 and Q4_0. */
 	private static float[] readRow(KvRows rows, int t) {
 		int page = t / rows.rowsPerPage();
 		int slot = t - page * rows.rowsPerPage();
@@ -206,7 +207,7 @@ class KvRowsTest {
 		if (rows.type() == KvElementType.F16)
 			System.arraycopy(rows.floatPage(page), slot * KV_DIM, out, 0, KV_DIM);
 		else
-			Q8_0KvCodec.decodeRange(rows.bytePage(page), slot * rows.bytesPerRow(), 0, KV_DIM, out, 0);
+			rows.decodeRange(rows.bytePage(page), slot * rows.bytesPerRow(), 0, KV_DIM, out, 0);
 		return out;
 	}
 

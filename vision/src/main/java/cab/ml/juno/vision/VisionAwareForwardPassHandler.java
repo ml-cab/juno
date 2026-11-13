@@ -20,6 +20,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.node.BatchForwardRequest;
 import cab.ml.juno.node.BatchForwardResult;
 import cab.ml.juno.node.ForwardPassHandler;
@@ -377,6 +378,11 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
     @Override
     public long hostKvBytesPerToken() {
         return textHandler.hostKvBytesPerToken();
+    }
+
+    @Override
+    public PagedKvArena pagedKvArena() {
+        return textHandler.pagedKvArena();
     }
 
     @Override

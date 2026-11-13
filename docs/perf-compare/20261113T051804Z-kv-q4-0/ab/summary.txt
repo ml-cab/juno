@@ -1,0 +1,16 @@
+lane side reps pp(med; vals) tg(med; vals) alloc_rec(med) gc(max) prompt_tokens
+f16 A 3 34.08 (32.67, 34.12, 34.08) 12.00 (11.28, 12.00, 12.01) 310503.75 0 {512}
+f16 B 3 34.21 (34.40, 34.21, 32.35) 11.97 (11.97, 11.84, 12.00) 310603 0 {512}
+q4 B 3 30.86 (32.10, 30.34, 30.86) 11.10 (11.12, 11.10, 10.93) 310011 0 {512}
+q8 A 3 32.33 (32.30, 32.52, 32.33) 11.44 (11.50, 11.44, 11.37) 304853.5 0 {512}
+q8 B 3 32.36 (32.36, 31.25, 32.39) 11.38 (11.39, 11.38, 11.35) 296824.875 0 {512}
+f16 B/A: pp 1.004 tg 0.997 alloc 1.000
+   replies equal: 3 of 3
+q8 B/A: pp 1.001 tg 0.995 alloc 0.974
+   replies equal: 3 of 3
+q4 over q8 (candidate): pp 0.954 tg 0.975 alloc 1.044
+f16 A reply: 'Sure! Here\'s an example of a complete sentence with the word "less" in it:\n\nThe lessons were less intimidating than I ex'
+f16 B reply: 'Sure! Here\'s an example of a complete sentence with the word "less" in it:\n\nThe lessons were less intimidating than I ex'
+q4 B reply: "I'm not a human. I don't have a name or gender. However, I can provide you with information about myself. My name is joh"
+q8 A reply: 'Sure! Here\'s an example of a complete sentence with the word "less" in it:\n\nThe lessons were less intimidating than I ex'
+q8 B reply: 'Sure! Here\'s an example of a complete sentence with the word "less" in it:\n\nThe lessons were less intimidating than I ex'

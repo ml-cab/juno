@@ -1,0 +1,19 @@
+[prefill-smoke] candidate jar: dist/bounded-launches/candidate-shaded.jar (52ff3d6cbf143534)
+[prefill-smoke] baseline jar: dist/bounded-launches/baseline-shaded.jar (8c0edb793628f2e4)
+[prefill-smoke] PASS: mistral-static-candidate 2048: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-static-candidate 2048: prompt_tokens 2044 within 10% of 2048
+[prefill-smoke] PASS: mistral-static-candidate 2048: streamed text equals non-streamed (TTFT 4954.80810546875 ms)
+[prefill-smoke] PASS: mistral-static-candidate 8192: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-static-candidate 8192: prompt_tokens 8472 within 10% of 8192
+[prefill-smoke] PASS: mistral-static-candidate 8192: streamed text equals non-streamed (TTFT 347787.59375 ms)
+[prefill-smoke] PASS: mistral static 2048: greedy text identical to the baseline build
+[prefill-smoke] PASS: mistral static 8192: greedy text identical to the baseline build
+[prefill-smoke] PASS: mistral-continuous-candidate 2048: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-continuous-candidate 2048: prompt_tokens 2044 within 10% of 2048
+[prefill-smoke] PASS: mistral-continuous-candidate 2048: streamed text equals non-streamed (TTFT 10779.15771484375 ms)
+[prefill-smoke] PASS: mistral-continuous-candidate 8192: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-continuous-candidate 8192: prompt_tokens 8472 within 10% of 8192
+[prefill-smoke] PASS: mistral-continuous-candidate 8192: streamed text equals non-streamed (TTFT 74932.48022460938 ms)
+[prefill-smoke] PASS: mistral continuous 2048: greedy text identical to the baseline build
+[prefill-smoke] PASS: mistral continuous 8192: greedy text identical to the baseline build
+exit=0

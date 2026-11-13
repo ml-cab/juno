@@ -1,0 +1,4 @@
+{"at":"1 started","kvPagesLive":0,"kvPagesIdle":0,"kvPagesReclaimed":0,"kvPageBytes":0,"prefixHits":0}
+{"at":"2 after one request and a session turn","kvPagesLive":1188,"kvPagesIdle":0,"kvPagesReclaimed":1176,"kvPageBytes":19464192,"prefixHits":0}
+{"at":"3 after a burst of 8 concurrent requests","kvPagesLive":1188,"kvPagesIdle":4752,"kvPagesReclaimed":5928,"kvPageBytes":97320960,"prefixHits":0}
+{"at":"4 idle for over two reclaim periods","kvPagesLive":1188,"kvPagesIdle":0,"kvPagesReclaimed":10680,"kvPageBytes":19464192,"prefixHits":0}

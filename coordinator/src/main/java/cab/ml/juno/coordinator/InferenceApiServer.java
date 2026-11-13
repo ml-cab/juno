@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.KvPageCounts;
 import cab.ml.juno.node.PoolingMode;
 import cab.ml.juno.registry.ModelDescriptor;
 import cab.ml.juno.registry.ModelIdResolver;
@@ -912,6 +913,11 @@ public final class InferenceApiServer {
 		body.put("sharedPrefixTokens", scheduler.sharedPrefixTokens());
 		body.put("sharedPrefixHeldTokens", scheduler.sharedPrefixHeldTokens());
 		body.put("sharedPrefixBudget", scheduler.sharedPrefixBudget());
+		KvPageCounts pages = scheduler.kvPages();
+		body.put("kvPagesLive", pages.livePages());
+		body.put("kvPagesIdle", pages.idlePages());
+		body.put("kvPagesReclaimed", pages.reclaimedPages());
+		body.put("kvPageBytes", pages.storedBytes());
 		ctx.json(body);
 	}
 

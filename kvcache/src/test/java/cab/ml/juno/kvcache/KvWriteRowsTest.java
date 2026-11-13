@@ -50,6 +50,12 @@ class KvWriteRowsTest {
 	}
 
 	@Test
+	@DisplayName("dense Q4_0 equals token-at-a-time writes")
+	void denseQ4() {
+		check(new DenseKvTensor(KvElementType.Q4_0, KV_DIM), new DenseKvTensor(KvElementType.Q4_0, KV_DIM));
+	}
+
+	@Test
 	@DisplayName("paged equals token-at-a-time writes")
 	void paged() {
 		PagedKvArena arena = new PagedKvArena(16, KV_DIM, KvElementType.F16, KvElementType.F16);

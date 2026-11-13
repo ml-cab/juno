@@ -469,6 +469,8 @@ final class PrefillWindowRegion implements AutoCloseable {
 		/** Pinned host copy of {@link #tables}, written before each attention launch. */
 		private final MemorySegment tablesHost;
 		private final long tablesBytes;
+		/** The sequence lengths of {@link #tables}, on the heap: what the bounded attention launches are planned on. */
+		private final int[] seqLensHost;
 		/** The layer's input, copied here before the layer updates the residual in place; see {@link #recoverLayerInput}. */
 		private final MemorySegment xIn;
 		private final ResidentActivation[] qkvActs;
@@ -509,6 +511,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 			}
 			this.chain = c;
 			this.tablesHost = host.reinterpret(tablesBytes);
+			this.seqLensHost = new int[capacity];
 			this.stream = c.stream();
 			this.spans = c.spans();
 			this.qkvHost = fusedQkv ? new float[capacity][shape.qDim() + 2 * shape.kvDim()] : null;
@@ -803,13 +806,15 @@ final class PrefillWindowRegion implements AutoCloseable {
 					tablesHost.setAtIndex(ADDRESS, b, kPtr);
 					tablesHost.setAtIndex(ADDRESS, w + b, vPtr);
 					tablesHost.set(JAVA_INT, 2 * ptrBytes + (long) b * Integer.BYTES, startPos + b + 1);
+					seqLensHost[b] = startPos + b + 1;
 				}
 				long used = 2 * ptrBytes + (long) w * Integer.BYTES;
 				copyTables(used, w);
 				mark = spans.begin(stream, w);
-				attention.launch(q.devicePointer(), tables, tables.asSlice(ptrBytes), tables.asSlice(2 * ptrBytes),
-						attn.devicePointer(), w, shape.numHeads(), shape.gqaRatio(), shape.headDim(), shape.kvDim(),
-						GqaAttentionKernel.rowsPerBlock(true, w), window, stream);
+				attention.launchBounded(q.devicePointer(), tables, tables.asSlice(ptrBytes), tables.asSlice(2 * ptrBytes),
+						attn.devicePointer(), seqLensHost, w, shape.numHeads(), shape.gqaRatio(), shape.headDim(),
+						shape.kvDim(), GqaAttentionKernel.rowsPerBlock(true, w), window,
+						BoundedLaunches.ATTENTION_WORK_PER_LAUNCH, stream);
 				spans.compute(DeviceComputeEvent.GQA_ATTENTION_REGION, w, mark, stream);
 				attn.markWritten(w);
 				return true;

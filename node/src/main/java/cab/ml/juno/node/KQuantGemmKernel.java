@@ -182,13 +182,15 @@ final class KQuantGemmKernel {
 	/**
 	 * As {@link #multiply}, for {@code batch} FP16 activation rows {@code dXh}: the
 	 * prefill paths' GEMM input. The Q8_1 bytes are those {@link #multiply} makes
-	 * from the same values widened to FP32.
+	 * from the same values widened to FP32. The multiply runs in launches of bounded
+	 * work ({@link #launchBounded}, {@link BoundedLaunches#GEMM_WORK_PER_LAUNCH}), the
+	 * same bits as one launch.
 	 */
 	void multiplyHalf(DeviceQ4KMatrix A, MemorySegment dXh, MemorySegment dQ8, MemorySegment dY, int batch,
 			int ldc, MemorySegment stream) {
 		Objects.requireNonNull(A, "A");
 		quantizeHalf(dXh, dQ8, batch, A.cols(), stream);
-		launch(A, dQ8, dY, batch, ldc, stream);
+		launchBounded(A, dQ8, dY, batch, ldc, BoundedLaunches.GEMM_WORK_PER_LAUNCH, stream);
 	}
 
 	/** Packs {@code batch} rows of {@code cols} FP16 values at {@code dXh} as Q8_1 into {@code dQ8}. */
@@ -222,7 +224,39 @@ final class KQuantGemmKernel {
 			throw new IllegalArgumentException("batch must be positive: " + batch);
 		if (ldc < rows)
 			throw new IllegalArgumentException("ldc " + ldc + " < rows " + rows);
+		launchTiled(A, dQ8, dY, batch, ldc, columnTile(batch), stream);
+	}
+
+	/**
+	 * As {@link #launch}, split into launches of at most {@code budget} work each ({@link BoundedLaunches}): whole
+	 * {@link BoundedLaunches#GEMM_ROW_STEP}-row runs of the batch, every launch with the column tile the whole
+	 * batch takes. Activation rows are independent, so the output is bit for bit one launch's. A batch within the
+	 * budget is the single {@link #launch} it was.
+	 *
+	 * @return the number of launches made
+	 */
+	int launchBounded(DeviceQ4KMatrix A, MemorySegment dQ8, MemorySegment dY, int batch, int ldc, long budget,
+			MemorySegment stream) {
+		Objects.requireNonNull(A, "A");
+		int step = BoundedLaunches.gemmRows(A.rows(), A.cols(), budget);
+		if (batch <= step) {
+			launch(A, dQ8, dY, batch, ldc, stream);
+			return 1;
+		}
+		launch(A, dQ8, dY, step, ldc, stream); // validates once, and is the first run
 		int tile = columnTile(batch);
+		long q8Row = Q4KMmqKernel.q8Bytes(A.cols());
+		long yRow = (long) ldc * Float.BYTES;
+		int launches = 1;
+		for (int start = step; start < batch; start += step, launches++)
+			launchTiled(A, dQ8.asSlice(start * q8Row), dY.asSlice(start * yRow), Math.min(step, batch - start), ldc,
+					tile, stream);
+		return launches;
+	}
+
+	private void launchTiled(DeviceQ4KMatrix A, MemorySegment dQ8, MemorySegment dY, int batch, int ldc, int tile,
+			MemorySegment stream) {
+		int rows = A.rows(), cols = A.cols();
 		MemorySegment function = functions[typeIndex(A.quantType())][tileIndex(tile)];
 		int gridX = (batch + tile - 1) / tile;
 		int gridY = (rows + TILE_ROWS - 1) / TILE_ROWS;

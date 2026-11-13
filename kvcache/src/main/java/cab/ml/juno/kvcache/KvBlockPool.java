@@ -17,7 +17,6 @@ package cab.ml.juno.kvcache;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -27,7 +26,8 @@ import java.util.List;
  *
  * <p>Used by the continuous-schedule paged KV path. A page is a float array of
  * {@code kvDim} floats per row for {@link KvElementType#F16} (the current float
- * path) or a byte array of packed q8_0 rows for {@link KvElementType#Q8_0}.
+ * path) or a byte array of packed rows for {@link KvElementType#Q8_0} and {@link KvElementType#Q4_0}
+ * ({@link KvRowCodec}).
  * Attention reads the pages in place ({@link KvRows}), through
  * {@link #floatPage} and {@link #bytePage}.
  *
@@ -38,6 +38,16 @@ import java.util.List;
  * {@link #writeToken} and {@link #copyToken} refuse to write into it, and a
  * holder that needs to write first takes a page of its own with
  * {@link #exclusive}.
+ *
+ * <p>A page every holder has dropped is idle: it keeps its storage, and the
+ * next {@link #allocate} takes it before making a new one. Idle pages are what
+ * a burst of requests leaves behind. {@link #reclaimIdle} releases the storage
+ * of those that have stayed unused for a whole period between two calls, so the
+ * heap gets them back once the load has dropped while a steady load keeps
+ * reusing them; their ids stay, and get new zeroed storage when next allocated.
+ * No live page is moved or touched: attention reads each page where it is
+ * through its table, so a page in use never needs to change place.
+ * {@link KvPageReclaimer} calls it in the background.
  */
 public final class KvBlockPool {
 
@@ -54,8 +64,17 @@ public final class KvBlockPool {
 	private final List<byte[]> bytePages;
 	/** Holders per page; 0 means free. Indexed by block id, grown with {@link #pages}. */
 	private int[] refs = new int[16];
-	private final ArrayDeque<Integer> free = new ArrayDeque<>();
+	/** Idle pages that still hold their storage, reused first. */
+	private final IntRing free = new IntRing();
+	/** Free ids whose storage {@link #reclaimIdle} released; given new storage when next allocated. */
+	private final IntRing released = new IntRing();
 	private int live;
+	/** The fewest idle pages since the last {@link #reclaimIdle}: that many stayed unused the whole period. */
+	private int fewestIdle;
+	private long reclaimed;
+
+	/** Most idle pages released per hold of the lock, so a large reclaim never stalls a writer for long. */
+	static final int RECLAIM_CHUNK = 256;
 
 	public KvBlockPool(int pageSize, int kvDim, KvElementType type) {
 		if (pageSize < 1)
@@ -67,10 +86,7 @@ public final class KvBlockPool {
 		this.pageSize = pageSize;
 		this.kvDim = kvDim;
 		this.type = type;
-		this.bytesPerToken = switch (type) {
-		case F16 -> kvDim * Float.BYTES;
-		case Q8_0 -> Q8_0KvCodec.encodedBytes(kvDim);
-		};
+		this.bytesPerToken = KvRowCodec.rowBytes(type, kvDim);
 		this.bytesPerPage = pageSize * bytesPerToken;
 		this.floatPages = type == KvElementType.F16 ? new ArrayList<>() : null;
 		this.bytePages = type == KvElementType.F16 ? null : new ArrayList<>();
@@ -100,10 +116,17 @@ public final class KvBlockPool {
 	}
 
 	private int allocateLocked() {
-		Integer recycled = free.pollFirst();
 		int id;
-		if (recycled != null) {
-			id = recycled;
+		if (!free.isEmpty()) {
+			id = free.pollFirst();
+			if (free.size() < fewestIdle)
+				fewestIdle = free.size();
+		} else if (!released.isEmpty()) {
+			id = released.pollFirst();
+			if (floatPages != null)
+				floatPages.set(id, new float[pageSize * kvDim]);
+			else
+				bytePages.set(id, new byte[bytesPerPage]);
 		} else {
 			id = pageCount();
 			if (floatPages != null)
@@ -162,6 +185,68 @@ public final class KvBlockPool {
 				System.arraycopy(bytePages.get(blockId), 0, bytePages.get(copy), 0, bytesPerPage);
 			refs[blockId]--;
 			return copy;
+		}
+	}
+
+	/**
+	 * Releases the storage of the idle pages that stayed unused since the previous call (the first call counts from
+	 * construction), and starts the next period. A page taken and returned during the period was needed, so it
+	 * keeps its storage; live and shared pages are never touched. Returns the pages released.
+	 */
+	public int reclaimIdle() {
+		int target;
+		synchronized (lock) {
+			target = fewestIdle;
+		}
+		int done = 0;
+		while (true) {
+			synchronized (lock) {
+				int n = Math.min(Math.min(RECLAIM_CHUNK, target - done), free.size());
+				for (int i = 0; i < n; i++) {
+					int id = free.pollLast();
+					if (floatPages != null)
+						floatPages.set(id, null);
+					else
+						bytePages.set(id, null);
+					released.addLast(id);
+				}
+				done += n;
+				reclaimed += n;
+				if (n == 0 || done == target) {
+					fewestIdle = free.size();
+					return done;
+				}
+			}
+			// The lock is not fair: give a writer waiting on it the next hold.
+			Thread.yield();
+		}
+	}
+
+	/** Idle pages that still hold their storage. */
+	public int idlePages() {
+		synchronized (lock) {
+			return free.size();
+		}
+	}
+
+	/** Pages that hold storage: the live ones and the idle ones. */
+	public int storedPages() {
+		synchronized (lock) {
+			return live + free.size();
+		}
+	}
+
+	/** Heap bytes the pages' storage takes: {@link #storedPages} pages. */
+	public long storedBytes() {
+		synchronized (lock) {
+			return (long) (live + free.size()) * bytesPerPage;
+		}
+	}
+
+	/** Idle pages whose storage {@link #reclaimIdle} has released, since construction. */
+	public long reclaimedPages() {
+		synchronized (lock) {
+			return reclaimed;
 		}
 	}
 
@@ -233,7 +318,7 @@ public final class KvBlockPool {
 		if (f32 != null)
 			System.arraycopy(src, srcOff, f32, slot * kvDim, kvDim);
 		else
-			Q8_0KvCodec.encode(src, srcOff, kvDim, q8, slot * bytesPerToken);
+			KvRowCodec.encode(type, src, srcOff, kvDim, q8, slot * bytesPerToken);
 	}
 
 	public void readToken(int blockId, int slot, float[] dst) {
@@ -248,7 +333,7 @@ public final class KvBlockPool {
 		if (floatPages != null)
 			System.arraycopy(floatPage(blockId), slot * kvDim, dst, dstOff, kvDim);
 		else
-			Q8_0KvCodec.decode(bytePage(blockId), slot * bytesPerToken, dst, dstOff, kvDim);
+			KvRowCodec.decode(type, bytePage(blockId), slot * bytesPerToken, dst, dstOff, kvDim);
 	}
 
 	/** Copy one stored row between slots, byte for byte (no re-encoding). */

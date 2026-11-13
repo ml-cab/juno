@@ -24,6 +24,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.KvPageCounts;
 import cab.ml.juno.kvcache.ServeScheduleOptions;
 
 /**
@@ -227,6 +228,14 @@ public final class RequestScheduler {
 	public int sharedPrefixBudget() {
 		SharedPrefixPool p = generationLoop.sharedPrefixes();
 		return p == null ? 0 : p.budgetTokens();
+	}
+
+	/**
+	 * The paged KV's pages now (live, idle) and those whose storage was released since startup; all zero on the
+	 * static schedule's dense KV and on remote stages.
+	 */
+	public KvPageCounts kvPages() {
+		return KvPageCounts.sum(generationLoop.pipeline().pagedKvArenas());
 	}
 
 	/** {@code prefixHits / prefixLookups}, or {@code 0} when no lookups. */

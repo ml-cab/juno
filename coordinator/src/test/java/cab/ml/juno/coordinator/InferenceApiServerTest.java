@@ -239,6 +239,15 @@ class InferenceApiServerTest {
 		assertThat(response.body()).contains("queueDepth");
 	}
 
+	@Test
+	void cluster_health_reports_kv_pages_zero_without_paged_kv() throws Exception {
+		var response = get("/cluster/health");
+
+		assertThat(response.statusCode()).isEqualTo(200);
+		for (String field : new String[] { "kvPagesLive", "kvPagesIdle", "kvPagesReclaimed", "kvPageBytes" })
+			assertThat(response.body()).contains("\"" + field + "\":0");
+	}
+
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
 	private HttpResponse<String> get(String path) throws Exception {

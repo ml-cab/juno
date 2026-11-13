@@ -44,6 +44,7 @@ class SessionKvLayoutShareTest {
 	@ParameterizedTest(name = "{0} {1}, {2} of {3} rows")
 	@CsvSource({ "static, f16, 40, 50", "static, q8_0, 40, 50", "continuous, f16, 40, 50",
 			"continuous, q8_0, 40, 50", "continuous, f16, 32, 50", "continuous, q8_0, 1, 50",
+			"static, q4_0, 40, 50", "continuous, q4_0, 40, 50", "continuous, q4_0, 1, 50",
 			"static, f16, 50, 50", "continuous, f16, 50, 50" })
 	void sharedPrefixReadsTheSourceRowsAndWritesStayApart(String schedule, String type, int len, int rows) {
 		SessionKvLayout layout = layout(schedule, type);
@@ -91,7 +92,7 @@ class SessionKvLayoutShareTest {
 	}
 
 	@ParameterizedTest(name = "{0}")
-	@CsvSource({ "f16", "q8_0" })
+	@CsvSource({ "f16", "q8_0", "q4_0" })
 	void thePagedPrefixHoldsTheSourcePagesUntilBothRelease(String type) {
 		SessionKvLayout layout = layout("continuous", type);
 		SessionKvTensor[] src = written(layout, 40, 5); // 3 pages per layer

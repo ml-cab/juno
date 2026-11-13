@@ -53,6 +53,7 @@ public final class SessionKvLayout {
 		ServeScheduleOptions schedule = ServeScheduleOptions.fromEnv();
 		KvPageSizeOptions page = KvPageSizeOptions.fromEnv();
 		CacheTypeOptions types = CacheTypeOptions.fromEnv();
+		KvKeyPrecisionNotice.announce(types);
 		PagedKvArena arena = schedule.usesPagedKv()
 				? PagedKvArena.fromOptions(page, kvDim, types)
 				: null;

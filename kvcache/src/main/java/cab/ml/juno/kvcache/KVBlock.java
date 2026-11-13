@@ -27,7 +27,7 @@ import java.time.Instant;
  * <li>{@link KvElementType#F16}: float32 LE — K then V, each {@code seqLen * kvDim}
  * floats (legacy adapter format).</li>
  * <li>Otherwise: opaque bytes produced by {@code NodeKVCacheAdapter} for the
- * declared element types (typically per-token Q8_0 packs).</li>
+ * declared element types (per-token Q8_0 or Q4_0 blocks).</li>
  * </ul>
  */
 public record KVBlock(KVKey key, byte[] data, // serialized keys + values

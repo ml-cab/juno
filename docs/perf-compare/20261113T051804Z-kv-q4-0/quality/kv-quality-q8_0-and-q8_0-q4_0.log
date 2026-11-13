@@ -1,0 +1,22 @@
+[INFO] Running cab.ml.juno.node.KvQuantQualityLiveTest
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 nll=2.45609 ppl=11.6591 self_agree_generated=512/512 s=295.4
+INFO: schedule=static cache-type-k=q8_0 cache-type-v=q8_0 kv-page-size ignored (dense)
+KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 nll=2.45553 nll_f16=2.45609 ratio=0.99977 ppl=11.6526 greedy_agree=511/512 (99.80%) first_disagree=20 text_argmax_agree_first512=506 (98.8%) s=162.7
+INFO: schedule=static cache-type-k=q8_0 cache-type-v=q4_0 kv-page-size ignored (dense)
+KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0/q4_0 nll=2.45655 nll_f16=2.45609 ratio=1.00019 ppl=11.6645 greedy_agree=506/512 (98.83%) first_disagree=20 text_argmax_agree_first512=501 (97.9%) s=164.0
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 nll=1.69656 ppl=5.4552 self_agree_generated=512/512 s=876.5
+INFO: schedule=static cache-type-k=q8_0 cache-type-v=q8_0 kv-page-size ignored (dense)
+KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 nll=1.69780 nll_f16=1.69656 ratio=1.00073 ppl=5.4619 greedy_agree=508/512 (99.22%) first_disagree=1 text_argmax_agree_first512=508 (99.2%) s=454.8
+INFO: schedule=static cache-type-k=q8_0 cache-type-v=q4_0 kv-page-size ignored (dense)
+KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0/q4_0 nll=1.70685 nll_f16=1.69656 ratio=1.00607 ppl=5.5116 greedy_agree=511/512 (99.80%) first_disagree=17 text_argmax_agree_first512=503 (98.2%) s=460.0
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+KV-QUALITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 nll=1.53013 ppl=4.6188 self_agree_generated=512/512 s=1670.2
+INFO: schedule=static cache-type-k=q8_0 cache-type-v=q8_0 kv-page-size ignored (dense)
+KV-QUALITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 nll=1.52874 nll_f16=1.53013 ratio=0.99909 ppl=4.6123 greedy_agree=511/512 (99.80%) first_disagree=35 text_argmax_agree_first512=510 (99.6%) s=805.1
+INFO: schedule=static cache-type-k=q8_0 cache-type-v=q4_0 kv-page-size ignored (dense)
+KV-QUALITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0/q4_0 nll=1.52598 nll_f16=1.53013 ratio=0.99728 ppl=4.5996 greedy_agree=510/512 (99.61%) first_disagree=3 text_argmax_agree_first512=504 (98.4%) s=833.8
+[WARNING] Tests run: 4, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 5724 s -- in cab.ml.juno.node.KvQuantQualityLiveTest
+[WARNING] Tests run: 4, Failures: 0, Errors: 0, Skipped: 1
+[INFO] BUILD SUCCESS

@@ -19,7 +19,6 @@ import java.util.Arrays;
 
 import cab.ml.juno.kvcache.KvElementType;
 import cab.ml.juno.kvcache.KvRows;
-import cab.ml.juno.kvcache.Q8_0KvCodec;
 
 /**
  * CPU attention for a prefill window of one request: query rows {@code q[0, rows)} at positions
@@ -29,8 +28,8 @@ import cab.ml.juno.kvcache.Q8_0KvCodec;
  *
  * <p>The worker pool is entered once per window with (row, KV head) pairs as its units, instead of once per row with
  * query heads as units. A unit runs the {@code gqaRatio} query heads that share one KV head. Over
- * {@link KvElementType#Q8_0} rows it decodes each key slice and each value slice once for all of those heads
- * ({@link Q8_0KvCodec#decodeRange}); a unit of one head would decode it once per head. Each head then scores and sums
+ * {@link KvElementType#Q8_0} or {@link KvElementType#Q4_0} rows it decodes each key slice and each value slice once
+ * for all of those heads ({@link KvRows#decodeRange}); a unit of one head would decode it once per head. Each head then scores and sums
  * exactly as its own unit would: the decoded values are the same, and so are the dot product and the key-order sums.
  * Over {@link KvElementType#F16} rows a unit runs its heads one after another through the per-head forms.
  */
@@ -103,7 +102,7 @@ final class GqaWindowAttention {
 		}
 	}
 
-	/** Each {@code Q8_0} key slice decoded once, then scored against every query head of the unit. */
+	/** Each quantized key slice decoded once, then scored against every query head of the unit. */
 	private static void scoreDecodedKeys(float[] q, KvRows k, int kBase, int h0, int lo, int seqLen, int headDim,
 			int gqaRatio, float scale, float[][] scores, boolean vectorHead) {
 		float[] row = GqaMath.row(headDim);
@@ -115,7 +114,7 @@ final class GqaWindowAttention {
 			int count = Math.min(seqLen - t, per - slot);
 			byte[] rows = k.bytePage(page);
 			for (int r = 0, ro = slot * bytesPerRow; r < count; r++, ro += bytesPerRow) {
-				Q8_0KvCodec.decodeRange(rows, ro, kBase, headDim, row, 0);
+				k.decodeRange(rows, ro, kBase, headDim, row, 0);
 				int s = t - lo + r;
 				for (int i = 0; i < gqaRatio; i++) {
 					if (vectorHead)
@@ -129,7 +128,7 @@ final class GqaWindowAttention {
 	}
 
 	/**
-	 * Each {@code Q8_0} value slice decoded once, then added into every query head's output with that head's weight:
+	 * Each quantized value slice decoded once, then added into every query head's output with that head's weight:
 	 * each output element sums its products in key order from zero, the per-head loop's sums.
 	 */
 	private static void addDecodedValues(KvRows v, int kBase, int h0, int lo, int seqLen, float[] out, int headDim,
@@ -144,7 +143,7 @@ final class GqaWindowAttention {
 			int count = Math.min(seqLen - t, per - slot);
 			byte[] rows = v.bytePage(page);
 			for (int r = 0, ro = slot * bytesPerRow; r < count; r++, ro += bytesPerRow) {
-				Q8_0KvCodec.decodeRange(rows, ro, kBase, headDim, row, 0);
+				v.decodeRange(rows, ro, kBase, headDim, row, 0);
 				int s = t - lo + r;
 				for (int i = 0; i < gqaRatio; i++) {
 					float w = scores[i][s];

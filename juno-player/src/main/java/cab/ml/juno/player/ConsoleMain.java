@@ -178,6 +178,11 @@ public final class ConsoleMain {
 				cab.ml.juno.node.GpuAttentionSupport.cudaBackendExpected());
 		if (attention != null)
 			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, attention, Color.RESET));
+		String deviceKv = cab.ml.juno.node.DeviceKvTypeNotice.consoleNotice(architecture, lora, !useGpu,
+				cab.ml.juno.node.GpuAttentionSupport.cudaBackendExpected(),
+				cab.ml.juno.kvcache.CacheTypeOptions.fromEnv());
+		if (deviceKv != null)
+			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, deviceKv, Color.RESET));
 	}
 
 	private static void configureLogging() {
@@ -706,6 +711,9 @@ public final class ConsoleMain {
 			sb.append(" kv-page-size ignored (dense)");
 		}
 		System.out.println(String.format("  %s%s%s%n", Color.GREEN, sb, Color.RESET));
+		String keyPrecision = cab.ml.juno.kvcache.KvKeyPrecisionNotice.notice(types);
+		if (keyPrecision != null)
+			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, keyPrecision, Color.RESET));
 		if (loraMode && sched.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.CONTINUOUS) {
 			System.out.println(String.format(
 					"  %sWARNING: schedule=continuous is a no-op for LoRA training (ephemeral float KV; no running-set engine)%s%n",
@@ -1184,9 +1192,12 @@ public final class ConsoleMain {
 		System.out.println("                             CUDA, K-quant MMQ weights, LLaMA family (Qwen2 included), Phi-3 and Qwen3, one request or a batch of");
 		System.out.println("                             them (--parallel, continuous schedule); elsewhere the existing path, said once only with an explicit on;");
 		System.out.println("                             off keeps the op-at-a-time path; env JUNO_GPU_RESIDENCY)");
-		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");
-		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
-		System.out.println("  --cache-type-v f16|q8_0    V cache element type (default: f16)");
+		System.out.println("  --cache-type-k f16|q8_0|q4_0  K cache element type (default: f16 = current float path)");
+		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8x smaller vs float),");
+		System.out.println("                             q4_0 (~7.1x smaller); host KV only beside GPU attention;");
+		System.out.println("                             q4_0 keys cost quality on some models (startup warning):");
+		System.out.println("                             for a 4-bit cache use q8_0 keys with q4_0 values");
+		System.out.println("  --cache-type-v f16|q8_0|q4_0  V cache element type (default: f16)");
 		System.out.println("                             env JUNO_CACHE_TYPE_V");
 		System.out.println("  --schedule static|continuous  Serving schedule (default: static = dense KV + static micro-batch;");
 		System.out.println("                             continuous = paged KV + running-set batching on local/single-shard.");

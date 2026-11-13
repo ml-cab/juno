@@ -821,6 +821,22 @@ components:
         sharedPrefixBudget:
           type: integer
           description: The most prompt positions kept for sharing (--prefix-cache-tokens); 0 when sharing is off
+        kvPagesLive:
+          type: integer
+          format: int64
+          description: Paged KV pages (continuous schedule) a request, a session or a kept prompt holds now, K and V together; 0 with dense KV
+        kvPagesIdle:
+          type: integer
+          format: int64
+          description: Free paged KV pages that still hold their storage, reused before new pages are made
+        kvPagesReclaimed:
+          type: integer
+          format: int64
+          description: Idle paged KV pages whose storage went back to the heap after a whole reclaim period unused (-Djuno.kv.reclaimPeriodMs), since startup
+        kvPageBytes:
+          type: integer
+          format: int64
+          description: Heap bytes the live and idle paged KV pages hold now
         uptimeSecs:
           type: integer
           format: int64

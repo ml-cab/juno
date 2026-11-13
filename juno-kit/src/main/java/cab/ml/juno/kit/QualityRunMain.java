@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import cab.ml.juno.kvcache.CacheTypeOptions;
 import cab.ml.juno.node.BatchForwardRequest;
 import cab.ml.juno.node.CpuMatVec;
 import cab.ml.juno.node.ForwardPassHandler;
@@ -31,9 +32,9 @@ import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 
 /**
- * One kernel setting's NLL score for {@link QualityProbe}: {@code QualityRunMain <model> <tokens>}, on
- * whichever CPU kernels this JVM's {@code juno.cpu.integerKernels} selects. Prints one line after
- * {@link #PREFIX}.
+ * One NLL score for {@link QualityProbe} and {@link KvQualityProbe}: {@code QualityRunMain <model> <tokens>}, on
+ * whichever CPU kernels this JVM's {@code juno.cpu.integerKernels} selects and with the host KV types its
+ * {@code JUNO_CACHE_TYPE_K}/{@code JUNO_CACHE_TYPE_V} properties select. Prints one line after {@link #PREFIX}.
  */
 public final class QualityRunMain {
 
@@ -89,6 +90,7 @@ public final class QualityRunMain {
 		out.put("seconds", (System.nanoTime() - t0) / 1e9);
 		out.put("kernels", "false".equalsIgnoreCase(System.getProperty("juno.cpu.integerKernels")) ? "float-activation"
 				: "integer where the Vector API is present");
+		out.put("kv", CacheTypeOptions.fromEnv().policySummary());
 		System.out.println(PREFIX + Json.MAPPER.writer()
 				.without(com.fasterxml.jackson.databind.SerializationFeature.INDENT_OUTPUT).writeValueAsString(out));
 		System.exit(0);

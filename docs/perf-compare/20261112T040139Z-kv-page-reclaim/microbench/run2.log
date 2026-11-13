@@ -1,0 +1,15 @@
+[kv-reclaim] tinyllama: 180224 idle pages, pass max 13.300 ms, added to a step 0.709 ms
+[kv-reclaim] qwen2.5-3b: 294912 idle pages, pass max 5.013 ms, added to a step 0.720 ms
+[kv-reclaim] phi-3.5-mini: 262144 idle pages, pass max 5.413 ms, added to a step 0.930 ms
+[kv-reclaim] mistral-7b: 262144 idle pages, pass max 4.867 ms, added to a step 0.957 ms
+# KV page reclaim pause
+
+Budget: a reclaim pass adds at most 5.0 ms to any decode step it overlaps (added_ms: the longest overlapping step less the median step alone).
+
+| model | layers | ctx | batch | page | kv_dim | idle_pages | pass_ms median | pass_ms max | hold_us | step_ms p50 | step_ms max | overlapping steps | step_ms p50, overlapping | step_ms max, overlapping | added_ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| tinyllama | 22 | 8192 | 8 | 16 | 16 | 180224 | 3.381 | 13.300 | 4.8 | 0.045 | 0.421 | 72 | 0.116 | 0.754 | 0.709 |
+| qwen2.5-3b | 36 | 8192 | 8 | 16 | 16 | 294912 | 2.991 | 5.013 | 2.6 | 0.062 | 0.677 | 69 | 0.217 | 0.782 | 0.720 |
+| phi-3.5-mini | 32 | 8192 | 8 | 16 | 16 | 262144 | 4.451 | 5.413 | 4.3 | 0.052 | 0.570 | 81 | 0.281 | 0.982 | 0.930 |
+| mistral-7b | 32 | 8192 | 8 | 16 | 16 | 262144 | 4.498 | 4.867 | 4.4 | 0.051 | 0.605 | 77 | 0.273 | 1.008 | 0.957 |
+[kv-reclaim] gate: most added to a decode step 0.957 ms (budget <= 5.0 ms)

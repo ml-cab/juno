@@ -1,0 +1,148 @@
+{
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 75.886189,
+    "token_gen_tps": 35.218989
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 32.297740723744475,
+    "token_gen_tps": 11.497786417145026,
+    "api_token_gen_tps": 10.2155,
+    "latency_ms": 6265,
+    "n_prompt": 512,
+    "prompt_tokens": 512,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 0.0,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_total_ms": 0.0,
+    "allocated_bytes_total": 10664932712,
+    "allocated_bytes_per_token": 166639573.625,
+    "allocated_bytes_in_recording": 19809896,
+    "allocated_bytes_per_token_in_recording": 309529.625,
+    "juno_reps": 1,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 512,
+        "n_prompt": 512,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 32.297740723744475,
+        "latency_ms": 16033,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "n/a",
+        "gpu_clock_in_window": null
+      },
+      "generate": {
+        "prompt_tokens": 19,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 11.497786417145026,
+        "latency_ms": 6265,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "n/a",
+        "gpu_clock_in_window": null
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success"
+    ],
+    "heap": "4g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 32.297740723744475,
+        "min": 32.297740723744475,
+        "max": 32.297740723744475,
+        "values": [
+          32.297740723744475
+        ]
+      },
+      "token_gen_tps": {
+        "median": 11.497786417145026,
+        "min": 11.497786417145026,
+        "max": 11.497786417145026,
+        "values": [
+          11.497786417145026
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 10.2155,
+        "min": 10.2155,
+        "max": 10.2155,
+        "values": [
+          10.2155
+        ]
+      },
+      "latency_ms": {
+        "median": 6265,
+        "min": 6265,
+        "max": 6265,
+        "values": [
+          6265
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "values": [
+          0.0
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 166639573.625,
+        "min": 166639573.625,
+        "max": 166639573.625,
+        "values": [
+          166639573.625
+        ]
+      },
+      "allocated_bytes_per_token_in_recording": {
+        "median": 309529.625,
+        "min": 309529.625,
+        "max": 309529.625,
+        "values": [
+          309529.625
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.4256076257004351,
+  "noise": {
+    "ok": true,
+    "basis": "repetition dispersion",
+    "condition": null,
+    "rep_spread": 0,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_max_ms_in_token_span": 0.0,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.3264655444012043,
+  "result_files": {
+    "llama_cpp_raw": "<scratch>/ab/q8-A-1/tinyllama-1.1b-chat-v1.0.Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "<scratch>/ab/q8-A-1/tinyllama-1.1b-chat-v1.0.Q4_K_M-generate-rep1-juno-response.json",
+    "llama_result": "<scratch>/ab/q8-A-1/tinyllama-1.1b-chat-v1.0.Q4_K_M-llama-cpp.json",
+    "juno_result": "<scratch>/ab/q8-A-1/tinyllama-1.1b-chat-v1.0.Q4_K_M-juno.json",
+    "juno_jfr": "<scratch>/ab/q8-A-1/tinyllama-1.1b-chat-v1.0.Q4_K_M-juno-jfr.json"
+  }
+}

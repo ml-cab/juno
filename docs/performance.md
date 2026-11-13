@@ -363,6 +363,28 @@ are explicit no-ops on the embeddings path itself (batch input is processed sequ
 
 At 32k and page 16 the in-place read costs more than the gather did (+7.6% against +4.9%); recorded, outside the gate's cell. End to end on TinyLlama at 512 prompt tokens (same reading, A/B x3), CPU pp and tg are 0.97x to 1.07x the gather build on both schedules and both cache types, allocation per token 0.75x to 0.97x, and greedy replies are equal.
 
+**2026-11-11: idle pages give their memory back.** A page every request has released stays in the pool and is reused first; one left unused for a whole reclaim period (one minute, `-Djuno.kv.reclaimPeriodMs`) is released to the heap by a background thread. No page in use moves. On TinyLlama (`--parallel 8`, 1 s period for the reading) a burst of eight requests left 9,504 idle pages, 175 MB; two periods later they were released and the pool held the one live session's 19.5 MB, on CPU and on a GTX 1080, with replies unchanged. A pass running beside decoding is gated at **<= 5 ms** added to any decode step at ctx 8k / batch 8 / page 16, on each sweep model's page count (`scripts/performance-tests/kv-reclaim-microbench.sh`, exit code 2 over it). Unpinned reading ([`perf-compare/20261112T040139Z-kv-page-reclaim/`](perf-compare/20261112T040139Z-kv-page-reclaim/INDEX.md)):
+
+| Model (layers) | idle pages | pass on its own, median / max | added to an overlapping decode step |
+|---|---:|---:|---:|
+| TinyLlama (22) | 180,224 | 3.38 / 13.30 ms | 0.71 ms |
+| Qwen2.5-3B (36) | 294,912 | 2.99 / 5.01 ms | 0.72 ms |
+| Phi-3.5-mini (32) | 262,144 | 4.45 / 5.41 ms | 0.93 ms |
+| Mistral 7B (32) | 262,144 | 4.50 / 4.87 ms | 0.96 ms |
+
+The pass on its own is what a step would wait if it ran on the decode thread, which the server does not do; the 13.3 ms is the first, not yet compiled pass.
+
+**2026-11-13: a 4-bit KV type, and what each type costs in quality.** `--cache-type-k/-v q4_0` stores 18 bytes per 32 values (about 7.1x smaller than the float32 `f16` rows, 1.9x smaller than `q8_0`), read in place by CPU attention like `q8_0`. Quality is gated at mean NLL **<= 1.02x** the `f16` cache's over a fixed 2,048-token text and greedy agreement **>= 97%** over 512 generated tokens, CPU, every sweep model ([`perf-compare/20261113T051804Z-kv-q4-0/`](perf-compare/20261113T051804Z-kv-q4-0/INDEX.md)):
+
+| Model | `q4_0` K and V | `q8_0` K and V | `q8_0` K, `q4_0` V |
+|---|---|---|---|
+| TinyLlama 1.1B | 1.030x, 97.1% | 1.000x, 99.8% | 1.000x, 98.8% |
+| Qwen2.5-3B | 2.018x, 83.6% | 1.001x, 99.2% | 1.006x, 99.8% |
+| Phi-3.5-mini | 1.035x, 98.1% | 0.999x, 99.8% | 1.002x, 99.6% |
+| Mistral 7B | 1.006x, 99.0% | 0.999x, 99.8% | 0.997x, 99.6% |
+
+Four-bit keys miss the gate on three of the four models; four-bit values beside 8-bit keys meet it on all four, so `--cache-type-k q8_0 --cache-type-v q4_0` is the 4-bit setting held to the gate, and `--cache-type-k q4_0` prints a startup warning naming the loss. Reading the quantized rows through one dispatch costs the `f16` and `q8_0` paths nothing measurable (TinyLlama, CPU, 512 tokens, unpinned: prefill 1.004x and 1.001x, decode 0.997x and 0.995x of the build before); `q4_0` prefills about 5% slower than `q8_0` at that length.
+
 **Cross-feature smoke** ([`target/tier14-smoke/20260910T220100Z/`](../target/tier14-smoke/20260910T220100Z/)):
 
 | Gate | Result |

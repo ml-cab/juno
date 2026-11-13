@@ -168,6 +168,7 @@ class PagedKvHandlerOracleTest {
 		families().forEach(f -> {
 			out.add(Arguments.of(f, "f16"));
 			out.add(Arguments.of(f, "q8_0"));
+			out.add(Arguments.of(f, "q4_0"));
 		});
 		return out.stream();
 	}

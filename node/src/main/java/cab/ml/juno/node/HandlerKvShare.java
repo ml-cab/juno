@@ -21,6 +21,7 @@ import java.util.function.IntPredicate;
 import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KvElementType;
+import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
@@ -50,6 +51,11 @@ final class HandlerKvShare {
 		return layout.cacheTypes().typeK() == KvElementType.F16 && layout.cacheTypes().typeV() == KvElementType.F16;
 	}
 
+	/** The arena {@code layout}'s paged KV comes from; null when its KV is dense. */
+	static PagedKvArena pagedArena(SessionKvLayout layout) {
+		return layout.usesPaged() ? layout.arena().orElse(null) : null;
+	}
+
 	/** Host bytes one position takes in {@code layers} layers of this layout, K and V. */
 	static long bytesPerToken(SessionKvLayout layout, int layers) {
 		return (long) layers * (bytes(layout.cacheTypes().typeK(), layout.kvDim())
@@ -57,10 +63,7 @@ final class HandlerKvShare {
 	}
 
 	private static long bytes(KvElementType type, int kvDim) {
-		return switch (type) {
-		case F16 -> (long) kvDim * Float.BYTES; // held as floats on the host
-		case Q8_0 -> cab.ml.juno.kvcache.Q8_0KvCodec.encodedBytes(kvDim);
-		};
+		return cab.ml.juno.kvcache.KvRowCodec.rowBytes(type, kvDim); // f16 is held as floats on the host
 	}
 
 	/**

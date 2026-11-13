@@ -807,3 +807,15 @@ this date has the details.
   (the rest of Juno on Windows) only if its cause turns out to be Windows-specific. Nothing is recorded against an item here
   until that cause is known.
 - **Exit criteria:** 2 of 10. Steps 2 and 3 are still the owner's.
+
+### 2026-11-12: item 3's bounded launches landed in Tier 03 (Linux side)
+
+Option (a) of the 2026-11-06 finding is in, recorded in [Tier 03](TIER-03-kv-cache-maturity.md)'s step 6 entry under README rule
+9: GPU prefill attention splits between whole blocks of query rows and the tiled K-quant GEMM into runs of whole 64-row tiles,
+each launch within a fixed work budget (`BoundedLaunches`), bit for bit one launch. On this GTX 1080 the slowest single launch at
+the longest window the device KV holds (32,768 tokens) reads 57.94 ms, against 596.51 ms for one attention launch at 8,192 tokens
+before ([`20261112T181947Z-bounded-launches`](../perf-compare/20261112T181947Z-bounded-launches/INDEX.md)). `gpu.kernel-timing`
+now checks that window as well, so a tester's Windows run of the probe gives this tier's watchdog reading at both lengths.
+- This tier keeps the Windows half of item 3: the longest single kernel timed against the watchdog on Windows, launch overhead,
+  and the free-memory accounting. They wait on the Windows runs, as before.
+- **Exit criteria:** 2 of 10, unchanged.

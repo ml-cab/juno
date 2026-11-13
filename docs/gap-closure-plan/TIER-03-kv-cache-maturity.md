@@ -17,7 +17,19 @@ cached prompt over positions it never wrote (defect, both schedules), fixed by m
 cached it. Owner decisions 2026-11-11: 1 (b), finished prompts kept under a budget; 2 (a), `static` copies the rows. Step 4 done
 2026-11-11: `SharedPrefixPool` keeps finished requests' prompts as KV nothing writes (paged: pages held again, copy-on-write;
 dense: copied), new requests start from them on all three admission paths, `--prefix-cache-tokens`; replies equal sharing off
-on TinyLlama, CPU and CUDA, both schedules. Exit criterion 3 ticked (3 of 15). Next: step 5, defragmentation.
+on TinyLlama, CPU and CUDA, both schedules. Exit criterion 3 ticked (3 of 15). Step 5 done 2026-11-11: defragmentation as
+releasing idle pages (item 3 corrected: the pool has no external fragmentation to compact; it kept every freed page's storage
+forever): `KvBlockPool.reclaimIdle`, run in the background by `KvPageReclaimer` (`-Djuno.kv.reclaimPeriodMs`, default one
+minute); no live page moves; pause met unpinned (0.957 ms added to a decode step, budget 5); health counters; `--lora-play` no
+longer keeps every finished request's KV (defect, fixed). Exit criterion 4 ticked (4 of 15). Step 6 begun 2026-11-12: Tier
+02G's item 3, option (a), landed first (README rule 9): GPU prefill attention and the tiled K-quant GEMM run in launches of
+bounded work (`BoundedLaunches`), bit for bit one launch; at 32,768 tokens the slowest launch reads 57.94 ms on the GTX 1080 (bar
+500 ms), and Mistral 7B's greedy replies at 8,192 tokens equal the previous build's on both schedules. Item 4 done 2026-11-13:
+`q4_0` KV (`Q4_0KvCodec`, every store and reader, a startup warning that GPU attention keeps an FP16 copy). Its gate is scored on
+`q8_0` keys with `q4_0` values by owner decision (a) 2026-11-13, and they meet NLL <= 1.02x and agreement >= 97% on every sweep
+model; `q4_0` keys, which meet it on Mistral 7B only (TinyLlama 1.030x, Phi-3.5-mini 1.035x, Qwen2.5-3B 2.02x and 83.6%), stay a
+setting with a startup warning naming the loss. Rotated 4-bit keys deferred, revisited before step 7 starts. Exit criterion 5
+ticked (5 of 15). Next: item 7.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -88,6 +100,15 @@ ordering note both withdraw.)*
    proper page reference counting, which today's single-owner `KvBlockPool` doesn't have).
 3. **KV cache defragmentation**: compact `KvBlockPool`'s free/live pages when fragmentation crosses
    a threshold, to reclaim memory without requiring a full session evict.
+   *(Corrected 2026-11-11, step 5: the premise does not hold for this pool, and the step is done in the form that does. Compaction
+   moves live data so that free space becomes one reclaimable region, which a contiguous KV cache needs. `KvBlockPool` keeps every
+   page as its own Java array behind a block table: any free page serves any request, attention reads each page where it is, and
+   the heap compacts itself, so moving a live page reclaims nothing and risks exactly the corruption the exit criterion names. The
+   memory the pool does fail to reclaim is different: a freed page keeps its array on the free list, so the pool holds its peak
+   for the life of the process, after every session has ended too (a "full session evict" did not reclaim it either). Step 5
+   therefore releases the storage of pages that stay idle for a whole period (`KvBlockPool.reclaimIdle`, run in the background by
+   `KvPageReclaimer`), touching no live or shared page. The objective, exit criterion, tests and pause threshold are unchanged;
+   see the execution record.)*
 4. **Q4_0 KV quantization tier**, alongside the existing F16/Q8_0, for memory-constrained
    long-context serving. This is **standalone work with no dependency on Tier 04**, which runs
    later: Q4_0 weight decode already exists (gap analysis §1.1), and a KV codec is a different
@@ -178,7 +199,8 @@ ordering note both withdraw.)*
    attention's read through the page table, on every call site; no GPU kernel changes in this step.)*
 4. Wire cross-session prefix sharing through `PrefixCache`, using the new refcounting so a page is
    only freed when its last referencing session evicts.
-5. Add defragmentation as a background/on-demand compaction pass over `KvBlockPool`.
+5. Add defragmentation as a background/on-demand compaction pass over `KvBlockPool`. *(2026-11-11: done as a background pass that
+   releases idle pages' storage; item 3's correction says why nothing live is moved.)*
 6. Add the Q4_0 KV codec, then item 7: the quantized device KV layout, the attention kernels' read
    path for it, and its accounting in `DeviceScratchBudget`. *(2026-11-10, owner decisions: first, before the device layout
    changes, [Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3, option (a), bounded launches, recorded under README rule 9.)*
@@ -199,7 +221,7 @@ ordering note both withdraw.)*
   `StaticBatchPrefixCacheSessionGatingTest` exercises — this tier's test should show that scenario
   now succeeds *by design* (safe sharing) rather than by avoidance (the Tier 00 gate).
 - **New defragmentation test**: fragment a pool deliberately (alloc/free pattern), compact, confirm
-  no data corruption for any still-live page.
+  no data corruption for any still-live page. *(2026-11-11: `KvBlockPoolReclaimTest`, `PagedKvReclaimHandlerTest`.)*
 - **New Q4_0 KV codec test**: round-trip encode/decode accuracy vs. F16.
 - **Device KV parity** (item 7): GPU attention over a Q8_0 / Q4_0 device KV against the CPU attention
   over the same host codec, at decode and prefill width, within the bound the FP16 kernel is held to; and
@@ -231,6 +253,18 @@ ordering note both withdraw.)*
   - Q4_0 KV quality (item 4): greedy decode with Q4_0 KV agrees with F16 KV on **>= 97%** of the first
     512 generated tokens at temperature 0 on every sweep model, and teacher-forced mean NLL over a fixed
     2,048-token text is **<= 1.02x** the F16-KV reading (the `ModelQualityNllLiveTest` pattern);
+    *(2026-11-12, step 6: "agrees on 97% of the first 512 generated tokens" is read as the share of positions, not a
+    comparison of two free-running replies, which part at their first differing token and then share nothing, so one
+    early difference would read as a few percent. `KvQuantQualityLiveTest`: the F16-KV handler continues the quality
+    text's first 1,024 tokens greedily for 512 tokens; that sequence is teacher-forced through both handlers in the
+    same windows of 128, and the gate is the share of the 512 generated positions where their argmax agree. The first
+    differing position, where a free-running Q4_0 reply would leave the F16 one, is reported beside it, as is the
+    argmax agreement over the text's first 512 positions (the reading Tiers 02C and 02E called greedy agreement). The
+    same reading serves item 6's and item 7's agreement thresholds.)*
+    *(2026-11-13, owner decision (a): scored on `--cache-type-k q8_0 --cache-type-v q4_0`, 8-bit keys with 4-bit values. Measured,
+    4-bit keys missed this gate on three of four sweep models and 4-bit values beside 8-bit keys met it on all four. `q4_0` keys
+    stay available with a startup warning (`KvKeyPrecisionNotice`); rotated 4-bit keys are deferred (the 2026-11-13 decision
+    entry).)*
   - real FP16 dense KV storage (item 6): greedy agreement with today's FP32-backed `f16` storage on
     **>= 99%** of the first 512 tokens on every sweep model, mean NLL **<= 1.005x**, and Phi-3.5-mini's
     live heap at a 2048-token request **<= 0.60x** the pre-tier reading;
@@ -240,8 +274,13 @@ ordering note both withdraw.)*
     device KV **>= 0.95x** the FP16 copy (attention reads fewer bytes and pays an in-register dequant;
     same-hour A/B, pinned); greedy agreement with the FP16 device copy on **>= 99%** of 512 tokens at
     `q8_0` and **>= 97%** at `q4_0`, on every sweep model;
+    *(2026-11-13, owner decision (a): at `q4_0` the bytes bar is read on `q4_0` keys and values, a property of the format (18 bytes
+    per 32 values), and the agreement bar on `q8_0` keys with `q4_0` values, the setting item 4's gate scores. That setting's device
+    bytes, about 0.41x the FP16 copy (52 bytes per 32 key and 32 value elements against 128), are reported beside them.)*
   - defragmentation's pause: a compaction pass over a fragmented pool adds **<= 5 ms** to any single
-    decode step at ctx 8192, or it runs off the decode path entirely.
+    decode step at ctx 8192, or it runs off the decode path entirely. *(2026-11-11: the pass runs off the decode path, on its own
+    thread, and `KvReclaimPauseMicrobench` measures what it still adds through the pools' lock: the longest decode step's KV writes
+    overlapping a pass, less the median step alone, at ctx 8192 / batch 8 / page 16 on each sweep model's page count.)*
 
 ## Kit probes
 
@@ -256,10 +295,18 @@ README execution rule 10.
     cross-session prefix sharing a shared prefix is meant to hit, so the check becomes: a shared-prefix hit is
     counted, and the reply equals the unshared reply.
   - Q4_0 KV (item 4) and the quantized device KV (item 7): mean NLL against F16 KV per sweep model, and batched
-    equal to single on the device at each `--cache-type-k`/`--cache-type-v`.
+    equal to single on the device at each `--cache-type-k`/`--cache-type-v`. *(2026-11-12: item 4's half is in:
+    `kv-quality.<model>` on the four sweep models, CPU suite, `QualityRunMain` twice with `f16` and `q4_0` host KV, held
+    to 1.02x; its self-test runs on the synthetic model; `coverage.tsv` line `feature:kv-q4-0`. Item 7's half lands with
+    item 7. 2026-11-13, owner decision (a): the quantized run is `q8_0` keys with `q4_0` values; any pair runs on request.)*
   - Session save and restore (item 5): a restored session continues with the reply the unbroken session gives.
-  - Defragmentation (item 3): replies unchanged under page churn, with the compaction counted.
+  - Defragmentation (item 3): replies unchanged under page churn, with the compaction counted. *(2026-11-11: in
+    `schedule.tinyllama` and `gpu.schedule.tinyllama`, the continuous leg; `coverage.tsv` line `feature:kv-page-reclaim`.)*
   - The host KV footprint per session (item 6), as a reading.
+  - A change, the bounded launches landed before item 7 ([Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3, option (a)):
+    `gpu.kernel-timing` reads the heaviest of the launches the prefill paths split a window into, and adds a check at the
+    longest window the device KV holds (32,768 tokens) against the same 500 ms bar. *(2026-11-12: in; its self-test expects
+    both checks; `coverage.tsv` keeps its existing lines, `feature:gpu-kernel-watchdog` among them.)*
 
 ## Models needed
 
@@ -290,9 +337,22 @@ in `models/`.)*
       both host KV types; `SharedPrefixPoolTest` on all three admission paths; on TinyLlama 9 of 9 replies equal sharing off,
       CPU and CUDA, both schedules ([`20261111T192150Z-shared-prefix`](../perf-compare/20261111T192150Z-shared-prefix/INDEX.md));
       vision and `--lora-play` refused and tested.)*
-- [ ] Defragmentation reclaims fragmented pages without corrupting live sessions.
-- [ ] Q4_0 KV tier available alongside F16/Q8_0, meeting its quality threshold (greedy agreement >= 97%,
+- [x] Defragmentation reclaims fragmented pages without corrupting live sessions.
+      *(2026-11-11, step 5: idle pages' storage released after a whole period unused, no live or shared page moved or touched
+      (item 3's correction says why). `KvBlockPoolReclaimTest` (fragmented pools, live pages' bytes and views unchanged, concurrent
+      writers), `PagedKvReclaimHandlerTest` (every handler family, both host KV types, bit for bit across a reclaim); on TinyLlama,
+      CPU and CUDA, 9,504 idle pages released, replies unchanged, the live session resumed from its own pages
+      ([`20261112T040139Z-kv-page-reclaim`](../perf-compare/20261112T040139Z-kv-page-reclaim/INDEX.md)).)*
+- [x] Q4_0 KV tier available alongside F16/Q8_0, meeting its quality threshold (greedy agreement >= 97%,
       NLL <= 1.02x F16 KV on every sweep model).
+      *(Restated 2026-11-13, owner decision (a): the threshold is scored on `q8_0` keys with `q4_0` values; `q4_0` keys are a
+      setting with a startup warning naming the loss. Ticked 2026-11-13: NLL 1.00019x, 1.00607x, 1.00202x and 0.99728x, agreement
+      98.83%, 99.80%, 99.61% and 99.61% on TinyLlama, Qwen2.5-3B, Phi-3.5-mini and Mistral 7B
+      ([`20261113T051804Z-kv-q4-0`](../perf-compare/20261113T051804Z-kv-q4-0/INDEX.md), section 2).)*
+      *(2026-11-13: available; the threshold is not met, so this stays open. `q4_0` K and V: Mistral 7B 1.006x and 99.0%, TinyLlama
+      1.030x and 97.1%, Phi-3.5-mini 1.035x and 98.1%, Qwen2.5-3B 2.02x and 83.6%; `q8_0` K with `q4_0` V meets both bars on all
+      four ([`20261113T051804Z-kv-q4-0`](../perf-compare/20261113T051804Z-kv-q4-0/INDEX.md)). How it closes is the owner's
+      decision, put in the 2026-11-13 entry.)*
 - [ ] Real FP16 dense KV storage meets its threshold (greedy agreement >= 99%, NLL <= 1.005x, Phi-3.5-mini
       live heap at 2048 tokens <= 0.60x the pre-tier reading).
 - [ ] Quantized device KV (item 7): `--cache-type-k`/`-v` reach the GPU's KV copy on every handler with
@@ -305,11 +365,17 @@ in `models/`.)*
       only.)*
 - [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
       self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
+      *(2026-11-13: item 4's probe is in, `kv-quality.<model>`, with its self-test and `feature:kv-q4-0`, scoring `q8_0` keys with
+      `q4_0` values since owner decision (a); item 7's half, item 5's and item 6's are owed with those items.)*
 - [ ] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
 - [ ] Perf gate published; `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag pause within budget.
       *(2026-11-10: the `paged_vs_dense%` half read -6.35%, unpinned,
       [`20261111T051528Z-paged-kv-in-place`](../perf-compare/20261111T051528Z-paged-kv-in-place/INDEX.md); open for the
-      defrag pause, owed by the executor at step 5, and the reading is retaken on the tier's final build.)*
+      defrag pause, owed by the executor at step 5, and the reading is retaken on the tier's final build.)* *(2026-11-11, step 5:
+      the defrag pause met, unpinned: a reclaim pass on its own thread adds at most 0.957 ms to an overlapping decode step at
+      ctx 8192 / batch 8 / page 16, every sweep model's page count
+      ([`20261112T040139Z-kv-page-reclaim`](../perf-compare/20261112T040139Z-kv-page-reclaim/INDEX.md)). Open only for both
+      readings retaken on the tier's final build.)*
 - [ ] The session save/restore surface is in `api/src/main/resources/openapi.yaml` and
       `juno-api.yaml` alongside the code that serves it (README feature-complete rule).
 - [ ] Docs updated, Juno-native language only.
@@ -1058,3 +1124,481 @@ short-prefix watch item above.
 **Owed to the owner:** nothing new.
 
 **Next for the executor:** step 5, defragmentation.
+
+### 2026-11-11, later: step 5, idle KV pages released (defragmentation); `--lora-play` kept every request's KV (defect, fixed)
+
+**Plan against code, verified at HEAD `6ad5c728`.** `check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep or
+build was running. Since the entry above, HEAD moved by the owner's commit of it (`1b90ca0c`) and by `6ad5c728`, which touched the
+kit, the JFR clock check and one GPU test (recorded in [Tier 02F](TIER-02F-hardware-validation-kit.md)); neither touches this tier's
+code. `git status`: `.github/` untracked, not this session's.
+- Item 3 reads "compact `KvBlockPool`'s free/live pages when fragmentation crosses a threshold, to reclaim memory without requiring
+  a full session evict", from the gap analysis's "paged KV's block pool only tracks free/live pages with no compaction". In the
+  code every page is its own Java array (`List<float[]>`/`List<byte[]>`) behind a block table, attention reads each page in place
+  (`KvRows`, step 3), any free page serves any request, and the heap compacts itself. So the pool has no external fragmentation
+  to compact, and moving a live page would reclaim nothing while risking the corruption criterion 4 names.
+- What the pool does not reclaim: `free` returned a page to the free list with its array, and nothing ever dropped it, so the pool
+  held its peak for the life of the process, after every session had ended too (a full session evict did not reclaim it either).
+- Decision gate: the premise was false, the objective, criterion, tests and pause threshold still apply, and the form that meets
+  them is narrower (no live page moves). Recorded as a dated correction under item 3 and carried out; raised below for the owner
+  to overrule if moving pages was meant.
+- Found while testing the step (below): the three LoRA handlers (`LoraTrainableHandler`, `Phi3LoraTrainableHandler`,
+  `Qwen3LoraTrainableHandler`) did not override `ForwardPassHandler.evict`, whose default does nothing, so under `--lora-play` every
+  finished request's KV stayed in the handler's maps for the life of the process, on both schedules (dense layers on `static`,
+  pages on `continuous`). The reclaim cannot release pages nobody frees, and cross-surface row 10 covers `--lora-play`, so it is
+  fixed here, as step 4 fixed the defect it built on.
+
+**What changed.**
+- kvcache: `KvBlockPool` keeps idle pages (free, storage kept, reused first) and released ids (storage dropped, new zeroed storage
+  when next allocated) in two `IntRing`s (new: an `int` ring buffer, first in first out as the `ArrayDeque<Integer>` it replaces,
+  without boxing an id per allocate and free). `reclaimIdle()` releases the storage of the idle pages that stayed unused since the
+  previous call, counted as the fewest idle pages seen in between (a page taken and returned meanwhile was needed and keeps its
+  storage), in lock holds of at most 256 pages with a yield between them. `idlePages`, `storedPages`, `storedBytes`,
+  `reclaimedPages`. `KvPageReclaimer` (new): one shared daemon thread runs `reclaimIdle` on every pool `PagedKvArena.fromOptions`
+  makes (the serving arenas), every `-Djuno.kv.reclaimPeriodMs` (default 60000, `0` off, any other value that is not a whole number
+  of milliseconds stops startup with an error naming it; read only where an arena is made, i.e. under `continuous`); pools are
+  held weakly. `KvPageCounts` (new) sums the figures over arenas.
+- node: `ForwardPassHandler.pagedKvArena()` (default null) on the eight handlers that hold a `SessionKvLayout` (through
+  `HandlerKvShare.pagedArena`) and the vision decorator; `InferencePipeline.pagedKvArenas()`, each distinct arena once in
+  `LocalInferencePipeline`. The three LoRA handlers' `evict` removes the request's layers and releases them (not recycled: they do
+  not count running passes, which the inference handlers' recycling relies on).
+- coordinator: `RequestScheduler.kvPages()`; `/v1/cluster/health` adds `kvPagesLive`, `kvPagesIdle`, `kvPagesReclaimed`,
+  `kvPageBytes` (all 0 with dense KV), in `openapi.yaml` (`juno-api.yaml` has no health schema).
+- `KvReclaimPauseMicrobench` and `scripts/performance-tests/kv-reclaim-microbench.sh` (new; not a smoke or compare script, so no
+  `coverage.tsv` line), the pause gate below.
+
+**Tests, written first** (they failed to compile on the missing API: `reclaimIdle`, `KvPageReclaimer`, `KvPageCounts`,
+`pagedKvArena`). Each shown able to fail, the defect put in and taken out, `cmp` against a copy afterwards:
+
+| Test | Cases | Defect | Fails |
+|---|---|---|---|
+| `KvBlockPoolReclaimTest` | 10 | reclaim ignores the period (releases every idle page) | 6 |
+| | | allocate does not lower the fewest-idle count | 1 |
+| | | released ids never reused (the pool always grows) | 2 |
+| | | a released id given a live page's storage | 4 |
+| `PagedKvReclaimHandlerTest` (every handler family of step 1's oracle, F16 and `q8_0`: a request live across a reclaim, and one started after it on released ids, read the logits they read without it, bit for bit) | 18 | a released id given a live page's storage | 18 |
+| | | (first run, before the fix) the LoRA handlers keep finished requests' pages | 6 (nothing to reclaim) |
+| `HandlerEvictReleasesKvTest` (every handler family, both schedules: a pass after evict reads none of the evicted rows; paged pages go back to the pool) | 18 | HEAD's LoRA handlers (no `evict`) | 6, exactly the three LoRA handlers on both schedules |
+| `KvPageReclaimerTest` | 4 | `register` schedules nothing | 1 |
+| `KvPageCountsTest`, `IntRingTest`, `LocalInferencePipelineKvArenaTest`, `KvReclaimPauseMicrobenchTest`, health case in `InferenceApiServerTest` | 1, 2, 1, 1, 1 | | |
+
+`IntRingTest` checks 200,000 random operations against `ArrayDeque`. The kit's schedule-probe self-test runs the new check
+(below).
+
+**Pause gate (`<= 5 ms` added to any decode step at ctx 8192): met, unpinned.** `kv-reclaim-microbench.sh`, each sweep model's
+page count at ctx 8192 / batch 8 / page 16 (eight live and eight finished requests built interleaved, so the idle pages sit among
+the live ones), 180,224 to 294,912 idle pages per pass: a pass on its own thread adds at most **0.957 ms** to the KV writes of a
+decode step it overlaps (Mistral 7B; TinyLlama 0.709, Qwen2.5-3B 0.720, Phi-3.5-mini 0.930; 69 to 81 overlapping steps per model).
+The pass timed on its own, what a step would wait if it ran on the decode thread (the server does not), reads 2.99 to 4.50 ms
+median, 4.87 to 5.41 ms max, and 13.3 ms on TinyLlama's first, interpreted pass. Run 1, on the first form of the code (boxed ids,
+1,024-page holds, no yield), read 4.6 to 5.6 ms median on its own, and a writer contending with a reclaimer reached 3.7 to 5.9 ms
+per step against 0.4 to 0.6 alone, because the pool's lock is not fair; the `int` ring, the 256-page holds and the yield are what
+fixed it. [`20261112T040139Z-kv-page-reclaim`](../perf-compare/20261112T040139Z-kv-page-reclaim/INDEX.md).
+
+**Real model** (same directory; TinyLlama, `continuous`, `--parallel 8`, sharing off, period 1 s for the reading): after a burst of
+eight requests the pool held 9,504 idle pages, 175.2 MB; two periods later all were released and it held the one live session's
+1,188 pages, 19.5 MB, on CPU and on the GTX 1080. The greedy reply after the reclaim equals the one before, and the session's next
+turn resumed from its own pages (`prefixHits` 1). Under `--lora-play` (CPU) live pages stayed at the session's 1,188 through nine
+stateless requests (before the fix each kept about 1,176 live) and 4,752 idle pages were released after two periods; the run hit
+the script's 25-minute limit before its two closing requests (a decode batch runs one request at a time under `--lora-play`), and
+`PagedKvReclaimHandlerTest` checks replies across a reclaim on the three LoRA handlers.
+
+**Same-session A/B, unpinned** (same directory). A: HEAD `6ad5c728`, built from `git archive` in scratch, jar `03820803bf46dce6`.
+B: this tree, `f9b39bf898e734e2`. A B A B A B, medians of three:
+
+| Lane | A | B | B/A | Bar |
+|---|---|---|---:|---|
+| TinyLlama `continuous` F16, `n_prompt` 512: pp t/s | 31.49 (31.92, 31.49, 31.33) | 31.52 (31.52, 31.41, 31.73) | 1.001 | >= 0.95 |
+| same: tg t/s | 10.28 (10.35, 10.28, 10.14) | 10.29 (10.29, 10.46, 10.16) | 1.001 | >= 0.95 |
+| same: allocation per token in the recording | 305,795 B | 312,530 B | 1.022 | <= 1.10 |
+| same: in-span GC pause total | 0 ms (all three) | 0 ms (all three) | | <= 5 ms |
+| same: greedy replies | | | equal, 6 of 6 | |
+| LoRA CPU, train ms per pass | 58,133 (57,733, 58,133, 58,200) | 58,133 (58,133, 58,133, 58,000) | 1.000 | <= 1.25 |
+| LoRA CPU, playback t/s | 0.757 (0.759, 0.757, 0.756) | 0.763 (0.770, 0.762, 0.763) | 1.008 | >= 0.80 |
+| LoRA GPU, train ms per pass | 3,000 (all three) | 3,000 (all three) | 1.000 | <= 1.25 |
+| LoRA GPU, playback t/s | 11.44 (11.44, 11.48, 11.35) | 11.29 (11.29, 11.29, 10.85) | 0.987 | >= 0.80 |
+| LoRA recall | 3 of 3, CPU and GPU | 3 of 3, CPU and GPU | | |
+
+- The continuous lanes' pp is `prompt_tokens * 1000 / forward_pass_prefill_total_ms` and tg is `token_gen_tps_decode_derived`, as in
+  step 3's record: the harness withholds the lane JSON's own `prompt_eval_tps`/`token_gen_tps` there, on both builds ("JFR
+  timestamps disagree with the engine clock": 0.79 s of a 17 s chunked prefill and 3.27 s of a 10 s generation fall outside the
+  forward-pass spans). Step 3's published continuous lanes carry the same nulls. Recorded as a harness finding for the owner (below);
+  the standing gate's lanes are `static`.
+- Every bar is met. Allocation per token on the continuous lane reads 1.022x: two of B's three repetitions read 312.6 kB and one
+  305.4 kB, A's all 305.7 to 306.2 kB.
+- The `q8_0` continuous lane was not run: the pool change is the same code for both page types, and the first attempt's
+  `--models tinyllama` matched the Q2_K file too and doubled every invocation (stopped and restarted with the exact basename).
+
+**Tests run.**
+- Focused, during the work: `kvcache` 175 of 175; `PagedKvReclaimHandlerTest` 18, `HandlerEvictReleasesKvTest` 18,
+  `LocalInferencePipelineKvArenaTest` 1, `PagedKvHandlerOracleTest` 18 and `InferenceApiServerTest` (with the new case) pass.
+- The unit suite on the final tree (`mvn test -pl api,tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,`
+  `metrics,juno-player,juno-kit -am -Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 79 min): `registry` 93, `lora`
+  116, `kvcache` 175, `health` 23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 418 (1 skipped), `vision` 98, `metrics`
+  86, `juno-player` 158 (2 skipped) and `juno-master` 15 pass; `node` 1,475 run, 55 skipped, **3 failures**; `juno-kit` 140 run,
+  **1 failure**. None is in code this step changes:
+  - `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`: 85,000,192 bytes reported free with the device
+    full against <= 67,108,864; alone three times after, 88,866,816 each. The driver holdback recorded in the entries above and in
+    Tier 02G's 2026-11-07 entry. Bound not loosened.
+  - `DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix`, 2 of 4 (Q5_K 512x2048, round 2, row 269: 48.13 right
+    after the upload against 19.85 once the device was idle; Q6_K, round 1, row 230: 35.31 against 25.51). This is the test HEAD's
+    commit `6ad5c728` added to isolate a laptop GPU's `KQuantGemvRowsTest` failure (a copy from pageable memory returning before
+    its transfer lands, the GEMV on a stream not ordered after it), recorded there as passing on this GTX 1080. Alone three times
+    after: 4 of 4 each. So the race shows on this host too, intermittently, inside the suite. Raised with the owner below; this
+    step changes no GPU code.
+  - `ProbeRunnerTest.aProbeRunsInItsOwnJvmAndLeavesItsReportAndLog` (`juno-kit`): `NOISY` instead of `DONE`, other processes using
+    10% to 21% of the CPU (the desktop: a browser, the system monitor). It fails the same way alone on this tree and on HEAD's tree
+    (built in scratch), so it is the host's load, not the change.
+  - The schedule probe's self-test, with the new check, and `CoverageTest` pass.
+- `smoke-consistency.sh` (unmodified) on the candidate jar: 56 of 56 pass, including the shared-prefix and session checks on both
+  schedules, CPU and GPU (`smoke-consistency.log` in the directory above).
+
+**Cross-surface rows for this step.** 1 CPU: PASS (handler tests, real model). 2 CUDA: PASS (real model on the GTX 1080; the device
+KV copy is per request and dense, owner decision 1 (d), and not paged). 3 ROCm: the reclaim is backend-agnostic host code;
+NEEDS-AMD-HARDWARE for a run. 4 Static: N/A, dense KV has no page pool (health counters read 0, tested). 5 Continuous: PASS. 6
+Local: PASS. 7, 8 Clusters: N/A, cluster launchers fall back to `static`. 9 LoRA training: N/A, ephemeral float caches. 10 LoRA
+playback: PASS, and the evict defect fixed (tests, real model). 11 Vision: the decorator reports its text handler's arena; the
+pages it holds are reclaimed like any other (handler and pool tests), not run live with an image. 12, 13 REST: the four health
+counters (test, real model). 14 CLI: `-Djuno.kv.reclaimPeriodMs` through `JUNO_JVM_OPTS` or `java -D`; invalid values stop
+startup (checked on the jar). 15 Embedding facade: reclaim runs for any embedder on `continuous` with no call; the counters are on the REST health endpoint,
+which `JunoHttpClient` does not wrap (it has no health call), so an embedder reads them over HTTP. Not a new invocable capability.
+
+**Docs.** `docs/howto.md` (`--kv-page-size` row: reclaim, the period property, the health counters), `docs/agent-arch.txt` (idle
+pages and reclaim, the LoRA handlers' evict; the stale "nothing shares pages across sessions yet" sentence replaced),
+`docs/performance.md` (block KV), `CHANGELOG.md`, `docs/perf-compare/README.md`.
+
+**Kit probes.** Item 3's line is in: `schedule.tinyllama` and `gpu.schedule.tinyllama` start their continuous server with a
+500 ms period, record a greedy reply before the workloads, wait until the health endpoint counts pages reclaimed, and check the
+same request gets the same reply ("continuous: idle KV pages reclaimed, replies unchanged"); `coverage.tsv`
+`feature:kv-page-reclaim`; the probe's self-test expects the check and a positive reclaimed count.
+
+**Out-of-tier changes (README rule 9):** none. The `--lora-play` evict defect predates this tier; it is fixed here because the step
+depends on it.
+
+**Exit criteria:** 4 of 15. Criterion 4 (defragmentation reclaims fragmented pages without corrupting live sessions) ticked. The
+perf-gate criterion's two halves are now both met unpinned (`paged_vs_dense%` at step 3, the pause here); it stays open because its
+readings are retaken on the tier's final build.
+
+**Raised with the owner** (no decision needed to continue):
+1. Item 3 was carried out as releasing idle pages rather than moving live ones (correction above). If compaction that moves pages
+   was meant, for example to prepare a device page pool for [Tier 07](TIER-07-continuous-batching.md), say so; the recommendation is
+   to leave it, since nothing in the host pool needs it.
+2. The static schedule's `DenseKvRecycler` keeps one finished request's dense layers (the larger) per handler for the life of the
+   process, the dense counterpart of what this step releases. Item 6 (grow toward the known request length) bounds its size;
+   releasing it after an idle period like the pages is a small follow-up the owner may want in item 6.
+3. Harness finding: on the `continuous` schedule `compare-llama-cpp.sh` withholds the lane's `prompt_eval_tps` and `token_gen_tps`
+   on every build (above), so continuous lanes are read from the forward-pass totals by hand.
+4. GPU finding: `DeviceUploadOrderingTest` failed 2 of 4 inside the unit suite on this GTX 1080 (above) and passed alone, so the
+   upload-ordering race that commit isolated is not confined to the laptop GPU. It belongs with that investigation in
+   [Tier 02F](TIER-02F-hardware-validation-kit.md)/[Tier 02G](TIER-02G-cuda-on-windows.md); ordering the K-quant GEMV after the
+   upload (or uploading from pinned memory) is the fix the test's own description points to.
+
+**Owed to the owner:** nothing to run for this step.
+
+**Next for the executor:** step 6, Tier 02G's item 3 option (a) (bounded attention launches, under README rule 9) first, then the
+Q4_0 KV codec and the quantized device KV (item 7).
+
+### 2026-11-12: step 6 begun: bounded GPU prefill launches (Tier 02G item 3, option (a); README rule 9)
+
+**Plan against code, verified with the step 5 work uncommitted in the tree** (HEAD `6ad5c728`; built on, not redone).
+`check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep, build or test run was in progress. `.github/` untracked,
+not this session's. Step 6 opens with Tier 02G's item 3, option (a), by the 2026-11-10 owner decision (item 7's note, step 6's
+note, README rule 1), before the Q4_0 KV codec and item 7. Every claim it depends on holds:
+- Prefill attention launches in two places, both on rows of one cache: the device region's `PrefillWindowRegion.attendInside`
+  (one `GqaAttentionKernel.launch` per layer over the whole window) and the host-staged window through
+  `CudaGqaAttention.attendBatched` (also the decode entry for the handlers' non-resident decode). Decode launches elsewhere
+  (`ResidentQkvPath`, one row; `ResidentBatchDecode`, one row per request) attend few rows and are left as they are.
+- The tiled K-quant GEMM is reached by both prefill paths through `CudaMatVec.gemmPackedOnStream` ->
+  `KQuantGemmKernel.multiplyHalf`, its only caller. The FP16 cuBLAS GEMM (`gemmHalfOnStream`, FP16-resident weights and the
+  tiled kernel's fallback) is not the tiled GEMM the decision names; cuBLAS chooses its own kernels per shape, so a row split
+  there would not keep the bits. Left as it is and raised below.
+- A window is at most `DeviceKvCache.MAX_SEQ_LEN` (32,768) positions: the device KV and `RopeTable` stop there. That is "the
+  longest window the device holds" for the kit probe.
+- Bit-identity holds by construction. An attention block's output depends only on its own rows (their Q, cache pointers and
+  sequence lengths) and `rowsPerBlock` (`gqa_attention.cu`: `b0 = blockIdx.x * rowsPerBlock`, the key range from the block's own
+  rows); a GEMM output's accumulation order over super-blocks does not depend on the column tile, and rows are independent.
+- Calibration: the MX150 tester run (`20261112T001051Z-remote-linux-amd64-core-i7-8550u-geforce-mx150`) reads Mistral 7B's
+  attention at 2048 tokens 268.75 ms (7.2x this GTX 1080) and the down-matrix GEMM 209.69 ms (8.3x), the slowest GPU any kit run
+  has measured.
+
+**What changed.**
+- node: `BoundedLaunches` (new): attention work = keys attended (a sliding window counts its own) x heads x the kernel's
+  register head width, at most `ATTENTION_WORK_PER_LAUNCH` 1.2e10 a launch, split between whole blocks; GEMM work = rows x weight
+  rows x weight columns, at most `GEMM_WORK_PER_LAUNCH` 2e11, in runs of whole 64-row tiles. Scaled from the MX150's readings the
+  heaviest launch is 375 ms (attention) and 349 ms (GEMM), under 400; a 2048-token window on every sweep model is one launch of
+  each, so no sweep or gate shape changes. `GqaAttentionKernel.launchBounded` (every launch keeps the whole window's
+  `rowsPerBlock`; offsets Q, the pointer tables, the lengths and the output) and `registerWidth`; `KQuantGemmKernel.launchBounded`
+  (every run keeps the whole batch's column tile), called by `multiplyHalf`. `PrefillWindowRegion` keeps the window's sequence
+  lengths in an `int[]` sized to its capacity (allocated with the window); `CudaGqaAttention` passes its own.
+- `GpuKernelTimings`: each reading is the slowest launch of the split, made as the prefill paths make it (attention: the slower
+  of the launch with the most work and the last; K and V for the whole window, Q only for the launch's rows), named with the
+  launch count; `measureWindow` (no LM head), `LONGEST_WINDOW`.
+- juno-kit: `gpu.kernel-timing` adds a second check at `longestTokens` (default 32,768) against the same 500 ms bar, with its
+  readings (13 in all); catalog description and peak device memory (152 -> 514 MiB) updated.
+
+**Tests, written first.** `BoundedLaunchesTest`, `BoundedLaunchParityTest` and the new `GpuKernelTimingsTest` case failed to
+compile on the missing API (`BoundedLaunches`, `launchBounded`, `measureWindow`, `LONGEST_WINDOW`); the probe's self-test failed
+on the missing second check. Then:
+
+| Test | Cases | Result | Defect put in, then taken out (`cmp` after) |
+|---|---|---|---|
+| `BoundedLaunchesTest` | 10 | pass | |
+| `BoundedLaunchParityTest` (GPU; split vs one launch, raw bits) | 9: attention over one cache (heads 64, 96, 160 wide; a sliding window), over separate caches, the tiled GEMM (Q4_K, Q5_K, Q6_K; a padded row stride) | pass | attention output not offset per launch, and GEMM activation not offset per run: 8 of 9 fail (the ninth is the one-launch GEMM case, which takes no split) |
+| `GpuKernelTimingsTest` | 4 (1 skipped: the CUDA-absent refusal) | pass | |
+| `ProbeSelfTests` (kernel timing), `CoverageTest`, `ProbeCatalogTest` | 1, 7, 5 | pass | |
+
+**Readings** ([`20261112T181947Z-bounded-launches`](../perf-compare/20261112T181947Z-bounded-launches/INDEX.md), unpinned):
+- `gpu.kernel-timing` on the final tree: at 2048 tokens one launch each, slowest 37.75 ms (Mistral 7B attention); at 32,768
+  tokens 98 to 212 attention launches per window, slowest 57.94 ms (Qwen2.5-3B's heads; Mistral 7B 54.95), the GEMM 10 runs of
+  3,392 rows, slowest 42.26 ms. Both checks met. One launch over Mistral 7B's 8,192-token window read 596.51 ms before
+  (`20261106T045718Z-gpu-kernel-timing`), about 9.5 s extrapolated to 32,768.
+- `smoke-long-prompt-prefill.sh --models mistral --lengths "2048 8192" --baseline-jar <the tree before the change>`, GPU, both
+  schedules: 16 of 16 pass; greedy text identical to the baseline at 2044 and 8472 prompt tokens on both schedules (at 8472 both
+  attention and the GEMM split). TTFT, single readings: static 8472 347,788 ms against 347,935; continuous 8472 74,932 against
+  76,329. The smoke's default 8 GiB heap failed the 8,192-token calibration with `OutOfMemoryError` before either build ran (the
+  dense host KV doubling and FP32-backed `f16`, item 6); run at 16 GiB.
+- No standing-gate A/B was run: below the budgets the launch sequence is the one it was (one launch, the same arguments), and
+  the gate's lanes (`n_prompt` 128 and 512) sit below them. The owner's pinned standing gate at tier close covers it.
+
+**Tests run.** The unit suite on the final tree (`mvn -o test -pl api,tokenizer,lora,node,coordinator,sampler,kvcache,health,`
+`registry,vision,metrics,juno-player,juno-kit -am -Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 80 min):
+`registry` 93, `lora` 116, `kvcache` 175, `health` 23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 418 (417 plus
+the integer-kernel execution's 1; 1 skipped), `vision` 98, `metrics` 86, `juno-player` 158 (2 skipped), `juno-master` 15 and
+`juno-kit` 140 pass; `node` 1,495 run (the step 5 suite's 1,475 plus this change's 20), 55 skipped, **3 failures**, the same
+three as step 5's suite, in no code this change touches:
+- `DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix`, 2 of 4 (Q5_K 512x2048, round 1, row 219: -15.84 right
+  after the upload against -10.02 once the device was idle; Q6_K 512x2048, round 1, row 190: 4.52 against 44.44). Alone three
+  times after: 4 of 4 each. The upload-ordering race raised in step 5's entry (finding 4); still open, and still not this tier's code.
+- `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`: 82,247,680 bytes reported free with the device
+  full against <= 67,108,864; alone three times after, 75,956,224, 76,021,760 and 76,021,760. The driver holdback recorded in
+  step 5's entry and Tier 02G's 2026-11-07 entry. Bound not loosened.
+- `ProbeRunnerTest`, which failed `NOISY` in step 5's suite under desktop load, passed this time.
+
+**Cross-surface rows for this change.** 1 CPU: N/A, GPU launches only. 2 CUDA: PASS (parity tests, real model both schedules,
+kit probe). 3 ROCm: N/A, the attention and tiled GEMM kernels are CUDA-only. 4 Static, 5 Continuous: PASS (smoke). 6 Local:
+PASS. 7, 8 Clusters: the nodes run the same prefill paths; the split is inside the kernel launch sites, not run on a cluster
+here. 9 LoRA training: N/A, no device prefill attention. 10 LoRA playback: N/A, `--lora-play` keeps the host path. 11 Vision:
+the text handler's prefill takes the same launch sites; not run live. 12 to 15: N/A, no surface change.
+
+**Docs.** `docs/howto.md` (device prefill windows: bounded launches), `docs/agent-arch.txt` (`BoundedLaunches`, the two
+kernels, `GpuKernelTimings`, the probe), `CHANGELOG.md`, `docs/perf-compare/README.md`.
+
+**Out-of-tier changes (README rule 9).** This change is Tier 02G's item 3, option (a), landed here by owner decision. It
+touches the GPU prefill attention and GEMM launch sites. It is not a measurement boundary for the sweep: at `n_prompt` 128, 512
+and 2048 every sweep model takes the single launch it took, and no published baseline is invalidated. Windows longer than the
+budget (above about 2,900 tokens on Mistral 7B's heads) now launch in pieces; their results are bit for bit as before.
+
+**Exit criteria:** 4 of 15, none ticked by this change. The kit-probe criterion's line for this change is in (the **Kit probes**
+section above).
+
+**Raised with the owner** (no decision needed to continue):
+1. The FP16 cuBLAS GEMM (`CudaMatVec.gemmHalfOnStream`: FP16-resident weights, and the tiled kernel's fallback when its module
+   does not load) is one cuBLAS call per matmul and is not split. A sweep model's Q4_K_M weights never take it. On this card a
+   Mistral-sized FP16 matmul over a 32,768-row window is estimated at about 0.45 s (3.85e12 FLOP at FP32 rate; not timed). Splitting
+   it would change bits (cuBLAS picks its kernels per shape). Recommendation: leave it unless a Windows run times it near the
+   watchdog.
+2. Finding, both builds: on the `static` schedule an 8,472-token Mistral 7B prompt reads 348 s to first token on the GTX 1080
+   against 75 s on `continuous`. Not caused by this change (the baseline reads the same). Worth a decomposition before Tier 07's
+   long-prompt readings; it is not this tier's scope.
+3. The Windows half of Tier 02G's item 3 (the longest kernel timed against the watchdog on Windows) can now read the 32,768-token
+   check on a tester's Windows GPU through `gpu.kernel-timing`.
+
+**Owed to the owner:** nothing to run for this change.
+
+**Next for the executor:** the rest of step 6: the Q4_0 KV codec (item 4; `Q4_0KvCodec` beside `Q8_0KvCodec`, round-trip test
+first, the quality live test against F16 KV), then item 7 (quantized device KV).
+
+### 2026-11-13: step 6, the Q4_0 KV codec (item 4): in on every surface `q8_0` reaches; its quality gate missed on three of four sweep models
+
+**Plan against code, verified with the step 5 and bounded-launch work uncommitted in the tree** (HEAD `6ad5c728`; built on, not
+redone). `check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep, build or test run was in progress. `.github/`
+untracked, not this session's. Every claim the step depends on held:
+- `KvElementType` was `F16` and `Q8_0`; a serialized KV block (`PagedKvCodec`, `NodeKVCacheAdapter`) names each side's type by
+  its ordinal, so `Q4_0` is appended (ordinal 2) and existing blocks read as written.
+- The quantized slice decode was called as `Q8_0KvCodec.decodeRange` at five attention sites (`GqaMath` keys and values,
+  `GqaWindowAttention` keys and values, `GqaVectorHead` keys); dense, paged and serialized storage each switched on the type.
+- `HandlerKvShare.supported` refuses any non-`f16` host type beside GPU attention, so `q4_0` is refused there as `q8_0` is.
+- Nothing said at startup that a quantized `--cache-type` on a GPU attention launch sets the host rows only (item 7: "keeps FP16
+  and says so at startup, never silently"); it was silent for `q8_0`.
+- The four sweep models are on disk.
+- One wording needed a definition, recorded under the perf gate (dated): greedy agreement is the share of 512 generated positions
+  where the two caches' argmax agree along the `f16` cache's own greedy continuation, both sides teacher-forced the same way.
+
+**What changed.**
+- kvcache: `Q4_0KvCodec` (new): the GGUF block, 18 bytes per 32 values, FP16 `d = max / -8` from the element of largest
+  magnitude, element `j` in the low and `j + 16` in the high nibble of byte `j`, decoded `d * (q - 8)`; `decodeRange` is the
+  loop `decode` runs, so a slice reads the whole-row decode's bits. `KvRowCodec` (new): row size, encode and decode for every
+  type in one place; `DenseKvTensor` (its packed array now serves both block types), `KvBlockPool`, `PagedKvCodec` and
+  `NodeKVCacheAdapter` go through it. `KvRows.decodeRange`: the one entry point attention calls, a `final boolean` choosing the
+  codec. `KvElementType.Q4_0` (`q4_0`, `q4`); the parse error lists `f16|q8_0|q4_0`. `CacheTypeOptions.usesQuantized` is any
+  non-`f16` side (it read `Q8_0` only), so LoRA training's ephemeral-KV warning covers `q4_0`.
+- node: the five attention sites call `KvRows.decodeRange`. `DeviceKvTypeNotice` (new): the startup warning for a CUDA launch
+  with GPU attention on a handler that runs the kernel and a quantized type, not LoRA; `consoleNotice` printed by `ConsoleMain`,
+  `announce` logged once where `GpuAttentionMirror.open` and `LlamaTransformerHandler` open the kernel.
+- CLI help: `ConsoleMain`, `scripts/run.sh`, `scripts/run.bat` (three subcommands each), `compare-llama-cpp.sh`.
+- juno-kit: `KvQualityProbe` (new), `kv-quality.<model>` on the four sweep models in the CPU suite; `QualityProbe.score` with
+  JVM properties (extracted, the quality probe's behaviour unchanged); `QualityRunMain` reports its run's cache types.
+
+**Tests, written first** (they failed to compile on the missing `KvElementType.Q4_0` and `Q4_0KvCodec`):
+
+| Test | Runs | Notes |
+|---|---|---|
+| `Q4_0KvCodecTest` (new) | 8 | the published byte layout on a hand-worked block; the extreme exact and its opposite clamped to 7 steps; every value within one step of its block's scale and the error energy within 0.8x to 1.25x of the uniform-quantization model (`step^2 / 12`), coarser than `Q8_0`; zeros and a padded last block; every slice equal to the whole-row decode, bit for bit; bad ranges |
+| `CacheTypeOptionsTest` | 7 (was 4) | `q4_0`/`q4` parse, CLI names round trip, ordinals stable, `usesQuantized` with `q4_0` on one side. Its `parse_rejects_unknown` asserted that `q4_0` is refused: that expectation is the one this item reverses, so it now refuses `q4_1` and checks the message lists `q4_0` |
+| `DeviceKvTypeNoticeTest` (new) | 3 | the warning on CUDA with GPU attention (`auto`, `on`) for `q4_0` and `q8_0`; none for `f16`, CPU, ROCm, LoRA, Phi-2, Qwen3-MoE, `--gpu-attention off`; the handler log once per process |
+| By enumeration of `KvElementType.values()` | | `PagedKvAttentionOracleTest` 41 to 73, `GqaWindowAttentionTest` 16 to 36, `KvRowsTest` 14 to 20, `KvBlockPoolTest`, `KvPageTableTest`, `KvBlockPoolReclaimTest` |
+| `q4_0` added by hand | | `PagedKvHandlerOracleTest` 18 to 27 (all 9 families, LoRA handlers included), `PagedKvReclaimHandlerTest` 18 to 27, `KvPrefixShareHandlerTest` 36 to 54, `KvContextShiftTest` 25 (dense and paged `q4_0`), `SessionKvLayoutShareTest` 16, `KvWriteRowsTest` 5, `DenseKvTensorTest` 4, `PagedKvArenaManagerTest` 3 and `NodeKVCacheAdapterTest` 15 (a flushed `q4_0` side restores the rows the tensor read, bit for bit) |
+| `KvQuantQualityLiveTest` (new, opt-in `-Djuno.test.kvQuality=true`) | 4 | below |
+| kit `ProbeSelfTests` (`kv-quality` on the synthetic model), `CoverageTest`, `ProbeCatalogTest` | 1, 7, 5 | pass |
+
+Defects in the tests, found while running them: `KvRowsTest.readRow` and a `KvBlockPoolReclaimTest` helper decoded every
+non-`f16` page as `Q8_0` (now through `KvRows.decodeRange`); `KvRowsTest`'s reused-dense check compared exact `0.0f` bits, and
+zeroed `q4_0` storage decodes as `-0.0` (an FP16 `+0` scale times step `-8`), which is zero and which no attention sum can see
+(every sum starts at `+0`), so it compares values; the first `Q4_0KvCodecTest` stepped past an 80-value row's last block, and
+its first error check was a guessed RMS range (0.04 to 0.10) that mixed-scale rows read at 0.101, replaced by the
+uniform-quantization model before anything else changed.
+
+**Shown able to fail**, each defect put in and taken out (`cmp` against a copy afterwards):
+
+| Defect | Fails |
+|---|---|
+| `KvRows.decodeRange` decodes `q4_0` pages as `q8_0` | `KvRowsTest` 5, `PagedKvAttentionOracleTest` 28, `PagedKvHandlerOracleTest` 7, `GqaWindowAttentionTest` 20 |
+| `Q4_0KvCodec` reads the high-nibble half from the low nibble | `Q4_0KvCodecTest` 2, `DenseKvTensorTest` 1, `PagedKvArenaManagerTest` 1 (the in-place and gathered paths share the codec, so the oracles cannot see it; the codec tests do) |
+
+**Quality readings** ([`20261113T051804Z-kv-q4-0`](../perf-compare/20261113T051804Z-kv-q4-0/INDEX.md), the candidate tree,
+CPU, deterministic): NLL ratio against `f16` (bar <= 1.02), greedy agreement (bar >= 97%), first differing generated position.
+
+| Model | `q4_0` K and V | `q8_0` K and V | `q8_0` K, `q4_0` V |
+|---|---|---|---|
+| TinyLlama 1.1B | **1.03006**, 97.07%, 1 | 0.99977, 99.80%, 20 | 1.00019, 98.83%, 20 |
+| Qwen2.5-3B | **2.01752**, **83.59%**, 1 | 1.00073, 99.22%, 1 | 1.00607, 99.80%, 17 |
+| Phi-3.5-mini | **1.03538**, 98.05%, 4 | 0.99875, 99.80%, 58 | 1.00202, 99.61%, 26 |
+| Mistral 7B | 1.00612, 99.02%, 0 | 0.99909, 99.80%, 35 | 0.99728, 99.61%, 3 |
+
+- The `f16` side reproduces between runs and equals the integer-kernel quality reading on TinyLlama (2.45609), and its own
+  teacher-forced argmax equals the tokens it generated at decode width on 512 of 512 positions on every model.
+- The loss is the format's and the keys': the same read path is lossless at 8 bits, the codec matches the published block and
+  the uniform-quantization model, and 4-bit values cost at most 0.6% beside 8-bit keys. Qwen2.5-3B collapses with 4-bit keys
+  (perplexity 30.7 against 5.46); the likely cause, unmeasured here, is a few key channels far larger than the rest setting
+  each block's one scale.
+- So `q4_0` as the plan scoped it (both K and V) meets the gate on Mistral 7B only, and exit criterion 5 stays open.
+
+**Throughput A/B (unpinned, same directory).** A: the tree before this change, jar `2e7ab50ca9c2cdf4` (published as
+`20261112T181947Z-bounded-launches`'s kit-run jar); B: `9fc4975d8a843f6e`. TinyLlama CPU `static` `n_prompt` 512, A B A B A B,
+medians: `f16` pp 1.004, tg 0.997, allocation per token 1.000; `q8_0` pp 1.001, tg 0.995, allocation 0.974; no GC pause; greedy
+replies equal 3 of 3 on both lanes. `q4_0` reads 0.954x pp and 0.975x tg of `q8_0` at this length. Evidence for the standing
+gate, not its pinned run.
+
+**Launch checks** (same directory): TinyLlama `q4_0` on the GTX 1080 prints the warning and replies "The capital of France is
+Paris."; on the CPU, `static` and `continuous`, no warning and the same reply.
+
+**Tests run.**
+- Focused: `kvcache` 216 of 216; `node` 266 of 266 (`PagedKvAttentionOracleTest`, `GqaWindowAttentionTest`,
+  `PagedKvHandlerOracleTest`, `KvPrefixShareHandlerTest`, `PagedKvReclaimHandlerTest`, `NodeKVCacheAdapterTest`,
+  `DeviceKvTypeNoticeTest`, `LlamaTransformerHandlerCacheTypeParityTest`, `CpuKernelVectorEscapeTest`,
+  `HandlerEvictReleasesKvTest`); kit 14 of 14.
+- The unit suite on the final code (`mvn -o test -pl api,tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,`
+  `metrics,juno-player,juno-kit -am -Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 73 min): `registry` 93, `lora`
+  116, `kvcache` 216, `health` 23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 418 (1 skipped), `vision` 98,
+  `metrics` 86, `juno-player` 158 (2 skipped; `LauncherParityTest` and `WindowsLauncherScriptTest` with the help edits) and
+  `juno-master` 15 pass; `node` 1,588 run, 56 skipped, **3 failures**; `juno-kit` 141 run, **1 failure**. None is in code this
+  change reaches, and none was seen differently before it:
+  - `DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix`, 2 of 4 (Q5_K row 256, Q6_K row 191); alone three
+    times after, 4 of 4 each. The upload-ordering race of step 5's finding 4, still open.
+  - `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`: 84,475,904 bytes free with the device full
+    against <= 67,108,864; alone three times, 79,888,384, 80,609,280 and 81,657,856. The driver holdback. Bound not loosened.
+  - `ProbeRunnerTest.aProbeRunsInItsOwnJvmAndLeavesItsReportAndLog` (kit): `NOISY`, other processes at 7% (suite) and 11% to
+    14% (alone) of the CPU; step 5 saw it fail the same way on HEAD's tree.
+- `KvQuantQualityLiveTest`: run 1 (`q4_0`, four models, 175 min) 4 run, 3 failures, the three NLL assertions above; run 2
+  (`q8_0`, `q8_0/q4_0`, three models, 95 min) pass; run 3 (Phi-3.5-mini) (`q8_0`, `q8_0/q4_0`, 132 min) pass.
+- `check-plan-thresholds.sh`: ok.
+
+**Cross-surface rows for this item.** 1 CPU: PASS (oracles, quality runs, launches). 2 CUDA: the type sets the host rows (CPU
+attention fallback, flush, sharing refused beside GPU attention as for `q8_0`); GPU attention keeps its FP16 copy, said at
+startup (tested; launch). Item 7 changes the copy. 3 ROCm: attention reads the host rows through the CPU path tested here;
+NEEDS-AMD-HARDWARE for a run. 4 Static, 5 Continuous: PASS (dense and paged in every oracle; launches). 6 Local: PASS. 7, 8
+Clusters: `ClusterHarness` forwards `JUNO_CACHE_TYPE_K/V` to the nodes, whose handlers build the same storage; not run on a
+cluster here. 9 LoRA training: the ephemeral-KV warning now fires for `q4_0` (`usesQuantized`, tested). 10 LoRA playback: PASS
+(the three LoRA handlers in the handler oracle, reclaim and prefix tests with `q4_0`). 11 Vision: the decorator's text handler
+reads the same storage; not run live. 12, 13 REST: N/A, no field. 14 CLI: PASS (help in both launchers and `ConsoleMain`; an
+unknown type stops startup naming the three). 15 Embedding facade: as for `q8_0`, through the `JUNO_CACHE_TYPE_K/V` properties
+the handler reads at load; `JunoPlayer` has no cache-type method for either.
+
+**Docs.** `docs/howto.md` (the two flag rows: `q4_0`, the per-model quality, the GPU copy, the context-shift note),
+`docs/agent-arch.txt` (codecs, `KvRowCodec`, `KvRows.decodeRange`, `DeviceKvTypeNotice`, the kit probe), `README.md` (block KV),
+`docs/performance.md` (the quality table), `CHANGELOG.md` (Session 145), `docs/perf-compare/README.md`.
+
+**Kit probes.** Item 4's line is in: `kv-quality.<model>`, four sweep models, CPU suite, with its self-test and
+`feature:kv-q4-0`.
+
+**Out-of-tier changes (README rule 9):** none. `compare-llama-cpp.sh`'s help lists `q4_0` (it passes the value through).
+
+**Exit criteria:** 4 of 15, unchanged. Criterion 5 stays open on the readings above.
+
+**Decision for the owner: how item 4 closes.** The plan scoped `q4_0` for K and V; measured, 4-bit keys miss the gate on three
+of four sweep models and 4-bit values do not.
+1. **(a) Recommended:** score item 4 on `--cache-type-k q8_0 --cache-type-v q4_0`, which meets both bars on every sweep model
+   and stores 0.76x of `q8_0`'s bytes (0.20x of float32). `q4_0` keys stay available, with a startup warning naming the measured
+   loss and the `q8_0` keys alternative (a few lines in `DeviceKvTypeNotice`'s neighbourhood plus a test); the gate text and
+   criterion 5 are restated to say so. Item 7's `q4_0` device threshold (greedy >= 97%) is read the same way.
+2. (b) Keep `q4_0` keys in the gate and make them good enough: a fixed orthogonal transform (a 32-point Walsh-Hadamard) of each
+   key block before it is quantized, with the query transformed the same way at attention, so a few large channels no longer
+   set a block's scale. New scope: the CPU read path, context shift (moved keys transformed back before re-rotation) and item
+   7's device kernels all change, with its own tests and readings; a session or two, and whether it reaches 1.02x on Qwen2.5-3B
+   is unmeasured.
+3. (c) Close criterion 5 on the miss by owner decision, `q4_0` documented with its per-model quality.
+4. (d) Refuse `--cache-type-k q4_0` at startup (values only). Not recommended: it removes a working setting that is lossless
+   enough on Mistral 7B.
+
+**Owed to the owner:** the decision above. Nothing to run for this item; the standing gate stays the pinned run at tier close.
+*(Decided 2026-11-13: (a); the next entry.)*
+
+**Next for the executor:** item 7, the quantized device KV, starting with its `q8_0` layout, which no option above changes; its
+`q4_0` half follows the decision.
+
+### 2026-11-13, later: owner decision (a): item 4 is scored on `q8_0` keys with `q4_0` values; `q4_0` keys warned at startup
+
+**Owner decision (2026-11-13): (a).** Item 4's gate (NLL <= 1.02x, greedy agreement >= 97%, every sweep model) is scored on
+`--cache-type-k q8_0 --cache-type-v q4_0`. The bars are unchanged; the setting they are read on changed, on the measurement that
+the loss is the keys'. `q4_0` keys stay a working setting (Mistral 7B 1.006x), with a startup warning. The readings that close
+it are the previous entry's run 2, on the candidate tree whose codec and read path this change leaves untouched.
+
+**What changed.**
+- `KvKeyPrecisionNotice` (kvcache, new): for `--cache-type-k q4_0`, whatever the value type, the line naming the measured loss
+  and `--cache-type-k q8_0 --cache-type-v q4_0`. `SessionKvLayout.fromEnv`, which every handler (LoRA included) builds its
+  layout through, logs it once per process at WARNING, so server and cluster node logs carry it; `ConsoleMain` prints it under
+  the KV policy line before branching into local, cluster or LoRA mode, since console logging is off without `--verbose`.
+- `KvQuantQualityLiveTest` gates `q8_0/q4_0` (default `-Djuno.test.kvQuality.types`); any pair, `q4_0` included, is read and
+  printed on request. `KvQualityProbe` (kit) scores `q8_0` keys with `q4_0` values by default (its `type` argument takes one type
+  or a `k/v` pair); the catalog title, its self-test and `feature:kv-q4-0` follow.
+- Gate text, item 7's `q4_0` bars and criterion 5 restated above (dated). Criterion 5 ticked.
+- Docs: how-to (`--cache-type-k` row: use `q8_0` keys with `q4_0` values for a 4-bit cache; `q4_0` keys warned), README, the
+  performance doc's 2026-11-13 paragraph, agent-arch, CHANGELOG (Session 145), the help text of `ConsoleMain`, `run.sh` and
+  `run.bat`.
+
+**Tests.**
+
+| Test | Run | Result | What it shows |
+|---|---|---|---|
+| `KvKeyPrecisionNoticeTest` (kvcache, new) | 3 | pass | warned for `q4_0` keys with every value type and names both settings; silent for `f16` and `q8_0` keys with every value type, `q4_0` values included; logs one WARNING per process. Shown able to fail: keyed on the value type instead, all 3 fail |
+| `SessionKvLayoutTest`, `CacheTypeOptionsTest` (kvcache) | 2, 7 | pass | unchanged behaviour with the notice in `fromEnv` |
+| `ProbeSelfTests#kvQuality*` (juno-kit) | 1 | pass | the probe on the synthetic model with `q8_0` keys and `q4_0` values: its readings, check name, `quantizedRunKv = cache-type-k=q8_0 cache-type-v=q4_0` |
+| `CoverageTest` (juno-kit) | 7 | pass | `coverage.tsv` and the catalog in step |
+| `KvQuantQualityLiveTest` (node) | 1 | skipped | opt-in; compiles with the new gate |
+
+Launch, TinyLlama, CPU, greedy, "What is the capital of France?" through `./juno local`: `--cache-type-k q4_0 --cache-type-v
+q4_0` prints the warning under the policy line; `--cache-type-k q8_0 --cache-type-v q4_0` prints nothing; both reply "The capital
+of France is Paris." No hot path changed (one check when a layout is built), so no throughput gate applies.
+
+**Deferred: rotated 4-bit keys (option (b) of the previous entry).** Not owed work and not an exit criterion. Revisit before
+step 7 (item 5, disk-backed session save and restore) starts, on item 7's readings: if the GPU's KV copy at `q8_0` keys with
+`q4_0` values still bounds how many sessions fit on the card, or a long-context target needs the full `q4_0` size (0.28x of FP16
+against 0.41x), take (b) then. Before disk persistence, the stored meaning of `q4_0` keys can change freely; after it, saved
+sessions hold unrotated keys and rotated ones need a type of their own. Add to (b)'s scope: a shared prefix's device rows are
+uploaded from host KV, which `HandlerKvShare` allows only with an `f16` host KV today; if item 7 lifts that for quantized types,
+the upload decodes rotated keys back.
+
+**Exit criteria:** 5 of 15. Criterion 5 ticked.
+
+**Owed to the owner:** nothing for this change. The standing gate stays the pinned run at tier close.
+
+**Next for the executor:** item 7, the quantized device KV, starting with its `q8_0` layout.

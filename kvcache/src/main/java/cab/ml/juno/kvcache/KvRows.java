@@ -24,9 +24,9 @@ import java.util.Arrays;
  * <p>Rows sit in pages of {@link #rowsPerPage()} rows: row {@code t} is row {@code t % rowsPerPage()} of page
  * {@code t / rowsPerPage()}. A paged tensor's pages are its block table's pages in the pool, in table order; a dense
  * tensor is one page holding every row ({@link #ONE_PAGE}). An {@link KvElementType#F16} page is a float array of
- * {@code kvDim} floats per row ({@link #floatPage}). A {@link KvElementType#Q8_0} page is a byte array of
- * {@link #bytesPerRow()} bytes per row in {@link Q8_0KvCodec}'s blocks ({@link #bytePage}); the reader decodes the
- * slice it needs as it goes ({@link Q8_0KvCodec#decodeRange}).
+ * {@code kvDim} floats per row ({@link #floatPage}). A {@link KvElementType#Q8_0} or {@link KvElementType#Q4_0} page
+ * is a byte array of {@link #bytesPerRow()} bytes per row in that type's blocks ({@link #bytePage}); the reader decodes
+ * the slice it needs as it goes ({@link #decodeRange}).
  *
  * <p>The tensor that hands out a view keeps it current as its storage changes (a page added or dropped, a shared
  * page copied before a write, a dense array grown), so a view is valid until the tensor is next written. Attention
@@ -41,6 +41,8 @@ public final class KvRows {
 	private final int kvDim;
 	private final int bytesPerRow;
 	private final int rowsPerPage;
+	/** {@code Q4_0} pages: {@link #decodeRange} reads nibbles; otherwise it reads {@code Q8_0} bytes. */
+	private final boolean q4;
 	private float[][] floatPages;
 	private byte[][] bytePages;
 
@@ -52,10 +54,8 @@ public final class KvRows {
 		this.type = type;
 		this.kvDim = kvDim;
 		this.rowsPerPage = rowsPerPage;
-		this.bytesPerRow = switch (type) {
-		case F16 -> kvDim * Float.BYTES;
-		case Q8_0 -> Q8_0KvCodec.encodedBytes(kvDim);
-		};
+		this.bytesPerRow = KvRowCodec.rowBytes(type, kvDim);
+		this.q4 = type == KvElementType.Q4_0;
 		if (type == KvElementType.F16)
 			floatPages = new float[1][];
 		else
@@ -82,7 +82,7 @@ public final class KvRows {
 		return rowsPerPage;
 	}
 
-	/** Stored bytes per row: {@code kvDim} floats for {@code F16}, the row's Q8_0 blocks for {@code Q8_0}. */
+	/** Stored bytes per row: {@code kvDim} floats for {@code F16}, the row's blocks for {@code Q8_0} and {@code Q4_0}. */
 	public int bytesPerRow() {
 		return bytesPerRow;
 	}
@@ -92,9 +92,22 @@ public final class KvRows {
 		return floatPages[page];
 	}
 
-	/** Page {@code page} of a {@code Q8_0} view: {@link #bytesPerRow()} bytes per row, read in place. */
+	/** Page {@code page} of a {@code Q8_0} or {@code Q4_0} view: {@link #bytesPerRow()} bytes per row, read in place. */
 	public byte[] bytePage(int page) {
 		return bytePages[page];
+	}
+
+	/**
+	 * Decodes elements {@code [from, from + n)} of the row stored at {@code page[rowOff..)}, a {@link #bytePage} of
+	 * this view, into {@code dst[dstOff, dstOff + n)}: the values a whole-row decode gives them, bit for bit
+	 * ({@link Q8_0KvCodec#decodeRange}, {@link Q4_0KvCodec#decodeRange}). Attention calls it with one head's slice
+	 * of a key or value row. Not for an {@code F16} view, whose pages are read as floats.
+	 */
+	public void decodeRange(byte[] page, int rowOff, int from, int n, float[] dst, int dstOff) {
+		if (q4)
+			Q4_0KvCodec.decodeRange(page, rowOff, from, n, dst, dstOff);
+		else
+			Q8_0KvCodec.decodeRange(page, rowOff, from, n, dst, dstOff);
 	}
 
 	void setPage(int page, float[] rows) {

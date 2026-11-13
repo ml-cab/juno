@@ -19,7 +19,6 @@ import java.util.Arrays;
 
 import cab.ml.juno.kvcache.KvElementType;
 import cab.ml.juno.kvcache.KvRows;
-import cab.ml.juno.kvcache.Q8_0KvCodec;
 import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.VectorSpecies;
 
@@ -41,8 +40,8 @@ import jdk.incubator.vector.VectorSpecies;
  * pages too. An accumulator is only ever the argument of a lane operation ({@code o0 = term.add(o0)}) and its lanes
  * are read through {@code zero(F).add(o0)}: C2 types a vector carried round a loop inexactly, and a call on one can
  * be bound through the JDK's shared type profile and boxed. Float addition commutes, and an accumulator that starts
- * at zero never holds -0, so both forms give the bits of {@code o0.add(term)}. A {@code Q8_0} key slice is decoded
- * into a per-thread row and scored as one row; {@code Q8_0} value slices are added by the serial loop, whose sums are
+ * at zero never holds -0, so both forms give the bits of {@code o0.add(term)}. A quantized key slice is decoded
+ * into a per-thread row and scored as one row; quantized value slices are added by the serial loop, whose sums are
  * the register blocks' bit for bit.
  *
  * <p>Loading this class needs {@code jdk.incubator.vector}; {@link GqaMath} calls it only when
@@ -88,7 +87,7 @@ final class GqaVectorHead {
 				int count = Math.min(seqLen - t, perK - slot);
 				byte[] rows = k.bytePage(page);
 				for (int r = 0, ro = slot * bytesPerRow; r < count; r++, ro += bytesPerRow) {
-					Q8_0KvCodec.decodeRange(rows, ro, kBase, headDim, row, 0);
+					k.decodeRange(rows, ro, kBase, headDim, row, 0);
 					scoreRun(q, qBase, row, 0, 0, 1, headDim, scale, scores, t - lo + r);
 				}
 				t += count;

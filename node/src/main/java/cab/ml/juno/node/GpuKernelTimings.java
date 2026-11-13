@@ -18,6 +18,7 @@ package cab.ml.juno.node;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -44,10 +45,12 @@ import java.util.SplittableRandom;
  * </ul>
  *
  * <p>On the GPU the static schedule's adaptive prefill window covers a whole prompt in one window, up to a
- * device-memory ceiling, so {@code tokens} is the prompt length: the attention and GEMM launches grow with it.
- * Only the timed kernel is launched between the events (the GEMM's and GEMV's Q8_1 packing runs before them).
- * Weights and activations are seeded random values with finite scales; the kernels' time does not depend on the
- * values.
+ * device-memory ceiling, so {@code tokens} is the prompt length. The prefill paths split a window's attention and
+ * its GEMM into launches of bounded work ({@link BoundedLaunches}); each reading is the slowest launch of that
+ * split (for attention, the slower of the one with the most work and the last), made as the prefill paths make it, and its name says how many launches the window takes when it is more
+ * than one. The longest window is {@link #LONGEST_WINDOW}, the positions the device KV holds. Only the timed
+ * kernel is launched between the events (the GEMM's and GEMV's Q8_1 packing runs before them). Weights and
+ * activations are seeded random values with finite scales; the kernels' time does not depend on the values.
  */
 public final class GpuKernelTimings {
 
@@ -105,6 +108,9 @@ public final class GpuKernelTimings {
 	static final MatrixShape LM_HEAD = new MatrixShape("qwen2.5-3b output", 151936, 2048,
 			QuantizationLayout.TYPE_Q6_K, "Q6_K");
 
+	/** The longest prefill window: the positions the device KV holds. */
+	public static final int LONGEST_WINDOW = DeviceKvCache.MAX_SEQ_LEN;
+
 	/** Untimed launches before the timed ones, so the first reading is not the clock's ramp. */
 	private static final int WARMUP = 2;
 	/** A finite FP16 block scale (0.0625), written over the random bytes where each block keeps its scales. */
@@ -120,6 +126,18 @@ public final class GpuKernelTimings {
 	 * @throws IllegalStateException when CUDA or one of the kernels is unavailable, with the reason
 	 */
 	public static List<Timing> measure(int tokens, int reps) {
+		return measure(tokens, reps, true);
+	}
+
+	/**
+	 * As {@link #measure}, without the LM head, whose launch does not depend on the window: prefill attention and
+	 * the GEMM at a window of {@code tokens} rows.
+	 */
+	public static List<Timing> measureWindow(int tokens, int reps) {
+		return measure(tokens, reps, false);
+	}
+
+	private static List<Timing> measure(int tokens, int reps, boolean lmHead) {
 		if (tokens < 1 || reps < 1)
 			throw new IllegalArgumentException("tokens and reps must be >= 1 (got " + tokens + ", " + reps + ")");
 		if (!CudaAvailability.isAvailable())
@@ -131,56 +149,107 @@ public final class GpuKernelTimings {
 		List<Timing> out = new ArrayList<>();
 		try (GpuContext ctx = GpuContext.init(0); Events events = new Events(cuda)) {
 			for (AttentionShape s : ATTENTION)
-				out.add(attention(ctx, cuda, events, attention, s, tokens, reps));
+				out.add(attention(cuda, events, attention, s, tokens, reps));
 			for (MatrixShape m : GEMM)
 				out.add(gemm(ctx, cuda, events, gemm, gemv, m, tokens, reps));
-			out.add(lmHead(ctx, cuda, events, gemv, LM_HEAD, reps));
+			if (lmHead)
+				out.add(lmHead(ctx, cuda, events, gemv, LM_HEAD, reps));
 		}
 		return out;
 	}
 
-	private static Timing attention(GpuContext ctx, CudaBindings cuda, Events events, GqaAttentionKernel kernel,
-			AttentionShape s, int tokens, int reps) {
+	/**
+	 * The slower of two of the launches the prefill paths split a {@code tokens}-row window's attention into: the
+	 * one with the most work, and the last (fewest rows, most keys each, so the fewest blocks). Each is timed on its
+	 * rows only, over a cache of the whole window, with the whole window's block geometry.
+	 */
+	private static Timing attention(CudaBindings cuda, Events events, GqaAttentionKernel kernel, AttentionShape s,
+			int tokens, int reps) {
 		if (!GqaAttentionKernel.supportsHeadDim(s.headDim()))
 			throw new IllegalStateException("the attention kernel does not run head width " + s.headDim());
+		int[] seqLens = new int[tokens];
+		for (int b = 0; b < tokens; b++)
+			seqLens[b] = b + 1;
+		int rowsPerBlock = GqaAttentionKernel.rowsPerBlock(true, tokens);
+		long perKey = BoundedLaunches.attentionWorkPerKey(s.numHeads(), s.headDim());
+		int launches = 0, heavyFrom = 0, heavyTo = tokens, lastFrom = 0;
+		long heaviest = -1;
+		for (int start = 0, end; start < tokens; start = end, launches++) {
+			end = BoundedLaunches.attentionEnd(start, seqLens, tokens, rowsPerBlock, 0, perKey,
+					BoundedLaunches.ATTENTION_WORK_PER_LAUNCH);
+			long work = BoundedLaunches.attentionWork(seqLens, start, end, 0, perKey);
+			if (work > heaviest) {
+				heaviest = work;
+				heavyFrom = start;
+				heavyTo = end;
+			}
+			lastFrom = start;
+		}
 		SplittableRandom rng = new SplittableRandom(s.model().hashCode());
 		List<MemorySegment> device = new ArrayList<>();
-		try (Arena host = Arena.ofConfined(); DeviceKvCache kv = new DeviceKvCache(ctx, s.kvDim(), tokens)) {
-			kv.appendWindow(0, rows(rng, tokens, s.kvDim()), rows(rng, tokens, s.kvDim()), tokens);
-			MemorySegment q = upload(cuda, device, randomFloats(host, rng, (long) tokens * s.qDim()));
-			MemorySegment o = malloc(cuda, device, (long) tokens * s.qDim() * Float.BYTES);
-			long ptrBytes = tokens * ADDRESS.byteSize();
-			MemorySegment tablesHost = host.allocate(2 * ptrBytes + (long) tokens * Integer.BYTES);
-			for (int b = 0; b < tokens; b++) {
-				tablesHost.setAtIndex(ADDRESS, b, kv.kPointer());
-				tablesHost.setAtIndex(ADDRESS, tokens + b, kv.vPointer());
-				tablesHost.set(JAVA_INT, 2 * ptrBytes + (long) b * Integer.BYTES, b + 1);
+		try (Arena host = Arena.ofConfined()) {
+			long kvBytes = (long) tokens * s.kvDim() * Short.BYTES;
+			MemorySegment k = randomHalves(cuda, device, host, rng, kvBytes);
+			MemorySegment v = randomHalves(cuda, device, host, rng, kvBytes);
+			int maxRows = Math.max(heavyTo - heavyFrom, tokens - lastFrom);
+			MemorySegment q = upload(cuda, device, randomFloats(host, rng, (long) maxRows * s.qDim()));
+			MemorySegment o = malloc(cuda, device, (long) maxRows * s.qDim() * Float.BYTES);
+			int from = heavyFrom, to = heavyTo;
+			List<Double> ms = timeAttention(cuda, device, host, events, kernel, s, k, v, q, o, seqLens, from, to,
+					rowsPerBlock, reps);
+			if (lastFrom != heavyFrom) {
+				List<Double> last = timeAttention(cuda, device, host, events, kernel, s, k, v, q, o, seqLens, lastFrom,
+						tokens, rowsPerBlock, reps);
+				if (Collections.max(last) > Collections.max(ms)) {
+					ms = last;
+					from = lastFrom;
+					to = tokens;
+				}
 			}
-			MemorySegment tables = upload(cuda, device, tablesHost);
-			int rowsPerBlock = GqaAttentionKernel.rowsPerBlock(true, tokens);
-			List<Double> ms = events.time(() -> kernel.launch(q, tables, tables.asSlice(ptrBytes),
-					tables.asSlice(2 * ptrBytes), o, tokens, s.numHeads(), s.gqaRatio(), s.headDim(), s.kvDim(),
-					rowsPerBlock, 0, MemorySegment.NULL), reps);
+			String split = launches > 1 ? ", slowest of " + launches + " launches (rows " + from + " to " + to + ")"
+					: "";
 			return new Timing("prefill attention", s.model() + " " + s.numHeads() + "/" + s.numKvHeads() + "/"
-					+ s.headDim() + " heads, " + tokens + " rows over up to " + tokens + " keys", ms);
+					+ s.headDim() + " heads, " + tokens + " rows over up to " + tokens + " keys" + split, ms);
 		} finally {
 			device.forEach(cuda::deviceFree);
 		}
 	}
 
+	/** {@code reps} single launches over rows {@code [from, to)} of a window whose K and V are {@code k}, {@code v}. */
+	private static List<Double> timeAttention(CudaBindings cuda, List<MemorySegment> device, Arena host,
+			Events events, GqaAttentionKernel kernel, AttentionShape s, MemorySegment k, MemorySegment v,
+			MemorySegment q, MemorySegment o, int[] seqLens, int from, int to, int rowsPerBlock, int reps) {
+		int rows = to - from;
+		long ptrBytes = rows * ADDRESS.byteSize();
+		MemorySegment tablesHost = host.allocate(2 * ptrBytes + (long) rows * Integer.BYTES);
+		for (int b = 0; b < rows; b++) {
+			tablesHost.setAtIndex(ADDRESS, b, k);
+			tablesHost.setAtIndex(ADDRESS, rows + b, v);
+			tablesHost.set(JAVA_INT, 2 * ptrBytes + (long) b * Integer.BYTES, seqLens[from + b]);
+		}
+		MemorySegment tables = upload(cuda, device, tablesHost);
+		return events.time(() -> kernel.launch(q, tables, tables.asSlice(ptrBytes), tables.asSlice(2 * ptrBytes), o,
+				rows, s.numHeads(), s.gqaRatio(), s.headDim(), s.kvDim(), rowsPerBlock, 0, MemorySegment.NULL), reps);
+	}
+
+	/** One full launch of the runs the prefill paths split a {@code tokens}-row GEMM into: every run but the last is one. */
 	private static Timing gemm(GpuContext ctx, CudaBindings cuda, Events events, KQuantGemmKernel kernel,
 			Q4KMmqKernel pack, MatrixShape m, int tokens, int reps) {
+		int step = BoundedLaunches.gemmRows(m.rows(), m.cols(), BoundedLaunches.GEMM_WORK_PER_LAUNCH);
+		int rows = Math.min(tokens, step);
+		int launches = (tokens + step - 1) / step;
 		SplittableRandom rng = new SplittableRandom(m.label().hashCode());
 		List<MemorySegment> device = new ArrayList<>();
 		try (Arena host = Arena.ofConfined();
 				DeviceQ4KMatrix a = DeviceQ4KMatrix.upload(ctx, randomBlocks(rng, m), m.rows(), m.cols(),
 						m.quantType())) {
-			MemorySegment x = upload(cuda, device, randomFloats(host, rng, (long) tokens * m.cols()));
-			MemorySegment q8 = malloc(cuda, device, KQuantGemmKernel.q8Bytes(tokens, m.cols()));
-			MemorySegment y = malloc(cuda, device, (long) tokens * m.rows() * Float.BYTES);
-			pack.quantizeX(x, q8, Math.multiplyExact(tokens, m.cols()), MemorySegment.NULL);
-			List<Double> ms = events.time(() -> kernel.launch(a, q8, y, tokens, m.rows(), MemorySegment.NULL), reps);
-			return new Timing("tiled K-quant GEMM", m.describe() + ", " + tokens + " rows", ms);
+			MemorySegment x = upload(cuda, device, randomFloats(host, rng, (long) rows * m.cols()));
+			MemorySegment q8 = malloc(cuda, device, KQuantGemmKernel.q8Bytes(rows, m.cols()));
+			MemorySegment y = malloc(cuda, device, (long) rows * m.rows() * Float.BYTES);
+			pack.quantizeX(x, q8, Math.multiplyExact(rows, m.cols()), MemorySegment.NULL);
+			List<Double> ms = events.time(() -> kernel.launch(a, q8, y, rows, m.rows(), MemorySegment.NULL), reps);
+			String split = launches > 1 ? ", " + step + " rows a launch, heaviest of " + launches : "";
+			return new Timing("tiled K-quant GEMM", m.describe() + ", " + tokens + " rows" + split, ms);
 		} finally {
 			device.forEach(cuda::deviceFree);
 		}
@@ -291,12 +360,20 @@ public final class GpuKernelTimings {
 		b[off + 1] = (byte) (v >>> 8);
 	}
 
-	private static float[][] rows(SplittableRandom rng, int n, int dim) {
-		float[][] r = new float[n][dim];
-		for (float[] row : r)
-			for (int i = 0; i < dim; i++)
-				row[i] = (float) (rng.nextDouble() * 2 - 1);
-		return r;
+	/** {@code bytes} of device memory holding random FP16 values in [-1, 1], tiled from one host block. */
+	private static MemorySegment randomHalves(CudaBindings cuda, List<MemorySegment> device, Arena host,
+			SplittableRandom rng, long bytes) {
+		MemorySegment d = malloc(cuda, device, bytes);
+		long blockBytes = Math.min(bytes, 1L << 21);
+		MemorySegment block = host.allocate(blockBytes);
+		for (long i = 0; i < blockBytes / Short.BYTES; i++)
+			block.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16((float) (rng.nextDouble() * 2 - 1)));
+		for (long off = 0; off < bytes; off += blockBytes) {
+			long n = Math.min(blockBytes, bytes - off);
+			CudaBindings.check(CudaBindings.callInt(cuda.cudaMemcpy, d.asSlice(off), block, n, CudaBindings.H2D),
+					"cudaMemcpy");
+		}
+		return d;
 	}
 
 	private static MemorySegment randomFloats(Arena host, SplittableRandom rng, long n) {

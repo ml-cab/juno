@@ -2,12 +2,21 @@ Juno multi-module Maven project (JDK 25).
 
 Module dependency (excerpt):
   kvcache — CpuKVCache, GpuKVCache, KVCacheManager, PrefixCache,
-        KvElementType / CacheTypeOptions (--cache-type-k/v; f16 = float32 path),
-        Q8_0KvCodec, DenseKvTensor (in-process K/V; q8_0 packs per token).
+        KvElementType / CacheTypeOptions (--cache-type-k/v f16|q8_0|q4_0; f16 = float32
+        path; a serialized block names its types by ordinal, so a new type is appended),
+        Q8_0KvCodec and Q4_0KvCodec (GGUF blocks of 32 values: FP16 scale and 32 int8, 34
+        bytes; FP16 scale d = max / -8 and 16 bytes of nibbles, element j low and j + 16
+        high, decoded d * (q - 8), 18 bytes), KvRowCodec (row size, encode and decode for
+        every type in one place: DenseKvTensor, KvBlockPool, PagedKvCodec and the node
+        adapter go through it), DenseKvTensor (in-process K/V; q8_0/q4_0 pack per token).
+        KvKeyPrecisionNotice: q4_0 keys lose quality on some models (q4_0 values do not), so
+        SessionKvLayout.fromEnv logs a once-per-process WARNING for --cache-type-k q4_0 naming
+        the loss and q8_0 keys with q4_0 values; ConsoleMain prints the same line.
         NodeKVCacheAdapter (node) flushes typed payloads into the manager.
         KvBlockPool / KvPageTable / PagedKvTensor / PagedKvArena / PagedKvCodec /
         KvPageSizeOptions / ServeScheduleOptions / SessionKvTensor /
-        SessionKvLayout / KvRows / GatherTaxMicrobench / KvContextShift
+        SessionKvLayout / KvRows / GatherTaxMicrobench / KvContextShift /
+        KvPageReclaimer / KvPageCounts / IntRing / KvReclaimPauseMicrobench
         (paged KV for continuous schedule; dense remains default static path;
         handlers dual-path via SessionKvLayout; manager may hold a shared
         PagedKvArena; adapter flushes dense or paged blobs).
@@ -18,9 +27,9 @@ Module dependency (excerpt):
         page change (append, copy-on-write, sharePrefix, truncate, release); a dense
         tensor's is its backing array as one page (KvRows.ONE_PAGE), repointed when
         it grows. F16 pages are float arrays (kvDim floats per row; KvBlockPool stores
-        F16 pages as float[]), Q8_0 pages byte arrays of packed rows, decoded one
-        head's slice at a time inside the attention loop (Q8_0KvCodec.decodeRange, the
-        values decode gives). Nothing is gathered into a contiguous workspace and no
+        F16 pages as float[]), Q8_0 and Q4_0 pages byte arrays of packed rows, decoded
+        one head's slice at a time inside the attention loop (KvRows.decodeRange, which
+        calls the type's decodeRange: the values decode gives, bit for bit). Nothing is gathered into a contiguous workspace and no
         dequantization scratch is allocated; KvPageTable.gather and toFloatArray copy
         (serialization, tests). GatherTaxMicrobench times attention over dense KV
         against attention reading the pages in place (paged_vs_dense%, gate <= 2% at
@@ -36,8 +45,38 @@ Module dependency (excerpt):
         overwrite, compact's destination) goes through writablePage, so a table
         writing into a shared page first takes its own copy (copy-on-write), and
         its attention view then reads that copy while the other table reads the
-        original. Nothing shares pages across sessions yet: PrefixCache wiring is
-        the cross-session sharing step.
+        original. Requests share pages across sessions through the shared prompt
+        prefixes below (SharedPrefixPool).
+        Idle pages and their reclaim: a page every holder has dropped is idle; it keeps
+        its storage on the free list (an IntRing of ids, first in first out, no boxing)
+        and allocate takes it before making a new one. reclaimIdle() releases the storage
+        of the idle pages that stayed unused for a whole period between two calls (the
+        fewest idle pages seen since the last call; a page taken and returned meanwhile
+        was needed and stays), in lock holds of at most RECLAIM_CHUNK = 256 pages with a
+        yield between them, since the pool lock is not fair. A released id stays free and
+        gets new zeroed storage when next allocated, after every idle page with storage.
+        No live or shared page is moved or touched: attention reads each page where it is
+        through its table's KvRows, so nothing in use ever needs to change place (the
+        contiguous-cache sense of defragmentation does not arise). idlePages /
+        storedPages / storedBytes / reclaimedPages count it. KvPageReclaimer runs
+        reclaimIdle on every pool PagedKvArena.fromOptions makes (the serving arenas), on
+        one shared daemon thread ("juno-kv-page-reclaim"), every -Djuno.kv.reclaimPeriodMs
+        (default 60000; 0 off; anything else not a whole number >= 0 throws at arena
+        creation, i.e. at model load under continuous); pools are held weakly and their
+        schedule ends once collected. KvPageCounts sums live, idle, reclaimed and stored
+        bytes over arenas for /v1/cluster/health (kvPagesLive, kvPagesIdle,
+        kvPagesReclaimed, kvPageBytes; RequestScheduler.kvPages() over
+        InferencePipeline.pagedKvArenas(), which LocalInferencePipeline lists once per
+        distinct ForwardPassHandler.pagedKvArena(); null for dense handlers, the vision
+        decorator delegates). KvReclaimPauseMicrobench
+        (scripts/performance-tests/kv-reclaim-microbench.sh) gates what a pass on its own
+        thread adds to an overlapping decode step's KV writes at ctx 8192 / batch 8 /
+        page 16 on each sweep model's page count (<= 5 ms, exit code 2 over it), and
+        reports the pass timed on its own. Tests: KvBlockPoolReclaimTest,
+        KvPageReclaimerTest, KvPageCountsTest, IntRingTest, KvReclaimPauseMicrobenchTest,
+        PagedKvReclaimHandlerTest (every handler family, both host KV types: a live
+        request and one started after a reclaim read the logits they read without it, bit
+        for bit), LocalInferencePipelineKvArenaTest.
         Dense host KV is reused across requests: SessionKvLayout.retireKLayers/retireVLayers
         hand an evicted request's dense layers to a DenseKvRecycler (one set per side, the
         larger capacity kept), and newKLayers/newVLayers take them before allocating; paged
@@ -46,7 +85,12 @@ Module dependency (excerpt):
         earlier request's values. SessionKvTensor.writeRows writes a window's rows from native
         memory in one call (DenseKvTensor F16: one bulk copy). Handlers (LLaMA family, Phi-3,
         Qwen3) count running passes per request (node InFlightRequests) and reuse only when
-        none is running; otherwise the layers are dropped as before.
+        none is running; otherwise the layers are dropped as before. The LoRA handlers
+        --lora-play serves on (LoraTrainableHandler, Phi3LoraTrainableHandler,
+        Qwen3LoraTrainableHandler) evict by removing the request's layers and releasing them
+        (paged pages back to the pool; dense layers go with the entry), not recycling them,
+        since they do not count running passes; before, they kept every finished request's
+        KV (HandlerEvictReleasesKvTest, every handler family, both schedules).
   lora — LoRA adapter tensors, .lora checkpoint format, AdamW with LoRA+ learning-rate
         groups (no GGUF, no CUDA).
         LoraPlaySpec parses --lora-play's "path[:scale][,path[:scale]]" syntax
@@ -320,11 +364,13 @@ Module dependency (excerpt):
               KernelWidthProbe + KernelTimingMain, GpuResidencyProbe + ResidencyRunMain,
               PackedKquantProbe, UnitTestsProbe + SurefireReports, ConsistencyProbe, GrammarProbe,
               ToolsProbe, ContextPolicyProbe, LongPromptProbe, CpuHotPathProbe, QualityProbe +
-              QualityRunMain, ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
+              QualityRunMain, KvQualityProbe (QualityRunMain twice, f16 host KV and q8_0 keys with
+              q4_0 values through -DJUNO_CACHE_TYPE_K/V, CPU; NLL held to 1.02x), ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
               LoraProbe, VisionProbe, LauncherProbe (also: no [DBG] lines; on Windows nothing
               written to the registry, HKCU\Console's last-write time read through FFM by
-              ConsoleRegistryKey), GpuKernelTimingProbe (GpuKernelTimings at a 2048-token window,
-              the slowest launch held to 500 ms against the display-driver watchdog). Helpers: JunoProcess (the launcher's server in
+              ConsoleRegistryKey), GpuKernelTimingProbe (GpuKernelTimings at a 2048-token window
+              and at the longest window, 32768 tokens; the slowest launch of each held to 500 ms
+              against the display-driver watchdog). Helpers: JunoProcess (the launcher's server in
               a child JVM, stopped by typing exit), ConcurrentChats, StreamTiming, JfrEvents,
               NoticeCapture (engine log lines through a java.util.logging handler), HeaderOnlyGguf
               (header-only files declaring unsupported architectures), KitAdapters (one-step LoRA
@@ -661,7 +707,25 @@ GPU FFI (node module — Panama project, JEP 454):
         window (each sweep model's heads), the tiled K-quant GEMM at Mistral 7B's FFN shapes
         (Q4_K gate/up, Q6_K down), the LM head GEMV at Qwen2.5-3B's 151936x2048 Q6_K. The
         window's rows are the prompt length (the adaptive GPU window covers a whole prompt).
-        Public for the kit; seeded random weights with finite scales.
+        Each reading is the slowest of the launches BoundedLaunches splits the window into (for
+        attention the slower of the launch with the most work and the last; its rows only, with
+        the whole window's block geometry), named with the launch count when the
+        window takes more than one; measureWindow leaves out the LM head; LONGEST_WINDOW is
+        DeviceKvCache.MAX_SEQ_LEN (32768), the longest window. Public for the kit; seeded random
+        weights with finite scales.
+  BoundedLaunches — how a GPU prefill window's attention and its tiled K-quant matmuls split into
+        launches of bounded work, so no single kernel trips a display driver's watchdog (2 s on
+        Windows; a reset ends the CUDA context). Attention splits between whole blocks of query
+        rows, every launch keeping the whole window's rowsPerBlock (bit for bit one launch);
+        work = keys attended (a sliding window counts its own) x heads x the kernel's register
+        head width, ATTENTION_WORK_PER_LAUNCH 1.2e10. The GEMM splits into runs of whole 64-row
+        column tiles; work = rows x weight rows x weight columns, GEMM_WORK_PER_LAUNCH 2e11. Sized
+        so the slowest measured kit GPU (GeForce MX150) runs the heaviest launch under 400 ms,
+        scaled from its 2048-token readings; a GTX 1080 reads at most 58 ms a launch at 32768
+        tokens. A window of up to 2048 rows on any sweep model is one launch.
+        Used by GqaAttentionKernel.launchBounded (the region's attendInside and
+        CudaGqaAttention's host window) and KQuantGemmKernel.launchBounded (multiplyHalf, the
+        prefill paths' GEMM). Decode launches are not split: their rows are few.
   RocmAvailability — detection via RocmBindings.isAvailable(); mirrors CudaAvailability.
   MatVec — the compute-backend contract (CpuMatVec, CudaMatVec, RocmMatVec). Batched form, two
         spellings: sgemm(A, X) allocates and returns Y; sgemmInto(A, X, Y) (one overload per weight
@@ -691,6 +755,12 @@ GPU FFI (node module — Panama project, JEP 454):
         launch, as it does for a non-CUDA backend and for an explicit on with the CPU backend.
         ForwardPassHandlerLoader logs the same once per process for other entry points. Each handler
         reports the kernel through ForwardPassHandler.gpuAttentionActive() (default false).
+  DeviceKvTypeNotice — GPU attention reads DeviceKvCache, an FP16 copy of each request's KV written
+        from the rows the request computes, so a quantized --cache-type-k/-v (q8_0, q4_0) sets the
+        host rows only on a launch that attends on the GPU. consoleNotice() is ConsoleMain's startup
+        warning for that launch (CUDA, a handler that runs the kernel, --gpu-attention not off, not
+        LoRA); announce() logs it once per process where GpuAttentionMirror.open or
+        LlamaTransformerHandler opens the kernel. Quantizing the device copy itself is not done yet.
   GpuAttentionMirror — the kernel plus per-request DeviceKvCache mirrors for the Phi-3 and Qwen3
         handlers, at their three attention call sites (prefill window, single-token decode,
         multi-stream decode). Same contract as LlamaTransformerHandler's inline path: host KV written
@@ -720,7 +790,7 @@ GPU FFI (node module — Panama project, JEP 454):
         request decoded alone attends through attend. attend itself stays the scalar oracle.
         Every form takes K and V as KvRows and walks them page by page: a page's run of rows goes
         through the loop the whole cache did when it was one array, so the output bits do not depend
-        on the page size or on dense against paged storage; a Q8_0 head slice is decoded into a
+        on the page size or on dense against paged storage; a Q8_0 or Q4_0 head slice is decoded into a
         per-thread row (GqaMath.row) and scored or added as one row. The float[] forms (LoRA
         training's ephemeral caches, the GPU kernels' oracle tests) read their arrays as one page.
         PagedKvAttentionOracleTest holds every form, window, page size and K/V type pair to the
@@ -733,7 +803,7 @@ GPU FFI (node module — Panama project, JEP 454):
         Qwen3 prefill windows when the GPU did not attend): row b of the window attends keys up to
         startPos + b. The pool's units are (row, KV head) pairs, entered once per window and layer
         instead of once per row; a unit runs the gqaRatio query heads sharing one KV head, so a Q8_0
-        key or value slice is decoded once for all of them (a per-head unit decodes it once per
+        or Q4_0 key or value slice is decoded once for all of them (a per-head unit decodes it once per
         head). Each head scores and sums exactly as GqaMath.attendPooled's head does (GqaVectorHead
         or the serial body, chosen the same way), so every row's output is that row's attendPooled
         bits (GqaWindowAttentionTest: paged and dense, every K/V type pair, page size, window and
@@ -776,7 +846,10 @@ GPU FFI (node module — Panama project, JEP 454):
         from global memory, with no staging and no barrier per tile (same keys, order and arithmetic
         as a 32-key tile, so bit-identical to it; 3.6x to 18x faster at decode than staging, and the
         path that gives 256-wide heads a key per slot at decode). GqaAttentionDecodeBench (test
-        scope, opt-in) times one decode row per launch on device events. A per-launch attention window (0 = none) restricts row b to its last `window`
+        scope, opt-in) times one decode row per launch on device events. launchBounded splits a
+        prefill window into launches of bounded work between whole blocks (BoundedLaunches), given
+        the rows' sequence lengths on the host; registerWidth(headDim) is the entry's head width.
+        A per-launch attention window (0 = none) restricts row b to its last `window`
         keys. Entries gqa_attention_d64 / _d128 / _d256 bound the head width held in registers
         (supportsHeadDim: a multiple of 4, <= 256; otherwise the caller stays on GqaMath). Fixed reduction
         order, so output is bit-identical launch to launch (GqaAttentionReproducibilityTest);
@@ -1157,7 +1230,9 @@ GPU FFI (node module — Panama project, JEP 454):
         16-, 32- or 64-row column tile (columnTile picks the narrowest that covers the batch).
         FP32 output at a caller-chosen row stride; no FP16 copy of the weights. Same integer
         products as the GEMV kernels (parity within float accumulation order). quantize_q8_1_half
-        packs an FP16 window (the prefill paths' GEMM input) to the same bytes. Routed by
+        packs an FP16 window (the prefill paths' GEMM input) to the same bytes; multiplyHalf then
+        runs launchBounded: runs of whole 64-row tiles of bounded work (BoundedLaunches), each with
+        the whole batch's column tile, bit for bit one launch. Routed by
         CudaMatVec for every batched K-quant matmul wider than 8 rows (host-staged sgemm and the
         region's gemmOnStream), timed as juno.DeviceCompute site gemm_kquant; Q8WindowScratch
         holds the window's Q8_1 copy.

@@ -67,6 +67,28 @@ class GpuKernelTimingsTest {
 		assertThat(wide).as("1024-row median over 64-row median").isGreaterThan(8 * narrow);
 	}
 
+	/**
+	 * At the longest window the device KV holds, the product splits attention and the GEMM into bounded launches,
+	 * and the reading is the slowest launch, not the window: one launch over the whole 32768-token window is
+	 * about 256 times the 2048-token one's work, a bounded launch at most 1.4 times it.
+	 */
+	@Test
+	@Tag("gpu")
+	@DisplayName("at the longest window, times the slowest of the bounded launches the prefill paths make")
+	void theLongestWindowTimesTheHeaviestBoundedLaunch() {
+		assumeTrue(CudaAvailability.isAvailable(), "no CUDA device");
+		assertThat(GpuKernelTimings.LONGEST_WINDOW).isEqualTo(DeviceKvCache.MAX_SEQ_LEN);
+		List<GpuKernelTimings.Timing> longest = GpuKernelTimings.measureWindow(GpuKernelTimings.LONGEST_WINDOW, 2);
+		assertThat(longest).hasSize(6);
+		assertThat(longest).filteredOn(x -> x.kernel().equals("prefill attention")).hasSize(4)
+				.allSatisfy(x -> assertThat(x.shape()).contains("32768 rows over up to 32768 keys, slowest of "));
+		assertThat(longest).filteredOn(x -> x.kernel().equals("tiled K-quant GEMM")).hasSize(2)
+				.allSatisfy(x -> assertThat(x.shape()).contains(" rows a launch, heaviest of "));
+		double single = attentionMedian(GpuKernelTimings.measure(2048, 2));
+		assertThat(attentionMedian(longest)).as("slowest launch at 32768 over one launch at 2048")
+				.isLessThan(4 * single);
+	}
+
 	@Test
 	@DisplayName("without CUDA, refuses with the reason")
 	void refusesWithoutCuda() {

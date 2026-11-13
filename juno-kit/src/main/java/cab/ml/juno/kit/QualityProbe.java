@@ -75,6 +75,15 @@ final class QualityProbe implements KitProbe {
 	private static Score score(String model, int tokens, String heap, boolean integer)
 			throws IOException, InterruptedException {
 		List<String> props = integer ? List.of() : List.of("-Djuno.cpu.integerKernels=false");
+		return score(model, tokens, heap, props, integer ? "integer kernels" : "float-activation kernels");
+	}
+
+	/**
+	 * One {@link QualityRunMain} score in a JVM of its own, started with {@code props}: the kernel setting and the KV
+	 * cache types are read when that JVM starts.
+	 */
+	static Score score(String model, int tokens, String heap, List<String> props, String label)
+			throws IOException, InterruptedException {
 		List<String> cmd = JvmLauncher.command(heap, false, props, QualityRunMain.class.getName(),
 				List.of(model, String.valueOf(tokens)));
 		Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
@@ -84,16 +93,18 @@ final class QualityProbe implements KitProbe {
 			p.destroyForcibly();
 			throw new IOException("the NLL run timed out");
 		}
-		System.out.println("== " + (integer ? "integer" : "float-activation") + " kernels (exit " + p.exitValue()
-				+ ")\n" + out);
+		System.out.println("== " + label + " (exit " + p.exitValue() + ")\n" + out);
 		for (String line : out.split("\n"))
 			if (line.startsWith(QualityRunMain.PREFIX))
 				return Json.MAPPER.readValue(line.substring(QualityRunMain.PREFIX.length()), Score.class);
 		throw new IOException("the NLL run printed no result (exit " + p.exitValue() + ")");
 	}
 
-	/** {@code argmax} holds the first {@link #ARGMAX_POSITIONS} positions only. */
-	record Score(double meanNll, int[] argmax, double seconds, String kernels) {
+	/**
+	 * {@code argmax} holds the first {@link #ARGMAX_POSITIONS} positions only; {@code kv} is the run's
+	 * {@code --cache-type-k/-v} policy.
+	 */
+	record Score(double meanNll, int[] argmax, double seconds, String kernels, String kv) {
 	}
 
 	static String text() throws IOException {

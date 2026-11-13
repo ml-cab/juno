@@ -1,0 +1,24 @@
+Juno hardware validation kit 0.1.2, Juno 6ad5c72898928d7d271dfafedb616b9e9804ae7d (modified tree)
+Suite custom, started 20261112T181856Z, finished 20261112T181933Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+JFR clock: the operating system's; kernel clock source hpet
+
+env                            NOISY    0:05, 3 attempts, attempt 1 re-run: other processes used 18% of the CPU. attempt 2 re-run: other processes used 11% of the CPU. still: other processes used 15% of the CPU
+gpu.kernel-timing              PASS     0:09, GPU 514 MiB, GPU busy
+    prefill attention, tinyllama-1.1b 32/4/64 heads, 2048 rows over up to 2048 keys median 16.34, min 15.85, max 16.45 ms (n=5)
+    prefill attention, qwen2.5-3b 16/2/128 heads, 2048 rows over up to 2048 keys median 19.79, min 19.38, max 20.20 ms (n=5)
+    prefill attention, phi-3.5-mini 32/32/96 heads, 2048 rows over up to 2048 keys median 35.21, min 34.49, max 35.27 ms (n=5)
+    prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys median 37.58, min 37.20, max 37.75 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 2048 rows median 22.77, min 22.16, max 23.66 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 2048 rows median 25.34, min 23.77, max 25.63 ms (n=5)
+    LM head GEMV, qwen2.5-3b output 151936x2048 Q6_K, 1 row median 1.9036, min 1.8903, max 1.9227 ms (n=5)
+    prefill attention, tinyllama-1.1b 32/4/64 heads, 32768 rows over up to 32768 keys, slowest of 98 launches (rows 7584 to 8320) median 41.27, min 40.80, max 41.74 ms (n=5)
+    prefill attention, qwen2.5-3b 16/2/128 heads, 32768 rows over up to 32768 keys, slowest of 98 launches (rows 7584 to 8320) median 57.51, min 57.40, max 57.94 ms (n=5)
+    prefill attention, phi-3.5-mini 32/32/96 heads, 32768 rows over up to 32768 keys, slowest of 212 launches (rows 5856 to 6336) median 51.43, min 50.71, max 51.93 ms (n=5)
+    prefill attention, mistral-7b 32/8/128 heads, 32768 rows over up to 32768 keys, slowest of 212 launches (rows 5856 to 6336) median 54.41, min 53.34, max 54.95 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 32768 rows, 3392 rows a launch, heaviest of 10 median 38.16, min 37.91, max 38.49 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 32768 rows, 3392 rows a launch, heaviest of 10 median 40.90, min 40.20, max 42.26 ms (n=5)
+    ok   longest single kernel at a 2048-token window <= 500 ms (the 2 s display-driver watchdog / 4)
+    ok   longest single kernel at a 32768-token window, the longest prefill window, <= 500 ms (the 2 s display-driver watchdog / 4)

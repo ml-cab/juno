@@ -67,7 +67,7 @@ public final class CacheTypeOptions {
 	}
 
 	public boolean usesQuantized() {
-		return typeK == KvElementType.Q8_0 || typeV == KvElementType.Q8_0;
+		return typeK != KvElementType.F16 || typeV != KvElementType.F16;
 	}
 
 	public String policySummary() {

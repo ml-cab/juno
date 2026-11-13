@@ -78,6 +78,11 @@ Features:
 
 - Dense KV under `static`; paged KV (`--kv-page-size`) under `continuous`.
   See `docs/howto.md`.
+- Host KV stored as float32 (`f16`, the default), `q8_0` or `q4_0`
+  (`--cache-type-k` / `--cache-type-v`; about 3.8x and 7.1x smaller); CPU
+  attention reads the packed rows in place. For a 4-bit cache, `q8_0` keys with
+  `q4_0` values keep the quality; 4-bit keys lose it on some models and print a
+  startup warning. GPU attention keeps an FP16 copy.
 
 ### Context shifting
 

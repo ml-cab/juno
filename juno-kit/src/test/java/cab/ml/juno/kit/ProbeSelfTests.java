@@ -54,21 +54,27 @@ class ProbeSelfTests {
 	 */
 	@Test
 	void gpuKernelTimingProbeHoldsTheLongestSingleKernelToTheLimitOrSaysWhyItCannot() {
-		ProbeReport r = new GpuKernelTimingProbe().run("gpu.kernel-timing", Map.of("tokens", "64", "reps", "2"));
+		ProbeReport r = new GpuKernelTimingProbe().run("gpu.kernel-timing",
+				Map.of("tokens", "64", "longestTokens", "4096", "reps", "2"));
 		assertThat(r.kind()).isEqualTo(ProbeKind.CHECK);
-		assertThat(r.checks()).singleElement().satisfies(c -> assertThat(c.name())
-				.isEqualTo("longest single kernel at a 64-token window <= 500 ms (the 2 s display-driver watchdog / 4)"));
+		assertThat(r.checks()).extracting(ProbeReport.Check::name).containsExactly(
+				"longest single kernel at a 64-token window <= 500 ms (the 2 s display-driver watchdog / 4)",
+				"longest single kernel at a 4096-token window, the longest prefill window, <= 500 ms (the 2 s"
+						+ " display-driver watchdog / 4)");
 		if (cab.ml.juno.node.CudaAvailability.isAvailable()) {
-			assertThat(r.passed()).as(r.checks().get(0).detail()).isTrue();
-			assertThat(r.readings()).hasSize(7).allSatisfy(rd -> {
+			assertThat(r.passed()).as(r.checks().toString()).isTrue();
+			assertThat(r.readings()).hasSize(13).allSatisfy(rd -> {
 				assertThat(rd.unit()).isEqualTo("ms");
 				assertThat(rd.values()).hasSize(2).allSatisfy(v -> assertThat(v).isPositive());
 				assertThat(rd.higherIsBetter()).isFalse();
 			});
-			assertThat(r.facts()).containsKeys("longestKernel", "longestMs", "tokens");
+			assertThat(r.readings()).filteredOn(rd -> rd.name().contains("4096 rows")).hasSize(6)
+					.anySatisfy(rd -> assertThat(rd.name()).contains("heaviest of"));
+			assertThat(r.facts()).containsKeys("longestKernel", "longestMs", "tokens", "longestTokens",
+					"longestWindowKernel", "longestWindowMs");
 		} else {
 			assertThat(r.passed()).isFalse();
-			assertThat(r.checks().get(0).detail()).contains("CUDA");
+			assertThat(r.checks()).allSatisfy(c -> assertThat(c.detail()).contains("CUDA"));
 			assertThat(r.readings()).isEmpty();
 		}
 	}
@@ -313,6 +319,7 @@ class ProbeSelfTests {
 		assertThat(r.checks()).extracting(ProbeReport.Check::name).containsExactly(
 				"static: the server runs the static schedule", "static: every request answered",
 				"continuous: the server runs the continuous schedule", "continuous: every request answered",
+				"continuous: idle KV pages reclaimed, replies unchanged",
 				"continuous: concurrent requests shared decode steps");
 		assertThat(r.checks()).allSatisfy(c -> assertThat(c.passed()).as(c.name() + ": " + c.detail()).isTrue());
 		for (String s : new String[] { "static", "continuous" }) {
@@ -326,6 +333,7 @@ class ProbeSelfTests {
 			assertThat(reading(r, s + ": mean later turn latency").values()).hasSize(1);
 			assertThat(r.facts()).containsKeys(s + ".prefixLookups", s + ".prefixHits", s + ".prefixHitRate");
 		}
+		assertThat((Long) r.facts().get("continuous.kvPagesReclaimed")).isPositive();
 	}
 
 	@Test
@@ -456,6 +464,26 @@ class ProbeSelfTests {
 			assertThat(c.passed()).as(c.detail()).isTrue();
 		});
 		assertThat(r.facts()).containsEntry("tokens", 256);
+	}
+
+	@Test
+	void kvQualityProbeScoresTheTextWithAnF16AndAQ8_0KeysQ4_0ValuesHostKv(@TempDir Path dir) throws Exception {
+		Path model = SyntheticGguf.write(dir);
+		ProbeReport r = new KvQualityProbe().run("kv-quality.synthetic",
+				Map.of("model", model.toString(), "tokens", "256"));
+		assertThat(r.readings()).extracting(ProbeReport.Reading::name).containsExactly("mean NLL, f16 KV",
+				"mean NLL, q8_0/q4_0 KV", "argmax agreement, first 256 positions");
+		assertThat(r.readings()).allSatisfy(rd -> {
+			assertThat(rd.scored()).isFalse();
+			assertThat(rd.values()).singleElement().satisfies(v -> assertThat(v).isPositive());
+		});
+		assertThat(r.checks()).singleElement().satisfies(c -> {
+			assertThat(c.name()).isEqualTo("q8_0/q4_0 KV NLL at most 1.02x the f16 KV NLL");
+			assertThat(c.passed()).as(c.detail()).isTrue();
+		});
+		assertThat(r.facts()).containsEntry("tokens", 256)
+				.containsEntry("f16RunKv", "cache-type-k=f16 cache-type-v=f16")
+				.containsEntry("quantizedRunKv", "cache-type-k=q8_0 cache-type-v=q4_0");
 	}
 
 	@Test

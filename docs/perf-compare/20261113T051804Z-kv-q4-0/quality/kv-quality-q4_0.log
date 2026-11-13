@@ -1,0 +1,43 @@
+[INFO] Running cab.ml.juno.node.KvQuantQualityLiveTest
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 nll=2.45609 ppl=11.6591 self_agree_generated=512/512 s=294.1
+INFO: schedule=static cache-type-k=q4_0 cache-type-v=q4_0 kv-page-size ignored (dense)
+KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q4_0 nll=2.52993 nll_f16=2.45609 ratio=1.03006 ppl=12.5526 greedy_agree=497/512 (97.07%) first_disagree=1 text_argmax_agree_first512=460 (89.8%) s=157.5
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 nll=1.69656 ppl=5.4552 self_agree_generated=512/512 s=863.8
+INFO: schedule=static cache-type-k=q4_0 cache-type-v=q4_0 kv-page-size ignored (dense)
+KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=q4_0 nll=3.42284 nll_f16=1.69656 ratio=2.01752 ppl=30.6565 greedy_agree=428/512 (83.59%) first_disagree=1 text_argmax_agree_first512=325 (63.5%) s=450.0
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+INFO: Phi-3 shard loaded — 32 layers, with embeddings, with output projection
+KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 nll=1.36110 ppl=3.9005 self_agree_generated=512/512 s=3194.8
+INFO: schedule=static cache-type-k=q4_0 cache-type-v=q4_0 kv-page-size ignored (dense)
+INFO: Phi-3 shard loaded — 32 layers, with embeddings, with output projection
+KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q4_0 nll=1.40926 nll_f16=1.36110 ratio=1.03538 ppl=4.0929 greedy_agree=502/512 (98.05%) first_disagree=4 text_argmax_agree_first512=492 (96.1%) s=2974.9
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+KV-QUALITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 nll=1.53013 ppl=4.6188 self_agree_generated=512/512 s=1721.5
+INFO: schedule=static cache-type-k=q4_0 cache-type-v=q4_0 kv-page-size ignored (dense)
+KV-QUALITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q4_0 nll=1.53949 nll_f16=1.53013 ratio=1.00612 ppl=4.6622 greedy_agree=507/512 (99.02%) first_disagree=0 text_argmax_agree_first512=498 (97.3%) s=835.0
+[ERROR] Tests run: 4, Failures: 3, Errors: 0, Skipped: 0, Time elapsed: 10493 s <<< FAILURE! -- in cab.ml.juno.node.KvQuantQualityLiveTest
+java.lang.AssertionError: 
+Expecting actual:
+  1.0300624689568436
+to be less than or equal to:
+java.lang.AssertionError: 
+Expecting actual:
+  2.0175183253600064
+to be less than or equal to:
+java.lang.AssertionError: 
+Expecting actual:
+  1.0353837532580303
+to be less than or equal to:
+Expecting actual:
+  1.0300624689568436
+to be less than or equal to:
+Expecting actual:
+  2.0175183253600064
+to be less than or equal to:
+Expecting actual:
+  1.0353837532580303
+to be less than or equal to:
+[ERROR] Tests run: 4, Failures: 3, Errors: 0, Skipped: 0
+[INFO] BUILD FAILURE

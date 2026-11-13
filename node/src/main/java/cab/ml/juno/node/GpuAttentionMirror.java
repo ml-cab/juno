@@ -102,6 +102,7 @@ final class GpuAttentionMirror {
 			return null;
 		}
 		log.info(handler + ": GPU-resident attention path active (gpu-attention=" + opts.policyLabel() + ")");
+		DeviceKvTypeNotice.announce(handler, cab.ml.juno.kvcache.CacheTypeOptions.fromEnv());
 		return new GpuAttentionMirror(gqa, handler, layers, kvDim, numHeads, headDim, gqaRatio);
 	}
 

@@ -183,8 +183,8 @@ Options:
                     projection, RoPE and, with GPU attention on, the KV append, attention and
                     the rest of the layer, with one download per layer; default: the engine's, auto)
   --schedule static|continuous  Juno --schedule (default static)
-  --cache-type-k f16|q8_0  Juno --cache-type-k (default f16)
-  --cache-type-v f16|q8_0  Juno --cache-type-v (default f16)
+  --cache-type-k f16|q8_0|q4_0  Juno --cache-type-k (default f16)
+  --cache-type-v f16|q8_0|q4_0  Juno --cache-type-v (default f16)
   --kv-page-size N  Juno --kv-page-size (default 16, schedule=continuous only)
   --prefill-batch N Juno --prefill-batch: the prefill window width (default: the engine's own
                     choice; also read from JUNO_PREFILL_BATCH). Recorded in host.json, as are

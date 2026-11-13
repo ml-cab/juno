@@ -19,7 +19,6 @@ import java.util.Arrays;
 
 import cab.ml.juno.kvcache.KvElementType;
 import cab.ml.juno.kvcache.KvRows;
-import cab.ml.juno.kvcache.Q8_0KvCodec;
 
 /**
  * Grouped-query attention math (QK^T + softmax + weighted-V-sum), extracted
@@ -33,8 +32,8 @@ import cab.ml.juno.kvcache.Q8_0KvCodec;
  * <p>K and V are read in place ({@link KvRows}): a request's paged KV page by page through its block table, dense KV
  * as one page, never gathered into a contiguous copy. A page's run of rows goes through the same loop the whole
  * cache did when it was one array, so the sums, and the output bits, do not depend on the page size. A
- * {@link KvElementType#Q8_0} row is decoded one head's slice at a time into a per-thread row inside the loop
- * ({@link Q8_0KvCodec#decodeRange}), to the values a whole-row decode gives. The {@code float[]} forms (training's
+ * {@link KvElementType#Q8_0} or {@link KvElementType#Q4_0} row is decoded one head's slice at a time into a per-thread
+ * row inside the loop ({@link KvRows#decodeRange}), to the values a whole-row decode gives. The {@code float[]} forms (training's
  * own caches, the GPU kernels' oracle) read their arrays as one page.
  */
 final class GqaMath {
@@ -86,7 +85,7 @@ final class GqaMath {
 	/** Per-thread score scratch for {@link #attendPooled}; grows to the longest context seen and is reused. */
 	private static final ThreadLocal<float[][]> SCORES = ThreadLocal.withInitial(() -> new float[][] { new float[0] });
 
-	/** Per-thread row a {@code Q8_0} head slice is decoded into; grows to the widest head seen and is reused. */
+	/** Per-thread row a quantized head slice is decoded into; grows to the widest head seen and is reused. */
 	private static final ThreadLocal<float[][]> ROW = ThreadLocal.withInitial(() -> new float[][] { new float[0] });
 
 	/**
@@ -163,7 +162,7 @@ final class GqaMath {
 		return holder[0];
 	}
 
-	/** The calling thread's {@code Q8_0} decode row, at least {@code width} long. */
+	/** The calling thread's quantized decode row, at least {@code width} long. */
 	static float[] row(int width) {
 		float[][] holder = ROW.get();
 		if (holder[0].length < width)
@@ -208,7 +207,7 @@ final class GqaMath {
 			int count = Math.min(seqLen - t, per - slot);
 			byte[] rows = k.bytePage(page);
 			for (int r = 0, ro = slot * bytesPerRow; r < count; r++, ro += bytesPerRow) {
-				Q8_0KvCodec.decodeRange(rows, ro, kBase, headDim, row, 0);
+				k.decodeRange(rows, ro, kBase, headDim, row, 0);
 				scoreRun(q, qBase, row, 0, 0, 1, headDim, scale, scores, t - lo + r);
 			}
 			t += count;
@@ -250,7 +249,7 @@ final class GqaMath {
 			int count = Math.min(seqLen - t, per - slot);
 			byte[] rows = v.bytePage(page);
 			for (int r = 0, ro = slot * bytesPerRow; r < count; r++, ro += bytesPerRow) {
-				Q8_0KvCodec.decodeRange(rows, ro, kBase, headDim, row, 0);
+				v.decodeRange(rows, ro, kBase, headDim, row, 0);
 				addRun(row, 0, 0, 1, out, outBase, headDim, scores, t - lo + r);
 			}
 			t += count;

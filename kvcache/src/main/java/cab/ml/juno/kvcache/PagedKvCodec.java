@@ -23,7 +23,7 @@ import java.nio.ByteOrder;
  *
  * <p>Layout matches {@code NodeKVCacheAdapter}: F16+F16 is legacy float32 LE
  * (K then V); otherwise {@code 'K''V' ver=1} + type nibble + packed payloads.
- * q8_0 uses {@link Q8_0KvCodec} — no new codecs.
+ * q8_0 and q4_0 rows are their GGUF blocks ({@link KvRowCodec}).
  */
 public final class PagedKvCodec {
 
@@ -109,10 +109,10 @@ public final class PagedKvCodec {
 			for (int i = 0; i < seqLen * kvDim; i++)
 				bb.putFloat(src[i]);
 		}
-		case Q8_0 -> {
-			int bpt = Q8_0KvCodec.encodedBytes(kvDim);
+		case Q8_0, Q4_0 -> {
+			int bpt = KvRowCodec.rowBytes(type, kvDim);
 			for (int p = 0; p < seqLen; p++)
-				Q8_0KvCodec.encode(src, p * kvDim, kvDim, dst, dstOff + p * bpt);
+				KvRowCodec.encode(type, src, p * kvDim, kvDim, dst, dstOff + p * bpt);
 		}
 		}
 	}
@@ -126,10 +126,10 @@ public final class PagedKvCodec {
 			for (int i = 0; i < out.length; i++)
 				out[i] = bb.getFloat();
 		}
-		case Q8_0 -> {
-			int bpt = Q8_0KvCodec.encodedBytes(kvDim);
+		case Q8_0, Q4_0 -> {
+			int bpt = KvRowCodec.rowBytes(type, kvDim);
 			for (int p = 0; p < seqLen; p++)
-				Q8_0KvCodec.decode(data, off + p * bpt, out, p * kvDim, kvDim);
+				KvRowCodec.decode(type, data, off + p * bpt, out, p * kvDim, kvDim);
 		}
 		}
 		return out;
@@ -148,9 +148,6 @@ public final class PagedKvCodec {
 	}
 
 	private static int bytesPerToken(KvElementType type, int kvDim) {
-		return switch (type) {
-		case F16 -> kvDim * Float.BYTES;
-		case Q8_0 -> Q8_0KvCodec.encodedBytes(kvDim);
-		};
+		return KvRowCodec.rowBytes(type, kvDim);
 	}
 }
