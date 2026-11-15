@@ -82,7 +82,8 @@ Features:
   (`--cache-type-k` / `--cache-type-v`; about 3.8x and 7.1x smaller); CPU
   attention reads the packed rows in place. For a 4-bit cache, `q8_0` keys with
   `q4_0` values keep the quality; 4-bit keys lose it on some models and print a
-  startup warning. GPU attention keeps an FP16 copy.
+  startup warning. GPU attention's device copy of the KV is stored in the same
+  types (FP16 for `f16`), read in place by the attention kernel.
 
 ### Context shifting
 

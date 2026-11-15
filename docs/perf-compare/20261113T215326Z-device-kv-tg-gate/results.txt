@@ -1,0 +1,4 @@
+RESULT tinyllama f16_tg=125.225 q8_0_tg=135.910 ratio=1.0853 bar>=0.95 PASS
+RESULT qwen25 f16_tg=57.047 q8_0_tg=52.394 ratio=0.9184 bar>=0.95 FAIL
+RESULT phi35 f16_tg=39.779 q8_0_tg=39.920 ratio=1.0035 bar>=0.95 PASS
+RESULT mistral f16_tg=33.225 q8_0_tg=33.203 ratio=0.9993 bar>=0.95 PASS

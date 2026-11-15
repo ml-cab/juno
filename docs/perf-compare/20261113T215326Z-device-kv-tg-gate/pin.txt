@@ -1,0 +1,1 @@
+pinned: cpu performance, turbo off, gpu locked at 1911 MHz

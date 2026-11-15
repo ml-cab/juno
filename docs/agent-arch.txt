@@ -362,10 +362,14 @@ Module dependency (excerpt):
         Probes: LiveChecksProbe (ModelLiveChecks with a Backend), ThroughputProbe (in-process
               through JunoPlayer, one JFR recording per request read by JfrMetricsCli),
               KernelWidthProbe + KernelTimingMain, GpuResidencyProbe + ResidencyRunMain,
-              PackedKquantProbe, UnitTestsProbe + SurefireReports, ConsistencyProbe, GrammarProbe,
+              PackedKquantProbe, UnitTestsProbe + SurefireReports, ConsistencyProbe (gpu=true: static
+              batching, then a decode batch of eight at f16, q8_0 and q8_0/q4_0 KV), GrammarProbe,
               ToolsProbe, ContextPolicyProbe, LongPromptProbe, CpuHotPathProbe, QualityProbe +
               QualityRunMain, KvQualityProbe (QualityRunMain twice, f16 host KV and q8_0 keys with
-              q4_0 values through -DJUNO_CACHE_TYPE_K/V, CPU; NLL held to 1.02x), ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
+              q4_0 values through -DJUNO_CACHE_TYPE_K/V, CPU; NLL held to 1.02x), GpuKvQualityProbe
+              (QualityRunMain with -Djuno.kit.quality.gpu=true, the handler on CUDA: f16, then q8_0 and
+              q8_0/q4_0 device KV; per type NLL held to 1.02x and the handler's device KV notice must
+              name the selected formats), ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
               LoraProbe, VisionProbe, LauncherProbe (also: no [DBG] lines; on Windows nothing
               written to the registry, HKCU\Console's last-write time read through FFM by
               ConsoleRegistryKey), GpuKernelTimingProbe (GpuKernelTimings at a 2048-token window
@@ -620,8 +624,9 @@ Shared prompt prefixes (coordinator SharedPrefixPool, --prefix-cache-tokens / kv
   SessionKvLayout.sharePrefixK/V (paged: PagedKvTensor.sharePrefix over KvPageTable.sharePrefix,
   pages held once more and copied on first write; dense: DenseKvTensor.copyPrefixFrom, stored bytes
   copied) and, with GPU attention, HandlerKvShare.uploadMirrors into the request's device mirror on
-  the layers that attend there. Refused: a q8_0 host KV beside GPU attention (the device copy would
-  hold q8_0-rounded rows), a node KV adapter (cluster), the LoRA handlers (interface default), and
+  the layers that attend there. Refused: a quantized host KV beside a GPU attention copy that keeps
+  FP16 (DeviceKvFormats.holds; the copy rebuilt from host rows would differ from the one the request
+  writes; a q8_0/q4_0 device copy re-encodes the host's decoded blocks to the same values), a node KV adapter (cluster), the LoRA handlers (interface default), and
   VisionAwareForwardPassHandler for any request with an image (the placeholder token ids are the
   same for every image). Tests: SessionKvLayoutShareTest, KvPrefixShareHandlerTest (every family,
   both schedules and host types, bit for bit), SharedPrefixPoolTest, PrefixCacheOwnerTest,
@@ -755,12 +760,23 @@ GPU FFI (node module — Panama project, JEP 454):
         launch, as it does for a non-CUDA backend and for an explicit on with the CPU backend.
         ForwardPassHandlerLoader logs the same once per process for other entry points. Each handler
         reports the kernel through ForwardPassHandler.gpuAttentionActive() (default false).
-  DeviceKvTypeNotice — GPU attention reads DeviceKvCache, an FP16 copy of each request's KV written
-        from the rows the request computes, so a quantized --cache-type-k/-v (q8_0, q4_0) sets the
-        host rows only on a launch that attends on the GPU. consoleNotice() is ConsoleMain's startup
-        warning for that launch (CUDA, a handler that runs the kernel, --gpu-attention not off, not
-        LoRA); announce() logs it once per process where GpuAttentionMirror.open or
-        LlamaTransformerHandler opens the kernel. Quantizing the device copy itself is not done yet.
+  DeviceKvTypeNotice — GPU attention reads DeviceKvCache, stored in the --cache-type-k/-v types
+        (DeviceKvFormats.select). A launch whose device copy cannot hold a quantized type keeps it
+        FP16 and is told so: consoleNotice(architecture, headDim, ...) is ConsoleMain's startup
+        warning (CUDA, a handler that runs the kernel, --gpu-attention not off, not LoRA, a head
+        width that is not a multiple of 32, read from the GGUF header); announce() logs once per
+        process where GpuAttentionMirror.open or LlamaTransformerHandler opens the kernel: INFO
+        with the device formats and bytes per position when the copy holds the types, WARNING
+        with the reason (head width, or the quantized attention module not loading) when not.
+  DeviceKvFormat / DeviceKvFormats — how one side (K or V) of a device KV is stored, and the
+        pair a handler chose. F16 (2 bytes a value), Q8_0 and Q4_0 (the host codecs' 34- and
+        18-byte blocks, byte for byte, so the device holds the host KV's values). code is
+        kv_format.cuh's number; rowBytes the row stride (the Java side's one place for a row's
+        address); pack/unpack the host-staged writes and test reads. canHold needs a head width
+        that is a multiple of 32 for the quantized formats (a decode lane reads whole blocks).
+        select(types, headDim, kernelLoads) asks for the quantized module only for a quantized
+        type; holds(types) is HandlerKvShare's sharing rule; sessionBytes / sessionsThatFit the
+        capacity arithmetic (DeviceScratchBudget, the capacity reading).
   GpuAttentionMirror — the kernel plus per-request DeviceKvCache mirrors for the Phi-3 and Qwen3
         handlers, at their three attention call sites (prefill window, single-token decode,
         multi-stream decode). Same contract as LlamaTransformerHandler's inline path: host KV written
@@ -824,16 +840,40 @@ GPU FFI (node module — Panama project, JEP 454):
         warning from forShard (UndeclaredWindowNotice: arch phi3, phi3.context_length 4096, no
         phi3.attention.sliding_window key, the shape of Phi-3-mini-4k, trained with 2047), and still
         no window; a declared key at any width, 0 included, gets none.
-  DeviceKvCache — device-resident FP16 KV mirror kept alongside the host SessionKvTensor
-        (dual-write); grow-and-preserve via D2D copy; lifecycle tied to
-        LlamaTransformerHandler.evict(). CUDA only. appendToken writes one row (decode);
-        appendWindow writes a prefill window's rows from the host as one copy per tensor;
-        writeWindowOnDevice casts a window's FP32 device rows into the mirror on a stream
-        (PrefillWindowKernels.toHalf, no host copy) and leaves the watermark for markWritten,
+  DeviceKvCache — device-resident KV mirror kept alongside the host SessionKvTensor
+        (dual-write), each side in its DeviceKvFormat (formats()); grow-and-preserve via D2D copy;
+        lifecycle tied to LlamaTransformerHandler.evict(). CUDA only. appendToken writes one row
+        (decode); appendWindow writes a prefill window's rows from the host as one copy per tensor,
+        packed by the format (FP16, or the host codec's blocks); writeWindowOnDevice casts (FP16,
+        PrefillWindowKernels.toHalf) or encodes (PrefillWindowKernels.encodeKvRows, kv_encode_kv_rows:
+        K and V in one launch, one warp per block, the host encoder's roundings) a window's FP32 device rows into the
+        mirror on a stream, no host copy, and leaves the watermark for markWritten,
         which the handler calls once the host KV holds the same rows. A grow whose second
         allocation fails frees the first; so does the constructor, and newLayers is all or
         nothing (a request whose mirror set runs out part-way closes the layers it got before
-        the out-of-memory error reaches the caller's CPU-attention fallback).
+        the out-of-memory error reaches the caller's CPU-attention fallback). shiftInPlace declines
+        a quantized mirror (the caller rewrites it from the shifted host rows); rawK/rawV return
+        the stored bytes for tests.
+  kv_format.cuh — the device side of DeviceKvFormat: kv_row_t (a row's address), kv_load2_t /
+        kv_load4_t (values the host codecs decode, bit for bit), kv_dot_chunk / kv_axpy_chunk (a
+        decode lane's whole blocks: one scale, realigned 4-byte words through the read-only
+        cache), kv_encode_block_warp (the host encoders, one warp per block and one value per lane,
+        the block's largest magnitude reduced with the scalar scan's comparisons; the FP16 scale
+        stored as one aligned 16-bit store). Included by gqa_attention.cuh, prefill_window.cu (kv_encode_kv_rows)
+        and batched_decode.cu (kv_append_rows_fmt, the decode batch's per-request append).
+  GqaAttentionKvKernel — loader/launcher for gqa_attention_kv.ptx, loaded the first time a handler
+        selects a quantized device KV: gqa_attention.cuh's kernel instantiated for quantized rows
+        (entries gqa_attention_kv_d64/_d128/_d256, plus kType and vType). One switch per launch
+        picks a decode loop and a tile-staging loop compiled for the format pair; a decode row's
+        lanes hold the head block-major (gqa_quad) so each reads whole blocks; the prefill tiles
+        are staged dequantized into the same FP32 shared tiles. Decode rows (rowsPerBlock 1) at
+        head widths up to 128 take gqa_decode_kv_d64/_d128 instead: one block per row and head of
+        256 threads, 64 slots of 4 lanes (the same per-slot loop at a 64-key stride, the same
+        merge over 64 slots, about 120 registers), since a decode launch's one block per head
+        leaves a 128-thread block one warp per scheduler; a row's result depends on its own cache
+        and length, so a batched row stays bit for bit its single decode. GqaAttentionKernel.launch
+        and launchBounded take the formats and route here; FP16 runs gqa_attention.ptx, whose code
+        the shared header leaves unchanged (its PTX differs only in internal symbol names).
   GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx: a tiled,
         online-softmax kernel (running max, running sum, rescaled accumulator) that streams K/V
         through shared memory in 32-key tiles (16 for heads over 128), converted from FP16 to FP32
@@ -1013,7 +1053,9 @@ GPU FFI (node module — Panama project, JEP 454):
         weight once for all the rows and reproduce the single-row GEMV's per-lane accumulation and
         reduction, so every row is bit for bit that row's GEMV (KQuantGemvRowsTest); rope_rows,
         rope_split_half_rows and rope_ext_split_half_rows, rope.cu's rotations with a per-row
-        position; kv_append_rows, the FP16 cast into each request's mirror. CudaMatVec.sgemvRowsInto
+        position; kv_append_rows, the FP16 cast into each request's mirror (kv_append_rows_fmt for a
+        quantized one: the encoder kv_encode_kv_rows runs for one request, so a batched row is stored
+        bit for bit as it is alone). CudaMatVec.sgemvRowsInto
         (and MatVec.sgemmDecode) is the host-driven entry to the same matmul, used by the batched
         LM head and, for 2 to 8 rows, sgemmInto(DeviceQ4KMatrix).
   ResidentLayerTail — the rest of a decode layer after attention, issued on the decode region's

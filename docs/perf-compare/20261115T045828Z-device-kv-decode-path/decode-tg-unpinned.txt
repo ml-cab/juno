@@ -1,0 +1,14 @@
+DeviceKvDecodeTgLiveTest, this tree, unpinned (desktop sharing the GPU): prefill 2,048 tokens, 128 timed greedy decode steps, one warm-up and
+three measured repetitions per JVM, the JVM's reading their median; f16 and q8_0 alternated (Qwen2.5-3B twice). sessions = whole 2,048-token
+sessions whose device KV fits beside the weights (DEVICE-KV-CAPACITY).
+
+qwen25 f16 median_tg=56.545 sessions=72
+qwen25 q8_0 median_tg=59.034 sessions=136
+qwen25 f16 median_tg=57.287 sessions=72
+qwen25 q8_0 median_tg=58.621 sessions=136
+tinyllama f16 median_tg=124.220 sessions=150
+tinyllama q8_0 median_tg=152.122 sessions=282
+mistral f16 median_tg=34.582 sessions=11
+mistral q8_0 median_tg=35.359 sessions=22
+phi35 f16 median_tg=43.154 sessions=6
+phi35 q8_0 median_tg=43.805 sessions=12

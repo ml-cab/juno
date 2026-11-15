@@ -1,0 +1,92 @@
+Juno hardware validation kit 0.1.2, Juno 79fa87b0b092c263107e59c035baf040542d440d (modified tree)
+Suite custom, started 20261115T232030Z, finished 20261115T232627Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+JFR clock: the operating system's; kernel clock source hpet
+
+gpu.consistency.tinyllama      PASS     0:33, GPU 934 MiB
+    ok   static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: OpenAI round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: native round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: OpenAI round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: native round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: a session request after batched stateless traffic equals single-request output: single 'The capital of France is Paris.', session 'The capital of France is Paris.'
+    ok   static batching, gpu: no prefix-cache hit for stateless traffic: 0 hits, 1 lookups
+    ok   static batching, gpu: repeated prompts start from a kept prompt (shared-prefix hits counted; their answers equal the unshared first answer above): 19 shared-prefix hits, 817 positions not recomputed
+    ok   static batching, gpu: native streaming joins to the native blocking answer: blocking 'Red.', streamed 'Red.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+gpu.kv-quality.tinyllama-1.1b  PASS     0:28, GPU 992 MiB
+    mean NLL, f16 device KV                              median 2.4566, min 2.4566, max 2.4566 nats (n=1)
+    mean NLL, q8_0 device KV                             median 2.4577, min 2.4577, max 2.4577 nats (n=1)
+    q8_0 argmax agreement, first 512 positions           median 98.63, min 98.63, max 98.63 % (n=1)
+    mean NLL, q8_0/q4_0 device KV                        median 2.4585, min 2.4585, max 2.4585 nats (n=1)
+    q8_0/q4_0 argmax agreement, first 512 positions      median 96.48, min 96.48, max 96.48 % (n=1)
+    ok   q8_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00047 (2.45773 over 2.45657)
+    ok   q8_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 544 bytes per position against 1024 for FP16
+    ok   q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00077 (2.45846 over 2.45657)
+    ok   q8_0/q4_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 416 bytes per position against 1024 for FP16
+gpu.kv-quality.qwen2.5-3b      PASS     0:49, GPU 2488 MiB
+    mean NLL, f16 device KV                              median 1.6962, min 1.6962, max 1.6962 nats (n=1)
+    mean NLL, q8_0 device KV                             median 1.6981, min 1.6981, max 1.6981 nats (n=1)
+    q8_0 argmax agreement, first 512 positions           median 99.41, min 99.41, max 99.41 % (n=1)
+    mean NLL, q8_0/q4_0 device KV                        median 1.7029, min 1.7029, max 1.7029 nats (n=1)
+    q8_0/q4_0 argmax agreement, first 512 positions      median 99.02, min 99.02, max 99.02 % (n=1)
+    ok   q8_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00112 (1.69806 over 1.69616)
+    ok   q8_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 544 bytes per position against 1024 for FP16
+    ok   q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00398 (1.70292 over 1.69616)
+    ok   q8_0/q4_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 416 bytes per position against 1024 for FP16
+gpu.kv-quality.phi-3.5-mini    PASS     2:37, GPU 3384 MiB
+    mean NLL, f16 device KV                              median 1.3594, min 1.3594, max 1.3594 nats (n=1)
+    mean NLL, q8_0 device KV                             median 1.3607, min 1.3607, max 1.3607 nats (n=1)
+    q8_0 argmax agreement, first 512 positions           median 99.80, min 99.80, max 99.80 % (n=1)
+    mean NLL, q8_0/q4_0 device KV                        median 1.3642, min 1.3642, max 1.3642 nats (n=1)
+    q8_0/q4_0 argmax agreement, first 512 positions      median 99.22, min 99.22, max 99.22 % (n=1)
+    ok   q8_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00099 (1.36070 over 1.35936)
+    ok   q8_0 device KV stored in the selected formats: Phi-3: GPU attention's KV copy stored as K q8_0, V q8_0, 6528 bytes per position against 12288 for FP16
+    ok   q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00358 (1.36423 over 1.35936)
+    ok   q8_0/q4_0 device KV stored in the selected formats: Phi-3: GPU attention's KV copy stored as K q8_0, V q4_0, 4992 bytes per position against 12288 for FP16
+gpu.kv-quality.mistral-7b      PASS     1:04, GPU 4796 MiB
+    mean NLL, f16 device KV                              median 1.5294, min 1.5294, max 1.5294 nats (n=1)
+    mean NLL, q8_0 device KV                             median 1.5281, min 1.5281, max 1.5281 nats (n=1)
+    q8_0 argmax agreement, first 512 positions           median 99.22, min 99.22, max 99.22 % (n=1)
+    mean NLL, q8_0/q4_0 device KV                        median 1.5254, min 1.5254, max 1.5254 nats (n=1)
+    q8_0/q4_0 argmax agreement, first 512 positions      median 99.02, min 99.02, max 99.02 % (n=1)
+    ok   q8_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 0.99914 (1.52810 over 1.52942)
+    ok   q8_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 2176 bytes per position against 4096 for FP16
+    ok   q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 0.99735 (1.52536 over 1.52942)
+    ok   q8_0/q4_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 1664 bytes per position against 4096 for FP16

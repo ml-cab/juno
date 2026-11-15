@@ -1,0 +1,1 @@
+pinned: cpu performance, turbo off, gpu locked at 1300 MHz, cool to 65 C before each run

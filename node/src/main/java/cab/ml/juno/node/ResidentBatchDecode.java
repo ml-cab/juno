@@ -341,13 +341,15 @@ final class ResidentBatchDecode implements AutoCloseable {
 			MemorySegment vPtrs = tables.asSlice(ptrBytes);
 			MemorySegment seqLens = tables.asSlice(2 * ptrBytes);
 			mark = spans.begin(stream, n);
-			batched.kvAppendRows(r.k.devicePointer(), r.v.devicePointer(), kPtrs, vPtrs, seqLens, n, kv, stream);
+			DeviceKvFormats formats = mirrors[0].formats(); // one handler's mirrors: one format for the batch
+			batched.kvAppendRows(r.k.devicePointer(), r.v.devicePointer(), kPtrs, vPtrs, seqLens, n, kv, formats,
+					stream);
 			spans.compute(DeviceComputeEvent.KV_APPEND, n, mark, stream);
 			mark = spans.begin(stream, n);
 			int[] windows = p.attentionWindows();
 			p.attention().launch(r.q.devicePointer(), kPtrs, vPtrs, seqLens, r.attn.devicePointer(), n, p.numHeads(),
 					p.gqaRatio(), p.headDim(), kv, GqaAttentionKernel.rowsPerBlock(false, n),
-					windows == null ? 0 : windows[li], stream);
+					windows == null ? 0 : windows[li], formats, stream);
 			spans.compute(DeviceComputeEvent.GQA_ATTENTION_REGION, n, mark, stream);
 			issueTail(li, n);
 		}

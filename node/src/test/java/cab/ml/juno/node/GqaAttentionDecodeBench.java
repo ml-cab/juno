@@ -102,8 +102,20 @@ class GqaAttentionDecodeBench {
 					oldFn == null ? "" : ", materializing", REPS, LAUNCHES);
 			for (Shape shape : SHAPES) {
 				Random rng = new Random(shape.name().hashCode());
+				float[][] kRows = rows(rng, maxLen, shape.kvDim());
+				float[][] vRows = rows(rng, maxLen, shape.kvDim());
+				DeviceKvFormats[] lanes = { new DeviceKvFormats(DeviceKvFormat.Q8_0, DeviceKvFormat.Q8_0),
+						new DeviceKvFormats(DeviceKvFormat.Q8_0, DeviceKvFormat.Q4_0) };
+				DeviceKvCache[] qkv = new DeviceKvCache[lanes.length];
+				MemorySegment[][] qPtrs = new MemorySegment[lanes.length][];
+				for (int l = 0; l < lanes.length; l++) {
+					qkv[l] = new DeviceKvCache(ctx, shape.kvDim(), maxLen, lanes[l]);
+					qkv[l].appendWindow(0, kRows, vRows, maxLen);
+					qPtrs[l] = new MemorySegment[] { uploadPtr(cuda, arena, qkv[l].kPointer()),
+							uploadPtr(cuda, arena, qkv[l].vPointer()) };
+				}
 				try (DeviceKvCache kv = new DeviceKvCache(ctx, shape.kvDim())) {
-					kv.appendWindow(0, rows(rng, maxLen, shape.kvDim()), rows(rng, maxLen, shape.kvDim()), maxLen);
+					kv.appendWindow(0, kRows, vRows, maxLen);
 					MemorySegment dQ = upload(cuda, arena, floats(rng, shape.rowDim()));
 					MemorySegment dOut = cuda.deviceMalloc(0, (long) shape.rowDim() * Float.BYTES);
 					MemorySegment dK = uploadPtr(cuda, arena, kv.kPointer());
@@ -120,6 +132,14 @@ class GqaAttentionDecodeBench {
 							double current = time(cuda, arena, dLen, dBusy, len -> kernel.launch(dQ, dK, dV, len, dOut, 1,
 									shape.numHeads(), shape.gqaRatio(), shape.headDim(), shape.kvDim(), 1, 0, null));
 							String line = String.format("%-22s ctx %5d  current %8.2f", shape.name(), seqLen, current);
+							for (int l = 0; l < lanes.length; l++) {
+								DeviceKvFormats f = lanes[l];
+								MemorySegment qk = qPtrs[l][0];
+								MemorySegment qv = qPtrs[l][1];
+								double t = time(cuda, arena, dLen, dBusy, len -> kernel.launch(dQ, qk, qv, len, dOut, 1,
+										shape.numHeads(), shape.gqaRatio(), shape.headDim(), shape.kvDim(), 1, 0, f, null));
+								line += String.format("  [%s] %8.2f (%.3fx)", f.summary(), t, t / current);
+							}
 							if (oldFn != null) {
 								double old = time(cuda, arena, dLen, dBusy, len -> launchOld(arena, oldFn, dQ, dK, dV, len,
 										dScores, dOut, shape, maxLen));
@@ -131,6 +151,11 @@ class GqaAttentionDecodeBench {
 					} finally {
 						for (MemorySegment p : new MemorySegment[] { dQ, dOut, dK, dV, dLen, dBusy, dScores })
 							cuda.deviceFree(p);
+						for (int l = 0; l < lanes.length; l++) {
+							cuda.deviceFree(qPtrs[l][0]);
+							cuda.deviceFree(qPtrs[l][1]);
+							qkv[l].close();
+						}
 					}
 				}
 			}

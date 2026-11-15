@@ -1,0 +1,78 @@
+# Qwen2.5-3B decode, one warm-up and one measured repetition per JVM, traced with nsys (CUDA trace only), unpinned
+# Tokens 1..127 of the measured repetition; per-token sums of kernel durations (us); 'gpu idle' = wall - busy
+
+## Order 1: f16 run, then q8_0 run
+per token (us)       f16       q8_0     diff
+wall              23673.2   24247.8    574.7
+gpu busy          17273.9   18138.5    864.7
+gpu idle           6399.3    6109.3   -290.0
+gqa_attention_kv_d128             0.0   3258.5   3258.5  launches/token   0.0  36.0
+gqa_attention_d128             3010.0      0.0  -3010.0  launches/token  36.0   0.0
+kv_encode_rows                    0.0    340.6    340.6  launches/token   0.0  72.0
+q4k_gemv                       8157.7   8496.0    338.3  launches/token 216.1 216.0
+to_half                         123.6      0.0   -123.6  launches/token  72.0   0.0
+q6k_gemv                       4315.5   4372.4     57.0  launches/token  37.1  37.0
+swiglu                          169.6    175.4      5.9  launches/token  36.0  36.0
+rms_norm                        378.9    373.4     -5.5  launches/token  72.0  72.0
+rope_split_half                 232.6    237.4      4.8  launches/token  72.0  72.0
+residual_add_both                85.5     81.0     -4.4  launches/token  36.0  36.0
+decode_attention_table           64.3     68.2      3.9  launches/token  36.0  36.0
+[CUDA memcpy DtoH]              140.2    137.9     -2.3  launches/token  37.0  37.0
+add_bias                        212.3    213.0      0.8  launches/token 108.1 108.0
+add_inplace                      79.7     80.4      0.7  launches/token  36.0  36.0
+f16 decode attention grid [('4', '16', '1')]
+q8_0 decode attention grid [('4', '16', '1')]
+
+## Order 2: q8_0 run, then f16 run
+per token (us)       f16       q8_0     diff
+wall              23208.2   23888.0    679.8
+gpu busy          17330.2   18172.8    842.6
+gpu idle           5878.1    5715.2   -162.8
+gqa_attention_kv_d128             0.0   3268.1   3268.1  launches/token   0.0  36.1
+gqa_attention_d128             3018.2      0.0  -3018.2  launches/token  36.0   0.0
+q4k_gemv                       8155.2   8510.4    355.2  launches/token 216.2 216.3
+kv_encode_rows                    0.0    340.2    340.2  launches/token   0.0  72.1
+to_half                         124.9      0.0   -124.9  launches/token  72.1   0.0
+q6k_gemv                       4353.0   4381.6     28.5  launches/token  37.1  37.1
+rms_norm                        381.8    374.2     -7.6  launches/token  72.1  72.1
+decode_attention_table           64.2     68.8      4.6  launches/token  36.0  36.1
+quantize_q8_1                   305.8    302.1     -3.7  launches/token 145.2 145.3
+residual_add_both                84.8     81.4     -3.5  launches/token  36.0  36.1
+swiglu                          171.3    174.0      2.8  launches/token  36.0  36.1
+[CUDA memcpy DtoH]              140.3    137.6     -2.7  launches/token  37.0  37.1
+rope_split_half                 233.1    235.7      2.6  launches/token  72.1  72.1
+add_bias                        213.9    214.5      0.6  launches/token 108.1 108.2
+f16 decode attention grid [('4', '16', '1')]
+q8_0 decode attention grid [('4', '16', '1')]
+
+## Order 2 clock samples (nvidia-smi every 250 ms: clocks.gr, clocks.mem, pstate), whole run
+q8_0:
+     72 1607 MHz, 5005 MHz, P0
+     56 1860 MHz, 4513 MHz, P2
+     29 1607 MHz, 4513 MHz, P2
+     21 1847 MHz, 5005 MHz, P0
+     10 1088 MHz, 4513 MHz, P2
+f16:
+     44 759 MHz, 810 MHz, P5
+     38 1847 MHz, 5005 MHz, P0
+     35 1847 MHz, 4513 MHz, P2
+     26 1607 MHz, 4513 MHz, P2
+     24 1860 MHz, 4513 MHz, P2
+
+## FFN gate and up GEMVs (the two q4k_gemv launches above 50 us after each layer's attention), median per layer, ratio
+### order 1, q8_0 over f16
+0:1.055 1:1.055 2:1.056 3:1.054 4:1.055 5:1.055 6:1.056 7:1.055 8:1.054 9:1.054 10:1.055 11:1.054 12:1.056 13:1.055 14:1.054 15:1.055 16:1.054 17:1.054 18:1.054 19:1.055 20:1.054 21:1.056 22:1.055 23:1.054 24:1.054 25:1.055 26:1.056 27:1.055 28:1.055 29:1.053 30:1.055 31:1.056 32:1.055 33:1.056 34:1.055 35:1.055
+min 1.053 max 1.056
+### order 2, q8_0 over f16
+0:1.057 1:1.057 2:1.059 3:1.057 4:1.058 5:1.058 6:1.056 7:1.057 8:1.058 9:1.058 10:1.058 11:1.056 12:1.057 13:1.058 14:1.057 15:1.057 16:1.057 17:1.057 18:1.057 19:1.057 20:1.057 21:1.057 22:1.056 23:1.056 24:1.057 25:1.057 26:1.056 27:1.056 28:1.058 29:1.056 30:1.057 31:1.058 32:1.057 33:1.057 34:1.058 35:1.057
+min 1.056 max 1.059
+### f16 JVM loading the quantized attention module before its weight upload (scratch build), over order 2's f16
+0:0.994 1:0.995 2:0.997 3:0.995 4:0.995 5:0.995 6:0.994 7:0.996 8:0.997 9:0.995 10:0.995 11:0.994 12:0.994 13:0.996 14:0.995 15:0.995 16:0.994 17:0.995 18:0.995 19:0.994 20:0.995 21:0.994 22:0.995 23:0.994 24:0.995 25:0.994 26:0.994 27:0.995 28:0.996 29:0.995 30:0.994 31:0.996 32:0.995 33:0.995 34:0.996 35:0.996
+min 0.994 max 0.997
+### order 2's q8_0 over that f16 JVM
+0:1.063 1:1.063 2:1.062 3:1.063 4:1.063 5:1.063 6:1.063 7:1.061 8:1.062 9:1.063 10:1.063 11:1.063 12:1.063 13:1.063 14:1.062 15:1.062 16:1.063 17:1.063 18:1.062 19:1.063 20:1.062 21:1.063 22:1.061 23:1.063 24:1.062 25:1.063 26:1.062 27:1.062 28:1.063 29:1.062 30:1.063 31:1.062 32:1.062 33:1.062 34:1.062 35:1.062
+min 1.061 max 1.063
+
+## Loaded clocks in the traced runs (power above 70 W)
+order 2 f16: samples 52, graphics median 1847 MHz, min 1607; memory/pstate 4513 MHz x52 
+order 2 q8_0: samples 58, graphics median 1860 MHz, min 1607; memory/pstate 4513 MHz x58 

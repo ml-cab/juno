@@ -1,0 +1,66 @@
+{
+  "id" : "gpu.kv-quality.qwen2.5-3b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "q8_0 device KV NLL at most 1.02x the f16 device KV NLL",
+    "passed" : true,
+    "detail" : "ratio 1.00112 (1.69806 over 1.69616)"
+  }, {
+    "name" : "q8_0 device KV stored in the selected formats",
+    "passed" : true,
+    "detail" : "Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 544 bytes per position against 1024 for FP16"
+  }, {
+    "name" : "q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL",
+    "passed" : true,
+    "detail" : "ratio 1.00398 (1.70292 over 1.69616)"
+  }, {
+    "name" : "q8_0/q4_0 device KV stored in the selected formats",
+    "passed" : true,
+    "detail" : "Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 416 bytes per position against 1024 for FP16"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, f16 device KV",
+    "unit" : "nats",
+    "values" : [ 1.6961573721412575 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0 device KV",
+    "unit" : "nats",
+    "values" : [ 1.6980567789461878 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "q8_0 argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 99.4140625 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0/q4_0 device KV",
+    "unit" : "nats",
+    "values" : [ 1.7029155160540332 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "q8_0/q4_0 argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 99.0234375 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "f16Seconds" : 7.056651189,
+    "kernels" : "cuda",
+    "quantizedSeconds" : {
+      "q8_0" : 7.553626744,
+      "q8_0/q4_0" : 7.389410765
+    },
+    "tokens" : 2048,
+    "quantizedRunKv" : {
+      "q8_0" : "cache-type-k=q8_0 cache-type-v=q8_0",
+      "q8_0/q4_0" : "cache-type-k=q8_0 cache-type-v=q4_0"
+    }
+  }
+}

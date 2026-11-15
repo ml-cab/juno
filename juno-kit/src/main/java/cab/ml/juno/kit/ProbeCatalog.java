@@ -54,6 +54,8 @@ final class ProbeCatalog {
 			Map.entry("gpu.live.phi-3.5-mini", 7596),
 			Map.entry("gpu.live.mistral-7b", 7306), Map.entry("gpu.live.qwen3-1.7b", 5328),
 			Map.entry("gpu.consistency.tinyllama", 950), Map.entry("gpu.context-policy.phi-3.5-mini", 5038),
+			Map.entry("gpu.kv-quality.tinyllama-1.1b", 992), Map.entry("gpu.kv-quality.qwen2.5-3b", 2488),
+			Map.entry("gpu.kv-quality.phi-3.5-mini", 3384), Map.entry("gpu.kv-quality.mistral-7b", 4796),
 			Map.entry("gpu.long-prompt.tinyllama", 1142), Map.entry("gpu.long-prompt.mistral-7b", 5536),
 			Map.entry("gpu.throughput.tinyllama-1.1b.128", 992), Map.entry("gpu.throughput.qwen2.5-3b.128", 2424),
 			Map.entry("gpu.throughput.qwen2.5-3b.512", 2640), Map.entry("gpu.throughput.qwen2.5-3b.2048", 3420),
@@ -144,7 +146,7 @@ final class ProbeCatalog {
 						ProbeKind.CHECK, QUICK_CPU, Requirements.cpu(8L << 30), List.of(tiny.id()), 95, 1,
 						"ConsistencyProbe", Map.of(), 3600, "512m"),
 				new Probe("gpu.consistency.tinyllama", "Static batching equals single requests, GPU", ProbeKind.CHECK,
-						QUICK_GPU, Requirements.gpu(8L << 30), List.of(tiny.id()), 15, 2, "ConsistencyProbe",
+						QUICK_GPU, Requirements.gpu(8L << 30), List.of(tiny.id()), 31, 2, "ConsistencyProbe",
 						Map.of("gpu", "true"), 3600, "512m"),
 				new Probe("grammar.tinyllama", "Constrained decoding over REST and the CLI, with a LoRA overlay, CPU",
 						ProbeKind.CHECK, QUICK_CPU, Requirements.cpu(10L << 30), List.of(tiny.id()), 100, 1,
@@ -186,6 +188,10 @@ final class ProbeCatalog {
 				kvQuality("qwen2.5-3b", CPU, 1300, 2),
 				kvQuality("phi-3.5-mini", CPU, 3800, 3),
 				kvQuality("mistral-7b", CPU, 2600, 2),
+				gpuKvQuality("tinyllama-1.1b", 26, 2),
+				gpuKvQuality("qwen2.5-3b", 46, 2),
+				gpuKvQuality("phi-3.5-mini", 148, 2),
+				gpuKvQuality("mistral-7b", 60, 2),
 				throughput("tinyllama-1.1b", 2048, false, CPU, 6, 465, 2),
 				throughput("tinyllama-1.1b", 128, true, GPU, 6, 10, 2),
 				throughput("qwen2.5-3b", 128, false, CPU, 8, 150, 2),
@@ -273,6 +279,18 @@ final class ProbeCatalog {
 		return new Probe("kv-quality." + modelId, "Mean NLL over 2048 tokens, q8_0 K and q4_0 V host KV against f16 host KV, "
 				+ m.title(), ProbeKind.CHECK, suites, Requirements.cpu(8L << 30), List.of(modelId), cost, priority,
 				"KvQualityProbe", Map.of("childHeap", m.heap()), Math.max(7200, 3 * cost), "512m");
+	}
+
+	/**
+	 * Mean NLL over the quality text on one model with the handler on the GPU, {@code q8_0} and {@code q8_0} keys with
+	 * {@code q4_0} values against an {@code f16} KV, so GPU attention reads each device KV format.
+	 */
+	private static Probe gpuKvQuality(String modelId, int cost, int priority) {
+		CatalogModel m = CatalogModel.byId(modelId);
+		return new Probe("gpu.kv-quality." + modelId,
+				"Mean NLL over 2048 tokens, q8_0 and q8_0 K / q4_0 V device KV against f16 device KV, " + m.title(),
+				ProbeKind.CHECK, GPU, Requirements.gpu(8L << 30), List.of(modelId), cost, priority, "GpuKvQualityProbe",
+				Map.of("childHeap", m.heap()), Math.max(3600, 3 * cost), "512m");
 	}
 
 	/** The throughput harness's two lanes, prefill at {@code nPrompt} and generation, on one model and backend. */

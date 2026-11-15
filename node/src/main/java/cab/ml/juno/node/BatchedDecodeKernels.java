@@ -55,6 +55,7 @@ final class BatchedDecodeKernels {
 	private static final ThreadLocal<KernelParams> ROPE_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(6));
 	private static final ThreadLocal<KernelParams> ROPE_EXT_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(9));
 	private static final ThreadLocal<KernelParams> KV_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(7));
+	private static final ThreadLocal<KernelParams> KV_FMT_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(9));
 
 	/** [type index][row tile index]; type index 0 = Q4_K, 1 = Q5_K, 2 = Q6_K. */
 	private final MemorySegment[][] gemvRows;
@@ -62,16 +63,18 @@ final class BatchedDecodeKernels {
 	private final MemorySegment ropeSplitHalfRows;
 	private final MemorySegment ropeExtRows;
 	private final MemorySegment kvAppendRows;
+	private final MemorySegment kvAppendRowsFmt;
 	@SuppressWarnings("unused")
 	private final Arena moduleArena; // keeps the module and function slots alive
 
 	private BatchedDecodeKernels(MemorySegment[][] gemvRows, MemorySegment ropeRows, MemorySegment ropeSplitHalfRows,
-			MemorySegment ropeExtRows, MemorySegment kvAppendRows, Arena moduleArena) {
+			MemorySegment ropeExtRows, MemorySegment kvAppendRows, MemorySegment kvAppendRowsFmt, Arena moduleArena) {
 		this.gemvRows = gemvRows;
 		this.ropeRows = ropeRows;
 		this.ropeSplitHalfRows = ropeSplitHalfRows;
 		this.ropeExtRows = ropeExtRows;
 		this.kvAppendRows = kvAppendRows;
+		this.kvAppendRowsFmt = kvAppendRowsFmt;
 		this.moduleArena = moduleArena;
 	}
 
@@ -124,7 +127,8 @@ final class BatchedDecodeKernels {
 		return new BatchedDecodeKernels(gemv, function(drv, arena, module, "rope_rows"),
 				function(drv, arena, module, "rope_split_half_rows"),
 				function(drv, arena, module, "rope_ext_split_half_rows"),
-				function(drv, arena, module, "kv_append_rows"), arena);
+				function(drv, arena, module, "kv_append_rows"), function(drv, arena, module, "kv_append_rows_fmt"),
+				arena);
 	}
 
 	private static MemorySegment function(CudaDriverBindings drv, Arena arena, MemorySegment module, String entry) {
@@ -220,6 +224,26 @@ final class BatchedDecodeKernels {
 		KV_PARAMS.get().pointer(0, k).pointer(1, v).pointer(2, kPtrs).pointer(3, vPtrs).pointer(4, seqLens).i32(5, rows)
 				.i32(6, kvDim).launch(kvAppendRows, grid(2L * rows * kvDim), BLOCK_THREADS, stream,
 						"cuLaunchKernel(kv_append_rows)");
+	}
+
+	/**
+	 * As {@link #kvAppendRows(MemorySegment, MemorySegment, MemorySegment, MemorySegment, MemorySegment, int, int,
+	 * MemorySegment)}, into caches stored in {@code formats}: FP16 takes that kernel, anything quantized
+	 * {@code kv_append_rows_fmt}, which encodes each row as {@link PrefillWindowKernels#encodeKvRows} does for one
+	 * request, so a row in a batch is stored bit for bit as it is alone.
+	 */
+	void kvAppendRows(MemorySegment k, MemorySegment v, MemorySegment kPtrs, MemorySegment vPtrs, MemorySegment seqLens,
+			int rows, int kvDim, DeviceKvFormats formats, MemorySegment stream) {
+		if (!formats.quantized()) {
+			kvAppendRows(k, v, kPtrs, vPtrs, seqLens, rows, kvDim, stream);
+			return;
+		}
+		if (kvDim % DeviceKvFormat.BLOCK != 0)
+			throw new IllegalArgumentException("kvDim must be a multiple of " + DeviceKvFormat.BLOCK + ": " + kvDim);
+		KV_FMT_PARAMS.get().pointer(0, k).pointer(1, v).pointer(2, kPtrs).pointer(3, vPtrs).pointer(4, seqLens)
+				.i32(5, rows).i32(6, kvDim).i32(7, formats.k().code).i32(8, formats.v().code)
+				.launch(kvAppendRowsFmt, grid(32 * 2L * rows * (kvDim / DeviceKvFormat.BLOCK)), BLOCK_THREADS, stream,
+						"cuLaunchKernel(kv_append_rows_fmt)"); // one warp per 32-value block
 	}
 
 	private static byte[] readResource(String path) throws IOException {

@@ -45,7 +45,9 @@ import cab.ml.juno.tokenizer.ChatMessage;
  * <li>native streaming ({@code /v1/inference/stream}) joins to the native blocking answer;</li>
  * <li>on the continuous schedule, a session request repeating a stateless one prefills in full and equals it.</li>
  * </ul>
- * With {@code gpu=true} only the static batching checks run, on the GPU.
+ * With {@code gpu=true} only the static batching checks run, on the GPU, followed by a decode batch of eight at each of
+ * {@link #DEVICE_KV_TYPES}: on the GPU those types also set the device copy of the KV that attention reads, so a batched
+ * reply equals its single-request reply over each device KV format.
  */
 final class ConsistencyProbe implements KitProbe {
 
@@ -57,6 +59,8 @@ final class ConsistencyProbe implements KitProbe {
 	/** Tokens a decode batch of {@link #BATCH_OF_EIGHT} requests runs for: where batched and single replies used to diverge. */
 	static final int BATCH_MAX_TOKENS = 64;
 	static final int BATCH_OF_EIGHT = 8;
+	/** The {@code --cache-type-k/-v} settings the GPU decode batch of eight runs at: one type for K and V, or {@code k/v}. */
+	static final List<String> DEVICE_KV_TYPES = List.of("f16", "q8_0", "q8_0/q4_0");
 	private static final Duration START = Duration.ofMinutes(10);
 
 	@Override
@@ -80,7 +84,8 @@ final class ConsistencyProbe implements KitProbe {
 		}
 		staticBatching(work, model, heap, gpu ? "gpu" : "cpu", checks);
 		if (gpu)
-			batchOfEight(work, model, heap, checks);
+			for (String type : DEVICE_KV_TYPES)
+				batchOfEight(work, model, heap, type, checks);
 		if (!gpu)
 			continuousSession(work, model, heap, checks);
 		Map<String, Object> facts = new LinkedHashMap<>();
@@ -158,11 +163,15 @@ final class ConsistencyProbe implements KitProbe {
 		}
 	}
 
-	/** A decode batch of eight on the device: each 64-token reply must equal the same prompt's single-request reply. */
-	private static void batchOfEight(Path work, Path model, String heap, List<ProbeReport.Check> checks)
+	/**
+	 * A decode batch of eight on the device at the KV type {@code type}: each 64-token reply must equal the same prompt's
+	 * single-request reply at that type.
+	 */
+	private static void batchOfEight(Path work, Path model, String heap, String type, List<ProbeReport.Check> checks)
 			throws Exception {
-		String label = "decode batch of " + BATCH_OF_EIGHT + ", gpu, " + BATCH_MAX_TOKENS + " tokens: ";
-		try (JunoProcess s = JunoProcess.serve(work.resolve("batch-of-eight"), heap, batchOfEightArgs(model), START)) {
+		String label = "decode batch of " + BATCH_OF_EIGHT + ", gpu, " + type + " KV, " + BATCH_MAX_TOKENS + " tokens: ";
+		try (JunoProcess s = JunoProcess.serve(work.resolve("batch-of-eight-" + type.replace('/', '-')), heap,
+				batchOfEightArgs(model, type), START)) {
 			JunoHttpClient client = new JunoHttpClient(s.base());
 			String modelId = s.modelId();
 			List<String> baseline = new ArrayList<>();
@@ -173,10 +182,16 @@ final class ConsistencyProbe implements KitProbe {
 		}
 	}
 
-	/** The server arguments of {@link #batchOfEight}: batching on, the batch window long enough to fill it. */
-	static List<String> batchOfEightArgs(Path model) {
+	/**
+	 * The server arguments of {@link #batchOfEight}: batching on, the batch window long enough to fill it, and the KV
+	 * type {@code type} (one type for K and V, or {@code k/v}).
+	 */
+	static List<String> batchOfEightArgs(Path model, String type) {
+		int slash = type.indexOf('/');
 		List<String> args = JunoProcess.localArgs(model, BATCH_MAX_TOKENS);
-		args.addAll(List.of("--parallel", String.valueOf(BATCH_OF_EIGHT), "--batch-window-ms", "300", "--gpu"));
+		args.addAll(List.of("--parallel", String.valueOf(BATCH_OF_EIGHT), "--batch-window-ms", "300", "--gpu",
+				"--cache-type-k", slash < 0 ? type : type.substring(0, slash), "--cache-type-v",
+				slash < 0 ? type : type.substring(slash + 1)));
 		return args;
 	}
 

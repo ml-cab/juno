@@ -1562,7 +1562,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public boolean supportsKvPrefixSharing() {
-		return HandlerKvShare.supported(kvLayout, gpuAttention != null, kvAdapter);
+		return HandlerKvShare.supported(kvLayout, gpuAttention != null ? gpuAttention.formats() : null, kvAdapter);
 	}
 
 

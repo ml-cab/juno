@@ -188,9 +188,13 @@ class ProbeSelfTests {
 	@Test
 	void consistencyProbeBatchOfEightFillsABatchFromThePrompts() {
 		assertThat(ConsistencyProbe.batchOfEightOrder()).hasSize(ConsistencyProbe.BATCH_OF_EIGHT).contains(0, 1, 2);
-		List<String> args = ConsistencyProbe.batchOfEightArgs(Path.of("model.gguf"));
-		assertThat(args).containsSequence("--parallel", "8").contains("--gpu");
+		List<String> args = ConsistencyProbe.batchOfEightArgs(Path.of("model.gguf"), "f16");
+		assertThat(args).containsSequence("--parallel", "8").contains("--gpu")
+				.containsSequence("--cache-type-k", "f16", "--cache-type-v", "f16");
 		assertThat(String.join(" ", args)).contains("--max-tokens " + ConsistencyProbe.BATCH_MAX_TOKENS);
+		assertThat(ConsistencyProbe.batchOfEightArgs(Path.of("model.gguf"), "q8_0/q4_0"))
+				.containsSequence("--cache-type-k", "q8_0", "--cache-type-v", "q4_0");
+		assertThat(ConsistencyProbe.DEVICE_KV_TYPES).containsExactly("f16", "q8_0", "q8_0/q4_0");
 	}
 
 	@Test
@@ -484,6 +488,26 @@ class ProbeSelfTests {
 		assertThat(r.facts()).containsEntry("tokens", 256)
 				.containsEntry("f16RunKv", "cache-type-k=f16 cache-type-v=f16")
 				.containsEntry("quantizedRunKv", "cache-type-k=q8_0 cache-type-v=q4_0");
+	}
+
+	/**
+	 * The synthetic model's head width (16) is not a multiple of the quantized blocks' 32, so its handler keeps an FP16
+	 * device copy and warns: the stored check fails with that warning while the NLL check passes. Needs CUDA.
+	 */
+	@Test
+	void gpuKvQualityProbeFailsTheStoredCheckWhereTheHandlerKeepsAnFp16DeviceCopy(@TempDir Path dir) throws Exception {
+		org.junit.jupiter.api.Assumptions.assumeTrue(cab.ml.juno.node.CudaAvailability.isAvailable(), "no CUDA device");
+		Path model = SyntheticGguf.write(dir);
+		ProbeReport r = new GpuKvQualityProbe().run("gpu.kv-quality.synthetic",
+				Map.of("model", model.toString(), "tokens", "256", "types", "q8_0", "childHeap", "1g"));
+		assertThat(r.readings()).extracting(ProbeReport.Reading::name).containsExactly("mean NLL, f16 device KV",
+				"mean NLL, q8_0 device KV", "q8_0 argmax agreement, first 256 positions");
+		assertThat(r.checks()).extracting(ProbeReport.Check::name).containsExactly(
+				"q8_0 device KV NLL at most 1.02x the f16 device KV NLL", "q8_0 device KV stored in the selected formats");
+		assertThat(r.checks().get(0).passed()).as(r.checks().get(0).detail()).isTrue();
+		assertThat(r.checks().get(1).passed()).isFalse();
+		assertThat(r.checks().get(1).detail()).contains("head width 16");
+		assertThat(r.facts()).containsEntry("kernels", "cuda");
 	}
 
 	@Test

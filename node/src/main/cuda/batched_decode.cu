@@ -24,6 +24,10 @@
  *   kv_append_rows
  *               the K and V rows cast to FP16 into each request's own mirror at its
  *               own position: prefill_window.cu's to_half for N caches in one launch.
+ *   kv_append_rows_fmt
+ *               the same append into caches stored in kv_format.cuh's formats (kType
+ *               for K, vType for V): one warp per 32-value block, the encoder
+ *               prefill_window.cu's kv_encode_kv_rows runs for one request.
  *
  * Mapping of the GEMV kernels (Pascal decode, as q4k_gemv.cu): 128 threads = 4 warps
  * per block, one weight row per block; lane (quarter, l) of warp w owns the same
@@ -36,6 +40,7 @@
  */
 #include <stdint.h>
 #include <cuda_fp16.h>
+#include "kv_format.cuh"
 
 #define KQ_WARPS 4
 #define Q4K_BLOCK_BYTES 144
@@ -434,4 +439,30 @@ kv_append_rows(
     const int c = (int)(e - (long long)r * kvDim);
     half* mirror = (isV ? vPtrs : kPtrs)[r] + (size_t)(seqLens[r] - 1) * kvDim + c;
     *mirror = __float2half_rn((isV ? v : k)[e]);
+}
+
+extern "C" __global__ void __launch_bounds__(BD_THREADS)
+kv_append_rows_fmt(
+        const float* __restrict__ k,           // [rows][kvDim]
+        const float* __restrict__ v,           // [rows][kvDim]
+        void* const* __restrict__ kPtrs,       // [rows]
+        void* const* __restrict__ vPtrs,       // [rows]
+        const int* __restrict__ seqLens,       // [rows]
+        int rows,
+        int kvDim,
+        int kType,
+        int vType) {
+    const int blocksPerRow = kvDim / KV_BLOCK;
+    const long long perSide = (long long)rows * blocksPerRow;
+    const long long w = ((long long)blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    if (w >= 2 * perSide)
+        return; // whole warps leave together: the encoder's shuffles need all 32 lanes
+    const int lane = (int)(threadIdx.x & 31);
+    const bool isV = w >= perSide;
+    const long long e = isV ? w - perSide : w;
+    const int r = (int)(e / blocksPerRow);
+    const int b = (int)(e - (long long)r * blocksPerRow);
+    const int type = isV ? vType : kType;
+    const float x = (isV ? v : k)[(size_t)r * kvDim + (size_t)b * KV_BLOCK + lane];
+    kv_encode_block_warp(type, x, kv_row_w((isV ? vPtrs : kPtrs)[r], type, kvDim, seqLens[r] - 1), b, lane);
 }

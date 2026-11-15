@@ -1,0 +1,35 @@
+# Per-run GPU samples (nvidia-smi every 500 ms: clocks.sm, temperature, power), whole JVM run including load and prefill
+tinyllama-A1  samples  65  above 1700 MHz  21  1500-1700 MHz  36  temp C  44  60  most common: 36@1607 20@1860 6@1075 
+tinyllama-B1  samples  64  above 1700 MHz  64  1500-1700 MHz   0  temp C  52  64  most common: 64@1860 
+tinyllama-A2  samples  62  above 1700 MHz  25  1500-1700 MHz   5  temp C  51  66  most common: 16@1860 11@1113 8@1847 
+tinyllama-B2  samples  64  above 1700 MHz  64  1500-1700 MHz   0  temp C  57  68  most common: 61@1847 3@1860 
+tinyllama-A3  samples  62  above 1700 MHz  25  1500-1700 MHz   5  temp C  56  70  most common: 23@1847 11@1126 10@139 
+tinyllama-B3  samples  63  above 1700 MHz  63  1500-1700 MHz   0  temp C  62  72  most common: 53@1847 10@1835 
+qwen25-A1     samples  99  above 1700 MHz  52  1500-1700 MHz  14  temp C  60  77  most common: 40@1835 14@1607 12@1847 
+qwen25-B1     samples 105  above 1700 MHz  74  1500-1700 MHz  13  temp C  64  80  most common: 42@1835 29@1822 13@1607 
+qwen25-A2     samples 100  above 1700 MHz  69  1500-1700 MHz  13  temp C  67  83  most common: 35@1809 31@1822 13@1607 
+qwen25-B2     samples 106  above 1700 MHz  75  1500-1700 MHz  23  temp C  71  83  most common: 55@1809 16@1607 7@1771 
+qwen25-A3     samples 103  above 1700 MHz  44  1500-1700 MHz  42  temp C  72  83  most common: 31@1809 24@1607 6@151 
+qwen25-B3     samples 107  above 1700 MHz  20  1500-1700 MHz  76  temp C  73  83  most common: 29@1695 26@1607 9@1809 
+phi35-A1      samples 415  above 1700 MHz  29  1500-1700 MHz 260  temp C  73  94  most common: 220@1607 45@1404 23@1771 
+phi35-B1      samples 439  above 1700 MHz   0  1500-1700 MHz 112  temp C  84  94  most common: 68@1442 58@1366 54@1607 
+phi35-A2      samples 441  above 1700 MHz   0  1500-1700 MHz  87  temp C  83  94  most common: 49@1607 43@1126 31@1379 
+phi35-B2      samples 436  above 1700 MHz   1  1500-1700 MHz 100  temp C  84  94  most common: 90@1404 51@1607 44@1417 
+phi35-A3      samples 435  above 1700 MHz   1  1500-1700 MHz  85  temp C  84  94  most common: 45@1607 29@1379 27@1139 
+phi35-B3      samples 435  above 1700 MHz   0  1500-1700 MHz 100  temp C  84  94  most common: 121@1379 56@1442 48@1607 
+mistral-A1    samples 137  above 1700 MHz   0  1500-1700 MHz  75  temp C  83  94  most common: 47@1607 10@1544 10@139 
+mistral-B1    samples 147  above 1700 MHz   0  1500-1700 MHz 115  temp C  82  94  most common: 105@1607 11@139 10@1126 
+mistral-A2    samples 136  above 1700 MHz   2  1500-1700 MHz 101  temp C  81  93  most common: 83@1607 10@139 8@1544 
+mistral-B2    samples 147  above 1700 MHz   1  1500-1700 MHz 115  temp C  81  93  most common: 113@1607 11@1126 10@139 
+mistral-A3    samples 135  above 1700 MHz   0  1500-1700 MHz 108  temp C  80  94  most common: 106@1607 10@139 6@164 
+mistral-B3    samples 147  above 1700 MHz   0  1500-1700 MHz 115  temp C  80  92  most common: 115@1607 11@139 6@670 
+
+# Loaded samples only (power above 70 W: prefill and decode), per model and side
+tinyllama A (f16) loaded samples   59  clock min 1607 median 1860 max 1885 MHz  temp 48-70 C
+tinyllama B (q8_0) loaded samples   64  clock min 1835 median 1847 max 1860 MHz  temp 54-72 C
+qwen25    A (f16) loaded samples  139  clock min 1607 median 1809 max 1847 MHz  temp 63-83 C
+qwen25    B (q8_0) loaded samples  148  clock min 1607 median 1809 max 1847 MHz  temp 72-83 C
+phi35     A (f16) loaded samples 1115  clock min  873 median 1404 max 1822 MHz  temp 79-94 C
+phi35     B (q8_0) loaded samples 1147  clock min 1012 median 1417 max 1708 MHz  temp 87-94 C
+mistral   A (f16) loaded samples  234  clock min 1328 median 1607 max 1733 MHz  temp 84-94 C
+mistral   B (q8_0) loaded samples  269  clock min 1544 median 1607 max 1670 MHz  temp 84-94 C

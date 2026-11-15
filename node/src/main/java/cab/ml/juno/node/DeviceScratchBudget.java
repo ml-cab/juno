@@ -89,13 +89,18 @@ final class DeviceScratchBudget {
      * @param kvDim        key/value width
      */
     static long kvMirrorReserveBytes(int deviceLayers, int hostLayers, int kvDim) {
+        return kvMirrorReserveBytes(deviceLayers, hostLayers, kvDim, DeviceKvFormats.F16);
+    }
+
+    /** As {@link #kvMirrorReserveBytes(int, int, int)}, for a mirror stored in {@code formats}. */
+    static long kvMirrorReserveBytes(int deviceLayers, int hostLayers, int kvDim, DeviceKvFormats formats) {
         if (deviceLayers < 0)
             throw new IllegalArgumentException("deviceLayers must be >= 0 (got " + deviceLayers + ")");
         if (hostLayers < 0)
             throw new IllegalArgumentException("hostLayers must be >= 0 (got " + hostLayers + ")");
-        long grown = kvMirrorBytes(deviceLayers, kvDim, RESERVED_MIRROR_TOKENS);
-        long growing = kvMirrorBytes(Math.min(deviceLayers, 1), kvDim, RESERVED_MIRROR_TOKENS / 2);
-        return grown + growing + kvMirrorBytes(hostLayers, kvDim, DeviceKvCache.INITIAL_SEQ_CAPACITY);
+        long grown = kvMirrorBytes(deviceLayers, kvDim, RESERVED_MIRROR_TOKENS, formats);
+        long growing = kvMirrorBytes(Math.min(deviceLayers, 1), kvDim, RESERVED_MIRROR_TOKENS / 2, formats);
+        return grown + growing + kvMirrorBytes(hostLayers, kvDim, DeviceKvCache.INITIAL_SEQ_CAPACITY, formats);
     }
 
     /**
@@ -156,13 +161,21 @@ final class DeviceScratchBudget {
      * @param initialTokens context the mirror is first allocated for
      */
     static long kvMirrorBytes(int layerCount, int kvDim, int initialTokens) {
+        return kvMirrorBytes(layerCount, kvDim, initialTokens, DeviceKvFormats.F16);
+    }
+
+    /**
+     * As {@link #kvMirrorBytes(int, int, int)}, for a mirror stored in {@code formats}: the device KV at its real
+     * size, {@link DeviceKvFormats#bytesPerPosition} per position and layer.
+     */
+    static long kvMirrorBytes(int layerCount, int kvDim, int initialTokens, DeviceKvFormats formats) {
         if (layerCount <= 0)
             return 0L;
         if (kvDim < 1)
             throw new IllegalArgumentException("kvDim must be >= 1 (got " + kvDim + ")");
         if (initialTokens < 1)
             throw new IllegalArgumentException("initialTokens must be >= 1 (got " + initialTokens + ")");
-        return 2L * layerCount * initialTokens * kvDim * Short.BYTES;
+        return formats.sessionBytes(layerCount, kvDim, initialTokens);
     }
 
     /**

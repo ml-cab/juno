@@ -1,0 +1,50 @@
+# Qwen2.5-3B decode under nsys (CUDA trace), one warm-up and one measured repetition per JVM, unpinned.
+# Per token, tokens 1..127 of the measured repetition (us). Side A is always the same FP16 JVM (trace2-f16).
+
+## q8_0 as gated (scalar encoder, 128-thread decode)
+per token (us)       f16       q8_0     diff
+wall              23208.2   23888.0    679.8
+gpu busy          17330.2   18172.8    842.6
+gpu idle           5878.1    5715.2   -162.8
+gqa_attention_kv_d128             0.0   3268.1   3268.1  launches/token   0.0  36.1
+gqa_attention_d128             3018.2      0.0  -3018.2  launches/token  36.0   0.0
+q4k_gemv                       8155.2   8510.4    355.2  launches/token 216.2 216.3
+kv_encode_rows                    0.0    340.2    340.2  launches/token   0.0  72.1
+to_half                         124.9      0.0   -124.9  launches/token  72.1   0.0
+FFN gate/up GEMVs, per layer, q8_0 over FP16: min 1.056 max 1.059
+
+## q8_0 with the warp encoder, K and V in one launch
+per token (us)       f16       q8_0     diff
+wall              23208.2   23357.1    148.9
+gpu busy          17330.2   17886.2    556.0
+gpu idle           5878.1    5470.9   -407.2
+gqa_attention_kv_d128             0.0   3256.0   3256.0  launches/token   0.0  36.0
+gqa_attention_d128             3018.2      0.0  -3018.2  launches/token  36.0   0.0
+q4k_gemv                       8155.2   8488.3    333.1  launches/token 216.2 216.2
+kv_encode_kv_rows                 0.0    138.4    138.4  launches/token   0.0  36.0
+to_half                         124.9      0.0   -124.9  launches/token  72.1   0.0
+FFN gate/up GEMVs, per layer, q8_0 over FP16: min 1.058 max 1.060
+
+## q8_0 with the warp encoder and a load-ahead decode loop (tried, not kept: no gain)
+per token (us)       f16       q8_0     diff
+wall              23208.2   23688.2    480.0
+gpu busy          17330.2   17834.9    504.8
+gpu idle           5878.1    5853.2    -24.8
+gqa_attention_kv_d128             0.0   3295.0   3295.0  launches/token   0.0  36.0
+gqa_attention_d128             3018.2      0.0  -3018.2  launches/token  36.0   0.0
+q4k_gemv                       8155.2   8402.0    246.8  launches/token 216.2 216.2
+kv_encode_kv_rows                 0.0    137.0    137.0  launches/token   0.0  36.0
+to_half                         124.9      0.0   -124.9  launches/token  72.1   0.0
+FFN gate/up GEMVs, per layer, q8_0 over FP16: min 1.040 max 1.043
+
+## q8_0 with the warp encoder and the 256-thread decode (kept)
+per token (us)       f16       q8_0     diff
+wall              23208.2   22386.0   -822.2
+gpu busy          17330.2   16537.4   -792.8
+gpu idle           5878.1    5848.6    -29.4
+gqa_attention_d128             3018.2      0.0  -3018.2  launches/token  36.0   0.0
+gqa_decode_kv_d128                0.0   1958.2   1958.2  launches/token   0.0  36.0
+q4k_gemv                       8155.2   8433.8    278.6  launches/token 216.2 216.2
+kv_encode_kv_rows                 0.0    138.9    138.9  launches/token   0.0  36.0
+to_half                         124.9      0.0   -124.9  launches/token  72.1   0.0
+FFN gate/up GEMVs, per layer, q8_0 over FP16: min 1.044 max 1.047

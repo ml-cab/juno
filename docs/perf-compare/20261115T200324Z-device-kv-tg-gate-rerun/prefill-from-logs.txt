@@ -1,0 +1,48 @@
+# run 20261115T200324Z
+# model      JVM  prefill ms (median of measured requests)
+tinyllama   A1    1023.1
+tinyllama   B1    1309.3
+tinyllama   A2     990.0
+tinyllama   B2    1302.3
+tinyllama   A3     998.2
+tinyllama   B3    1309.2
+tinyllama   f16 median 998.2 ms, q8_0 median 1309.2 ms, q8_0 over f16 1.312x
+qwen25      A1    2420.2
+qwen25      B1    2947.3
+qwen25      A2    2425.9
+qwen25      B2    2944.9
+qwen25      A3    2671.1
+qwen25      B3    2939.9
+qwen25      f16 median 2425.9 ms, q8_0 median 2944.9 ms, q8_0 over f16 1.214x
+mistral     A1    4946.6
+mistral     B1    6464.5
+mistral     A2    4940.0
+mistral     B2    6453.4
+mistral     A3    4954.7
+mistral     B3    6449.6
+mistral     f16 median 4946.6 ms, q8_0 median 6453.4 ms, q8_0 over f16 1.305x
+
+# run 20261113T215326Z
+# model      JVM  prefill ms (median of measured requests)
+tinyllama   A1     984.9
+tinyllama   B1    1300.3
+tinyllama   A2     994.4
+tinyllama   B2    1303.5
+tinyllama   A3     991.1
+tinyllama   B3    1310.7
+tinyllama   f16 median 991.1 ms, q8_0 median 1303.5 ms, q8_0 over f16 1.315x
+qwen25      A1    2402.3
+qwen25      B1    2936.3
+qwen25      A2    2431.5
+qwen25      B2    3006.3
+qwen25      A3    2585.4
+qwen25      B3    3153.4
+qwen25      f16 median 2431.5 ms, q8_0 median 3006.3 ms, q8_0 over f16 1.236x
+mistral     A1    5703.9
+mistral     B1    6949.0
+mistral     A2    5414.6
+mistral     B2    6996.7
+mistral     A3    5439.5
+mistral     B3    6996.9
+mistral     f16 median 5439.5 ms, q8_0 median 6996.7 ms, q8_0 over f16 1.286x
+

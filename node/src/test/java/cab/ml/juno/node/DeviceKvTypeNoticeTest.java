@@ -62,33 +62,35 @@ class DeviceKvTypeNoticeTest {
 	}
 
 	@Test
-	@DisplayName("a CUDA launch with GPU attention and a quantized cache type is told the device copy stays FP16")
-	void quantizedTypeOnGpuAttentionGetsTheNotice() {
-		String notice = DeviceKvTypeNotice.consoleNotice("llama", false, false, true, Q4_K_ONLY);
-		assertThat(notice).isNotNull().contains("cache-type-k=q4_0 cache-type-v=f16").contains("host KV")
-				.contains("FP16").doesNotContain("\n");
-		assertThat(DeviceKvTypeNotice.consoleNotice("phi3", false, false, true, Q8)).contains("cache-type-k=q8_0");
-		assertThat(DeviceKvTypeNotice.consoleNotice("qwen3", false, false, true, Q8)).isNotNull();
+	@DisplayName("a CUDA launch whose device KV cannot hold the quantized type is told the device copy stays FP16")
+	void deviceThatKeepsFp16GetsTheNotice() {
+		String notice = DeviceKvTypeNotice.consoleNotice("llama", 2576, false, false, true, Q4_K_ONLY);
+		assertThat(notice).isNotNull().contains("cache-type-k=q4_0 cache-type-v=f16").contains("FP16")
+				.contains("2576").doesNotContain("\n");
+		assertThat(DeviceKvTypeNotice.consoleNotice("phi3", 80, false, false, true, Q8)).contains("cache-type-k=q8_0");
 		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "on");
-		assertThat(DeviceKvTypeNotice.consoleNotice("llama", false, false, true, Q8)).isNotNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("qwen3", 80, false, false, true, Q8)).isNotNull();
 	}
 
 	@Test
-	@DisplayName("no notice where attention reads the host rows, or the cache type is f16")
-	void noNoticeWhereAttentionReadsTheHostRows() {
-		assertThat(DeviceKvTypeNotice.consoleNotice("llama", false, false, true, F16)).as("f16").isNull();
-		assertThat(DeviceKvTypeNotice.consoleNotice("llama", false, true, false, Q4_K_ONLY)).as("CPU").isNull();
-		assertThat(DeviceKvTypeNotice.consoleNotice("llama", false, false, false, Q4_K_ONLY)).as("ROCm").isNull();
-		assertThat(DeviceKvTypeNotice.consoleNotice("llama", true, false, true, Q4_K_ONLY)).as("LoRA").isNull();
-		assertThat(DeviceKvTypeNotice.consoleNotice("phi2", false, false, true, Q4_K_ONLY)).as("phi2").isNull();
-		assertThat(DeviceKvTypeNotice.consoleNotice("qwen3moe", false, false, true, Q4_K_ONLY)).as("qwen3moe")
+	@DisplayName("no notice when the device KV holds the type, the width is unknown, or attention reads the host rows")
+	void noNoticeWhereTheTypeAppliesInFull() {
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 128, false, false, true, Q8)).as("held").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("phi3", 96, false, false, true, Q4_K_ONLY)).as("held").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 0, false, false, true, Q8)).as("unknown width").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 80, false, false, true, F16)).as("f16").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 80, false, true, false, Q4_K_ONLY)).as("CPU").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 80, false, false, false, Q4_K_ONLY)).as("ROCm").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 80, true, false, true, Q4_K_ONLY)).as("LoRA").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("phi2", 80, false, false, true, Q4_K_ONLY)).as("phi2").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("qwen3moe", 80, false, false, true, Q4_K_ONLY)).as("qwen3moe")
 				.isNull();
 		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
-		assertThat(DeviceKvTypeNotice.consoleNotice("llama", false, false, true, Q4_K_ONLY)).as("off").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 80, false, false, true, Q4_K_ONLY)).as("off").isNull();
 	}
 
 	@Test
-	@DisplayName("a handler that opens GPU attention logs it once per process, and nothing for f16")
+	@DisplayName("a handler whose device KV keeps FP16 under a quantized type warns once per process; none when it holds the type")
 	void handlerLogsOnce() {
 		Logger log = Logger.getLogger(DeviceKvTypeNotice.class.getName());
 		List<LogRecord> records = new ArrayList<>();
@@ -109,13 +111,15 @@ class DeviceKvTypeNoticeTest {
 		log.addHandler(capture);
 		try {
 			DeviceKvTypeNotice.resetForTest();
-			DeviceKvTypeNotice.announce("Llama", F16);
-			assertThat(records).isEmpty();
-			DeviceKvTypeNotice.announce("Llama", Q4_K_ONLY);
-			DeviceKvTypeNotice.announce("Phi-3", Q4_K_ONLY);
-			assertThat(records).singleElement().satisfies(r -> {
-				assertThat(r.getLevel()).isEqualTo(Level.WARNING);
-				assertThat(r.getMessage()).contains("Llama").contains("cache-type-k=q4_0").contains("FP16");
+			DeviceKvTypeNotice.announce("Llama", F16, DeviceKvFormats.F16, 1024, 128);
+			DeviceKvTypeNotice.announce("Llama", Q8, new DeviceKvFormats(DeviceKvFormat.Q8_0, DeviceKvFormat.Q8_0), 1024, 128);
+			DeviceKvTypeNotice.resetForTest();
+			assertThat(records).noneMatch(r -> r.getLevel() == Level.WARNING);
+			DeviceKvTypeNotice.announce("Llama", Q4_K_ONLY, DeviceKvFormats.F16, 1024, 128);
+			DeviceKvTypeNotice.announce("Phi-3", Q4_K_ONLY, DeviceKvFormats.F16, 1024, 128);
+			assertThat(records).filteredOn(r -> r.getLevel() == Level.WARNING).singleElement().satisfies(r -> {
+				assertThat(r.getMessage()).contains("Llama").contains("cache-type-k=q4_0").contains("FP16")
+						.contains("did not load");
 			});
 		} finally {
 			log.removeHandler(capture);

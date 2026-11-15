@@ -65,13 +65,14 @@ final class GpuAttentionMirror {
 	private final int numHeads;
 	private final int headDim;
 	private final int gqaRatio;
+	private final DeviceKvFormats formats;
 	private final Map<String, DeviceKvCache[]> byRequest = new ConcurrentHashMap<>();
 	private final AtomicBoolean allocWarned = new AtomicBoolean();
 	private final AtomicBoolean growthWarned = new AtomicBoolean();
 	private final AtomicBoolean kernelWarned = new AtomicBoolean();
 
 	private GpuAttentionMirror(CudaGqaAttention gqa, String handler, int layers, int kvDim, int numHeads,
-			int headDim, int gqaRatio) {
+			int headDim, int gqaRatio, DeviceKvFormats formats) {
 		this.gqa = gqa;
 		this.handler = handler;
 		this.layers = layers;
@@ -79,6 +80,7 @@ final class GpuAttentionMirror {
 		this.numHeads = numHeads;
 		this.headDim = headDim;
 		this.gqaRatio = gqaRatio;
+		this.formats = formats;
 	}
 
 	/**
@@ -102,8 +104,15 @@ final class GpuAttentionMirror {
 			return null;
 		}
 		log.info(handler + ": GPU-resident attention path active (gpu-attention=" + opts.policyLabel() + ")");
-		DeviceKvTypeNotice.announce(handler, cab.ml.juno.kvcache.CacheTypeOptions.fromEnv());
-		return new GpuAttentionMirror(gqa, handler, layers, kvDim, numHeads, headDim, gqaRatio);
+		cab.ml.juno.kvcache.CacheTypeOptions types = cab.ml.juno.kvcache.CacheTypeOptions.fromEnv();
+		DeviceKvFormats formats = DeviceKvFormats.select(types, headDim, () -> GqaAttentionKvKernel.tryLoad() != null);
+		DeviceKvTypeNotice.announce(handler, types, formats, kvDim, headDim);
+		return new GpuAttentionMirror(gqa, handler, layers, kvDim, numHeads, headDim, gqaRatio, formats);
+	}
+
+	/** How this handler's mirrors store K and V ({@link DeviceKvFormats#select}). */
+	DeviceKvFormats formats() {
+		return formats;
 	}
 
 	/**
@@ -114,7 +123,7 @@ final class GpuAttentionMirror {
 	 */
 	DeviceKvCache[] layersFor(String requestId) {
 		try {
-			return byRequest.computeIfAbsent(requestId, k -> gqa.newLayers(layers, kvDim));
+			return byRequest.computeIfAbsent(requestId, k -> gqa.newLayers(layers, kvDim, formats));
 		} catch (IllegalStateException ex) {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;

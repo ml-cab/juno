@@ -1,0 +1,37 @@
+# Per-JVM GPU samples (nvidia-smi every 500 ms: clocks.sm, clocks.mem, pstate, temperature, power, throttle reasons),
+# whole JVM run including load and prefill. Loaded = power above 70 W (prefill and decode). Lock 1300 MHz.
+# throttle reasons: 0x20 = software thermal slowdown, 0x1 = idle, 0x0 = none
+tinyllama-A1 samples   62 loaded   20  sm min 1607 median 1873 max 1885 (below lock 0)  mem 20@4513  pstate 20@P2  power median 128.5 W  temp 43-59 C  reasons 0x0000000000000000:20
+tinyllama-B1 samples   63 loaded   19  sm min 1771 median 1873 max 1885 (below lock 0)  mem 19@4513  pstate 19@P2  power median 119.1 W  temp 45-61 C  reasons 0x0000000000000000:19
+tinyllama-A2 samples   62 loaded   20  sm min 1860 median 1860 max 1860 (below lock 0)  mem 20@4513  pstate 20@P2  power median 129.1 W  temp 52-64 C  reasons 0x0000000000000000:20
+tinyllama-B2 samples   64 loaded   20  sm min 1847 median 1860 max 1873 (below lock 0)  mem 20@4513  pstate 20@P2  power median 119.3 W  temp 50-65 C  reasons 0x0000000000000000:20
+tinyllama-A3 samples   62 loaded   20  sm min 1847 median 1847 max 1860 (below lock 0)  mem 20@4513  pstate 20@P2  power median 130.6 W  temp 56-68 C  reasons 0x0000000000000000:20
+tinyllama-B3 samples   64 loaded   19  sm min 1847 median 1847 max 1860 (below lock 0)  mem 19@4513  pstate 19@P2  power median 121.4 W  temp 54-68 C  reasons 0x0000000000000000:19
+qwen25-A1    samples   99 loaded   46  sm min 1835 median 1835 max 1847 (below lock 0)  mem 46@4513  pstate 46@P2  power median 139.3 W  temp 60-73 C  reasons 0x0000000000000000:46
+qwen25-B1    samples  103 loaded   48  sm min 1822 median 1835 max 1847 (below lock 0)  mem 48@4513  pstate 48@P2  power median 128.0 W  temp 59-75 C  reasons 0x0000000000000000:48
+qwen25-A2    samples  100 loaded   45  sm min 1822 median 1835 max 1847 (below lock 0)  mem 45@4513  pstate 45@P2  power median 138.0 W  temp 61-76 C  reasons 0x0000000000000000:45
+qwen25-B2    samples  103 loaded   47  sm min 1822 median 1835 max 1847 (below lock 0)  mem 47@4513  pstate 47@P2  power median 129.1 W  temp 61-77 C  reasons 0x0000000000000000:47
+qwen25-A3    samples  108 loaded   46  sm min 1822 median 1835 max 1835 (below lock 0)  mem 46@4513  pstate 46@P2  power median 137.3 W  temp 64-78 C  reasons 0x0000000000000000:46
+qwen25-B3    samples  103 loaded   49  sm min 1733 median 1835 max 1847 (below lock 0)  mem 49@4513  pstate 49@P2  power median 134.0 W  temp 61-77 C  reasons 0x0000000000000000:49
+phi35-A1     samples  406 loaded  347  sm min 1607 median 1607 max 1847 (below lock 0)  mem 347@4513  pstate 347@P2  power median 120.4 W  temp 62-91 C  reasons 0x0000000000000020:267 0x0000000000000000:80
+phi35-B1     samples  405 loaded  353  sm min 1607 median 1607 max 1847 (below lock 0)  mem 353@4513  pstate 353@P2  power median 116.7 W  temp 63-92 C  reasons 0x0000000000000020:285 0x0000000000000000:68
+phi35-A2     samples  404 loaded  349  sm min 1531 median 1607 max 1847 (below lock 0)  mem 349@4513  pstate 349@P2  power median 122.3 W  temp 63-94 C  reasons 0x0000000000000020:280 0x0000000000000000:69
+phi35-B2     samples  402 loaded  350  sm min 1607 median 1607 max 1847 (below lock 0)  mem 350@4513  pstate 350@P2  power median 118.2 W  temp 63-93 C  reasons 0x0000000000000020:272 0x0000000000000000:78
+phi35-A3     samples  402 loaded  348  sm min 1480 median 1607 max 1835 (below lock 0)  mem 348@4513  pstate 348@P2  power median 119.9 W  temp 63-94 C  reasons 0x0000000000000020:283 0x0000000000000000:65
+phi35-B3     samples  404 loaded  353  sm min 1607 median 1607 max 1835 (below lock 0)  mem 353@4513  pstate 353@P2  power median 116.3 W  temp 63-93 C  reasons 0x0000000000000020:280 0x0000000000000000:73
+mistral-A1   samples  131 loaded   74  sm min 1607 median 1809 max 1822 (below lock 0)  mem 74@4513  pstate 74@P2  power median 150.2 W  temp 63-83 C  reasons 0x0000000000000000:51 0x0000000000000020:23
+mistral-B1   samples  141 loaded   85  sm min 1607 median 1809 max 1835 (below lock 0)  mem 85@4513  pstate 85@P2  power median 135.7 W  temp 63-83 C  reasons 0x0000000000000000:78 0x0000000000000020:7
+mistral-A2   samples  131 loaded   73  sm min 1632 median 1809 max 1835 (below lock 0)  mem 73@4513  pstate 73@P2  power median 150.3 W  temp 63-83 C  reasons 0x0000000000000000:64 0x0000000000000020:9
+mistral-B2   samples  140 loaded   84  sm min 1607 median 1809 max 1835 (below lock 0)  mem 84@4513  pstate 84@P2  power median 137.4 W  temp 63-83 C  reasons 0x0000000000000000:79 0x0000000000000020:5
+mistral-A3   samples  130 loaded   72  sm min 1620 median 1809 max 1835 (below lock 0)  mem 72@4513  pstate 72@P2  power median 150.5 W  temp 63-83 C  reasons 0x0000000000000000:62 0x0000000000000020:10
+mistral-B3   samples  140 loaded   82  sm min 1683 median 1822 max 1847 (below lock 0)  mem 82@4513  pstate 82@P2  power median 131.7 W  temp 63-83 C  reasons 0x0000000000000000:67 0x0000000000000020:15
+
+# Loaded samples per model and side
+tinyllama  A (f16 ) loaded   60  sm min 1607 median 1860 max 1885 MHz  power median 129.4 W  temp 45-68 C
+tinyllama  B (q8_0) loaded   58  sm min 1771 median 1860 max 1885 MHz  power median 119.8 W  temp 49-68 C
+qwen25     A (f16 ) loaded  137  sm min 1822 median 1835 max 1847 MHz  power median 138.0 W  temp 63-78 C
+qwen25     B (q8_0) loaded  144  sm min 1733 median 1835 max 1847 MHz  power median 130.9 W  temp 65-77 C
+phi35      A (f16 ) loaded 1044  sm min 1480 median 1607 max 1847 MHz  power median 120.6 W  temp 65-94 C
+phi35      B (q8_0) loaded 1056  sm min 1607 median 1607 max 1847 MHz  power median 116.6 W  temp 66-93 C
+mistral    A (f16 ) loaded  219  sm min 1607 median 1809 max 1835 MHz  power median 150.4 W  temp 69-83 C
+mistral    B (q8_0) loaded  251  sm min 1607 median 1809 max 1847 MHz  power median 134.8 W  temp 65-83 C

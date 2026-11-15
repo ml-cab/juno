@@ -69,7 +69,7 @@ final class KvQualityProbe implements KitProbe {
 	}
 
 	/** {@code type} is one type for K and V, or {@code k/v}. */
-	private static List<String> cacheType(String type) {
+	static List<String> cacheType(String type) {
 		int slash = type.indexOf('/');
 		String k = slash < 0 ? type : type.substring(0, slash);
 		String v = slash < 0 ? type : type.substring(slash + 1);

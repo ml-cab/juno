@@ -1,0 +1,57 @@
+# The tree the gate ran: dist/device-kv-tg/READY, checked by wait-and-run.sh before the run and again after it
+head 79fa87b0b092c263107e59c035baf040542d440d
+diff e458312807298dc0
+
+# git status at the run (HEAD 79fa87b0 plus these uncommitted changes)
+ M CHANGELOG.md
+ M README.md
+ M docs/agent-arch.txt
+ M docs/gap-closure-plan/TIER-03-kv-cache-maturity.md
+ M docs/howto.md
+ M docs/perf-compare/README.md
+ M docs/performance.md
+ M juno-player/src/main/java/cab/ml/juno/player/ConsoleMain.java
+ M node/src/main/cuda/batched_decode.cu
+ M node/src/main/cuda/gqa_attention.cu
+ M node/src/main/cuda/prefill_window.cu
+ M node/src/main/java/cab/ml/juno/node/BatchedDecodeKernels.java
+ M node/src/main/java/cab/ml/juno/node/CudaGqaAttention.java
+ M node/src/main/java/cab/ml/juno/node/DeviceKvCache.java
+ M node/src/main/java/cab/ml/juno/node/DeviceKvTypeNotice.java
+ M node/src/main/java/cab/ml/juno/node/DeviceScratchBudget.java
+ M node/src/main/java/cab/ml/juno/node/GpuAttentionMirror.java
+ M node/src/main/java/cab/ml/juno/node/GqaAttentionKernel.java
+ M node/src/main/java/cab/ml/juno/node/HandlerKvShare.java
+ M node/src/main/java/cab/ml/juno/node/LlamaTransformerHandler.java
+ M node/src/main/java/cab/ml/juno/node/Phi2TransformerHandler.java
+ M node/src/main/java/cab/ml/juno/node/Phi3TransformerHandler.java
+ M node/src/main/java/cab/ml/juno/node/PrefillWindowKernels.java
+ M node/src/main/java/cab/ml/juno/node/PrefillWindowRegion.java
+ M node/src/main/java/cab/ml/juno/node/Qwen3MoeTransformerHandler.java
+ M node/src/main/java/cab/ml/juno/node/Qwen3TransformerHandler.java
+ M node/src/main/java/cab/ml/juno/node/ResidentBatchDecode.java
+ M node/src/main/java/cab/ml/juno/node/ResidentQkvPath.java
+ M node/src/main/resources/cab/ml/juno/node/batched_decode.ptx
+ M node/src/main/resources/cab/ml/juno/node/gqa_attention.ptx
+ M node/src/main/resources/cab/ml/juno/node/prefill_window.ptx
+ M node/src/test/java/cab/ml/juno/node/DeviceKvTypeNoticeTest.java
+ M node/src/test/java/cab/ml/juno/node/DeviceScratchBudgetTest.java
+ M node/src/test/java/cab/ml/juno/node/GqaAttentionDecodeBench.java
+ M node/src/test/java/cab/ml/juno/node/KvQuantQualityLiveTest.java
+ M node/src/test/java/cab/ml/juno/node/ResidentBatchDecodeTest.java
+?? .github/
+?? docs/perf-compare/20261113T194534Z-device-kv-quant/
+?? docs/perf-compare/20261113T215326Z-device-kv-tg-gate/
+?? docs/perf-compare/20261115T045828Z-device-kv-decode-path/
+?? docs/perf-compare/20261115T200324Z-device-kv-tg-gate-rerun/
+?? node/src/main/cuda/gqa_attention.cuh
+?? node/src/main/cuda/gqa_attention_kv.cu
+?? node/src/main/cuda/kv_format.cuh
+?? node/src/main/java/cab/ml/juno/node/DeviceKvFormat.java
+?? node/src/main/java/cab/ml/juno/node/DeviceKvFormats.java
+?? node/src/main/java/cab/ml/juno/node/GqaAttentionKvKernel.java
+?? node/src/main/resources/cab/ml/juno/node/gqa_attention_kv.ptx
+?? node/src/test/java/cab/ml/juno/node/DeviceKvDecodeTgLiveTest.java
+?? node/src/test/java/cab/ml/juno/node/DeviceKvFormatTest.java
+?? node/src/test/java/cab/ml/juno/node/DeviceKvQuantParityTest.java
+?? node/src/test/java/cab/ml/juno/node/DeviceKvQuantQualityLiveTest.java

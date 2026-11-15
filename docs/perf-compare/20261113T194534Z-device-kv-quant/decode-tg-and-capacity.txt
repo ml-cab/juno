@@ -1,0 +1,60 @@
+[mistral A1] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=3224895488 session_bytes=268435456 sessions=12 fp16_session_bytes=268435456 fp16_sessions=12
+[mistral A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=35.362
+[mistral A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=35.579
+[mistral A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=35.824
+[mistral A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=35.579 reps=[35.36227782001713, 35.5785617703678, 35.82412761728841]
+[mistral B1] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=3219652608 session_bytes=142606336 sessions=22 fp16_session_bytes=268435456 fp16_sessions=11
+[mistral B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=32.529
+[mistral B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=34.562
+[mistral B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=35.055
+[mistral B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=34.562 reps=[32.52920501505844, 34.56235410207639, 35.05490363228567]
+[mistral A2] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=3196780544 session_bytes=268435456 sessions=11 fp16_session_bytes=268435456 fp16_sessions=11
+[mistral A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=34.864
+[mistral A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=34.318
+[mistral A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=33.747
+[mistral A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=34.318 reps=[34.86361369575054, 34.31830681987236, 33.74735427729223]
+[mistral B2] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=3194683392 session_bytes=142606336 sessions=22 fp16_session_bytes=268435456 fp16_sessions=11
+[mistral B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=33.773
+[mistral B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=33.659
+[mistral B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=33.709
+[mistral B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=33.709 reps=[33.77258019738607, 33.65895018395459, 33.708766537760845]
+[mistral A3] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=3196780544 session_bytes=268435456 sessions=11 fp16_session_bytes=268435456 fp16_sessions=11
+[mistral A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=33.879
+[mistral A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=33.856
+[mistral A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=34.123
+[mistral A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=33.879 reps=[33.87856314161777, 33.855897390307945, 34.12272193116171]
+[mistral B3] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=3194683392 session_bytes=142606336 sessions=22 fp16_session_bytes=268435456 fp16_sessions=11
+[mistral B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=33.307
+[mistral B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=32.540
+[mistral B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=33.733
+[mistral B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=33.307 reps=[33.307109232417254, 32.5395285349846, 33.73303181951847]
+[tinyllama A1] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=6832455680 session_bytes=46137344 sessions=148 fp16_session_bytes=46137344 fp16_sessions=148
+[tinyllama A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=114.850
+[tinyllama A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=120.258
+[tinyllama A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=115.996
+[tinyllama A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=115.996 reps=[114.85029691345507, 120.25753398934984, 115.9963827470511]
+[tinyllama B1] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=6833700864 session_bytes=24510464 sessions=278 fp16_session_bytes=46137344 fp16_sessions=148
+[tinyllama B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=124.763
+[tinyllama B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=131.645
+[tinyllama B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=130.256
+[tinyllama B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=130.256 reps=[124.76255906169385, 131.64520152402235, 130.25589865236282]
+[qwen25 A1] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=5315952640 session_bytes=75497472 sessions=70 fp16_session_bytes=75497472 fp16_sessions=70
+[qwen25 A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=52.646
+[qwen25 A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=54.638
+[qwen25 A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=54.468
+[qwen25 A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=54.468 reps=[52.64578328624153, 54.63831682754958, 54.467672890399]
+[qwen25 B1] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5373100032 session_bytes=40108032 sessions=133 fp16_session_bytes=75497472 fp16_sessions=71
+[qwen25 B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=51.996
+[qwen25 B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=51.729
+[qwen25 B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=50.251
+[qwen25 B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=51.729 reps=[51.996055554852454, 51.72902140428333, 50.25138342892831]
+[phi35 A1] DEVICE-KV-CAPACITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=5081333760 session_bytes=805306368 sessions=6 fp16_session_bytes=805306368 fp16_sessions=6
+[phi35 A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=43.214
+[phi35 A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=42.875
+[phi35 A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=41.498
+[phi35 A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=42.875 reps=[43.21429585517617, 42.87462465996018, 41.49811506143264]
+[phi35 B1] DEVICE-KV-CAPACITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5027069952 session_bytes=427819008 sessions=11 fp16_session_bytes=805306368 fp16_sessions=6
+[phi35 B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=40.890
+[phi35 B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=40.712
+[phi35 B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=40.390
+[phi35 B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=40.712 reps=[40.89039115529032, 40.711677514077394, 40.39012318898273]

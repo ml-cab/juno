@@ -133,14 +133,27 @@ class ResidentBatchDecodeTest {
 			"qwen3,8", "phi3,1", "phi3,2", "phi3,8" })
 	@DisplayName("k, v and the layer output of every row match its own single decode, at different positions, layer after layer")
 	void everyRowMatchesItsSingleDecode(String shape, int n) {
+		runBatchAgainstSingle(shape, n, DeviceKvFormats.F16);
+	}
+
+	@ParameterizedTest(name = "{0}, batch of {1}, K {2}, V {3}")
+	@CsvSource({ "plain,1,Q8_0,Q8_0", "plain,8,Q8_0,Q4_0", "plain,9,Q4_0,Q4_0", "qwen2,2,Q8_0,Q4_0", "qwen3,8,Q8_0,Q8_0",
+			"phi3,8,Q8_0,Q4_0", "plain,2,F16,Q8_0" })
+	@DisplayName("over a quantized device KV, every row still matches its own single decode, bit for bit")
+	void everyRowMatchesItsSingleDecodeOverAQuantizedKv(String shape, int n, DeviceKvFormat k, DeviceKvFormat v) {
+		assumeTrue(GqaAttentionKvKernel.tryLoad() != null, "quantized attention kernel failed to load");
+		runBatchAgainstSingle(shape, n, new DeviceKvFormats(k, v));
+	}
+
+	private void runBatchAgainstSingle(String shape, int n, DeviceKvFormats formats) {
 		try (ResidentQkvPath single = path(shape); ResidentBatchDecode batch = ResidentBatchDecode.create(single)) {
 			assertThat(batch).as("the batch region builds wherever the single region runs whole").isNotNull();
 			Random rnd = new Random(shape.hashCode() * 31L + n);
 			int[] start = new int[n];
 			for (int b = 0; b < n; b++)
 				start[b] = 2 + 3 * b;
-			DeviceKvCache[][] mine = mirrors(n, start, rnd.nextLong());
-			DeviceKvCache[][] ref = mirrors(n, start, 0);
+			DeviceKvCache[][] mine = mirrors(n, start, rnd.nextLong(), formats);
+			DeviceKvCache[][] ref = mirrors(n, start, 0, formats);
 			copyHistory(mine, ref, start);
 			try {
 				for (int step = 0; step < 4; step++) {
@@ -163,7 +176,8 @@ class ResidentBatchDecodeTest {
 							assertThat(batch.canRun(li, pos, layer)).isTrue();
 							s.runLayer(li, xb, pos, layer, kOut, vOut);
 							for (int b = 0; b < n; b++) {
-								String what = shape + " n=" + n + " step " + step + " layer " + li + " row " + b;
+								String what = shape + " " + formats.summary() + " n=" + n + " step " + step + " layer "
+										+ li + " row " + b;
 								assertBits(kOut[b], expected[li][b * 2], what + " k");
 								assertBits(vOut[b], expected[li][b * 2 + 1], what + " v");
 								assertBits(xb[b], expected[li + LAYERS][b], what + " layer output");
@@ -173,9 +187,12 @@ class ResidentBatchDecodeTest {
 					}
 				}
 				for (int li = 0; li < LAYERS; li++)
-					for (int b = 0; b < n; b++)
+					for (int b = 0; b < n; b++) {
 						assertBits(mine[b][li].downloadV(start[b] + 4), ref[b][li].downloadV(start[b] + 4),
 								"V mirror request " + b + " layer " + li);
+						assertThat(mine[b][li].rawK(start[b] + 4)).as("K bytes request " + b + " layer " + li)
+								.containsExactly(ref[b][li].rawK(start[b] + 4));
+					}
 			} finally {
 				closeAll(mine);
 				closeAll(ref);
@@ -285,11 +302,15 @@ class ResidentBatchDecodeTest {
 
 	/** Per request, per layer: a mirror holding {@code start[b]} random rows ({@code seed} 0: left empty). */
 	private static DeviceKvCache[][] mirrors(int n, int[] start, long seed) {
+		return mirrors(n, start, seed, DeviceKvFormats.F16);
+	}
+
+	private static DeviceKvCache[][] mirrors(int n, int[] start, long seed, DeviceKvFormats formats) {
 		DeviceKvCache[][] out = new DeviceKvCache[n][LAYERS];
 		Random rnd = new Random(seed);
 		for (int b = 0; b < n; b++)
 			for (int li = 0; li < LAYERS; li++) {
-				DeviceKvCache m = new DeviceKvCache(ctx, KV);
+				DeviceKvCache m = new DeviceKvCache(ctx, KV, DeviceKvCache.INITIAL_SEQ_CAPACITY, formats);
 				m.ensureCapacity(start[b] + 16);
 				if (seed != 0 && start[b] > 0) {
 					float[][] k = new float[start[b]][];

@@ -32,6 +32,12 @@
  *               v[r] = the rest: a fused [q; k; v] projection (Phi-3) split into
  *               the three row-major buffers RoPE and attention read. Copies only.
  *   add_bias    x[r][j] += bias[j], the Q/K/V bias of Qwen2-family models.
+ *   kv_encode_kv_rows
+ *               rows [startPos, startPos + rows) of a device KV (DeviceKvCache), K
+ *               and V in one launch, each side in kv_format.cuh's format (kType,
+ *               vType), from FP32 rows: one warp per 32-value block, the host
+ *               codec's encoder (to_half's rounding for FP16), so the device holds
+ *               the bytes the host KV holds.
  *   rms_norm_host_order
  *               out[r][i] = (w[i] * x[r][i]) * scale, scale = 1 / sqrt(ss / n + eps),
  *               with ss the squares summed one after another in float - the order
@@ -52,6 +58,7 @@
  */
 
 #include <cuda_fp16.h>
+#include "kv_format.cuh"
 
 #define PW_THREADS 256
 #define NORM_THREADS 128
@@ -166,4 +173,22 @@ rms_norm_host_order(const float* __restrict__ x, const float* __restrict__ weigh
     const float s = scale;
     for (int i = (int)threadIdx.x; i < dim; i += (int)blockDim.x)
         o[i] = __fmul_rn(__fmul_rn(weight[i], row[i]), s);
+}
+
+extern "C" __global__ void __launch_bounds__(PW_THREADS)
+kv_encode_kv_rows(const float* __restrict__ k, const float* __restrict__ v, unsigned char* __restrict__ kBase,
+        unsigned char* __restrict__ vBase, int startPos, int rows, int kvDim, int kType, int vType) {
+    const int blocksPerRow = kvDim / KV_BLOCK;
+    const long long perSide = (long long)rows * blocksPerRow;
+    const long long w = ((long long)blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    if (w >= 2 * perSide)
+        return; // whole warps leave together: the encoder's shuffles need all 32 lanes
+    const int lane = (int)(threadIdx.x & 31);
+    const bool isV = w >= perSide;
+    const long long e = isV ? w - perSide : w;
+    const int r = (int)(e / blocksPerRow);
+    const int b = (int)(e - (long long)r * blocksPerRow);
+    const int type = isV ? vType : kType;
+    const float x = (isV ? v : k)[(size_t)r * kvDim + (size_t)b * KV_BLOCK + lane];
+    kv_encode_block_warp(type, x, kv_row_w(isV ? vBase : kBase, type, kvDim, startPos + r), b, lane);
 }

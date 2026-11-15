@@ -1,0 +1,36 @@
+[A1] DEVICE-KV-CAPACITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=5074976768 session_bytes=805306368 sessions=6 fp16_session_bytes=805306368 fp16_sessions=6
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=42.972
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=43.449
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=43.513
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=43.449 reps=[42.97225222150774, 43.44905224419406, 43.5132749406827]
+[A1] CLOCK start=64 C after 15s loaded_samples=347 below_lock=0 hottest=91C reasons=0x0000000000000020:267 0x0000000000000000:80 
+[B1] DEVICE-KV-CAPACITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5149491200 session_bytes=427819008 sessions=12 fp16_session_bytes=805306368 fp16_sessions=6
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=45.495
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=45.746
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=45.847
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=45.746 reps=[45.49469418289034, 45.74565310017317, 45.846926702344845]
+[B1] CLOCK start=65 C after 115s loaded_samples=353 below_lock=0 hottest=92C reasons=0x0000000000000020:285 0x0000000000000000:68 
+[A2] DEVICE-KV-CAPACITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=5171183616 session_bytes=805306368 sessions=6 fp16_session_bytes=805306368 fp16_sessions=6
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=43.094
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=43.484
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=42.887
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=43.094 reps=[43.09403750513273, 43.48411772529386, 42.88730380347642]
+[A2] CLOCK start=65 C after 110s loaded_samples=349 below_lock=0 hottest=94C reasons=0x0000000000000020:280 0x0000000000000000:69 
+[B2] DEVICE-KV-CAPACITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5173280768 session_bytes=427819008 sessions=12 fp16_session_bytes=805306368 fp16_sessions=6
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=45.679
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=46.244
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=46.307
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=46.244 reps=[45.678588810701925, 46.24428343658186, 46.30685301267864]
+[B2] CLOCK start=65 C after 115s loaded_samples=350 below_lock=0 hottest=93C reasons=0x0000000000000020:272 0x0000000000000000:78 
+[A3] DEVICE-KV-CAPACITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=5173280768 session_bytes=805306368 sessions=6 fp16_session_bytes=805306368 fp16_sessions=6
+[A3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=43.369
+[A3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=43.539
+[A3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=42.952
+[A3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=43.369 reps=[43.36884921787256, 43.53936501121313, 42.95180194617554]
+[A3] CLOCK start=65 C after 110s loaded_samples=348 below_lock=0 hottest=94C reasons=0x0000000000000020:283 0x0000000000000000:65 
+[B3] DEVICE-KV-CAPACITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5173084160 session_bytes=427819008 sessions=12 fp16_session_bytes=805306368 fp16_sessions=6
+[B3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=45.612
+[B3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=45.810
+[B3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=46.120
+[B3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=45.810 reps=[45.61170676137796, 45.809504302855245, 46.11960983243895]
+[B3] CLOCK start=65 C after 120s loaded_samples=353 below_lock=0 hottest=93C reasons=0x0000000000000020:280 0x0000000000000000:73 

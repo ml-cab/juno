@@ -30,7 +30,8 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * Loads the classpath PTX module {@code prefill_window.ptx} and launches the
  * elementwise kernels of the prefill-window device region: the FP16 cast of a
  * GEMM input, SwiGLU (written as FP16 for the down projection), the residual add,
- * the Q/K/V bias add, the fused Q/K/V split, and the RMS norm in the host loop's order. See {@code prefill_window.cu} for what each computes
+ * the Q/K/V bias add, the fused Q/K/V split, the RMS norm in the host loop's order, and the encode of K/V rows
+ * into a quantized device KV. See {@code prefill_window.cu} for what each computes
  * and how it matches the CPU window path.
  *
  * <p>Every launch is asynchronous on the given stream ({@code null} for the
@@ -50,6 +51,7 @@ final class PrefillWindowKernels {
 
 	private static final ThreadLocal<KernelParams> PARAMS = ThreadLocal.withInitial(() -> new KernelParams(4));
 	private static final ThreadLocal<KernelParams> NORM_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(5));
+	private static final ThreadLocal<KernelParams> KV_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(9));
 	private static final ThreadLocal<KernelParams> SPLIT_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(7));
 
 	private final MemorySegment toHalf;
@@ -61,12 +63,13 @@ final class PrefillWindowKernels {
 	private final MemorySegment residualAddBoth;
 	private final MemorySegment decodeAttentionTable;
 	private final MemorySegment splitQkv;
+	private final MemorySegment kvEncodeKvRows;
 	@SuppressWarnings("unused")
 	private final Arena moduleArena; // keeps the module and function slots alive
 
 	private PrefillWindowKernels(MemorySegment toHalf, MemorySegment swigluHalf, MemorySegment addInPlace,
 			MemorySegment addBias, MemorySegment rmsNormHostOrder, MemorySegment swiglu, MemorySegment residualAddBoth,
-			MemorySegment decodeAttentionTable, MemorySegment splitQkv, Arena moduleArena) {
+			MemorySegment decodeAttentionTable, MemorySegment splitQkv, MemorySegment kvEncodeKvRows, Arena moduleArena) {
 		this.toHalf = toHalf;
 		this.swigluHalf = swigluHalf;
 		this.addInPlace = addInPlace;
@@ -76,6 +79,7 @@ final class PrefillWindowKernels {
 		this.residualAddBoth = residualAddBoth;
 		this.decodeAttentionTable = decodeAttentionTable;
 		this.splitQkv = splitQkv;
+		this.kvEncodeKvRows = kvEncodeKvRows;
 		this.moduleArena = moduleArena;
 	}
 
@@ -129,7 +133,7 @@ final class PrefillWindowKernels {
 				function(drv, arena, module, "add_bias"), function(drv, arena, module, "rms_norm_host_order"),
 				function(drv, arena, module, "swiglu"), function(drv, arena, module, "residual_add_both"),
 				function(drv, arena, module, "decode_attention_table"), function(drv, arena, module, "split_qkv"),
-				arena);
+				function(drv, arena, module, "kv_encode_kv_rows"), arena);
 	}
 
 	private static MemorySegment function(CudaDriverBindings drv, Arena arena, MemorySegment module, String entry) {
@@ -239,6 +243,27 @@ final class PrefillWindowKernels {
 		SPLIT_PARAMS.get().pointer(0, qkv).pointer(1, q).pointer(2, k).pointer(3, v).i32(4, rows).i32(5, qDim)
 				.i32(6, kvDim).launch(splitQkv, grid((long) rows * (qDim + 2L * kvDim)), THREADS, stream,
 						"cuLaunchKernel(split_qkv)");
+	}
+
+	/**
+	 * Rows {@code [startPos, startPos + rows)} of a device KV, K at {@code kBase} and V at {@code vBase}, each side
+	 * stored in its format of {@code formats}, from {@code rows x kvDim} FP32 rows at {@code k} and {@code v}, in one
+	 * launch: one warp per 32-value block, the host codec's encoder (FP16: {@link #toHalf}'s rounding).
+	 * {@code kv_format.cuh} computes the row addresses. {@code kvDim} must be a multiple of {@link DeviceKvFormat#BLOCK}.
+	 */
+	void encodeKvRows(MemorySegment k, MemorySegment v, MemorySegment kBase, MemorySegment vBase, int startPos,
+			int rows, int kvDim, DeviceKvFormats formats, MemorySegment stream) {
+		Objects.requireNonNull(k, "k");
+		Objects.requireNonNull(v, "v");
+		Objects.requireNonNull(kBase, "kBase");
+		Objects.requireNonNull(vBase, "vBase");
+		requirePositive(rows, kvDim);
+		if (kvDim % DeviceKvFormat.BLOCK != 0)
+			throw new IllegalArgumentException("kvDim must be a multiple of " + DeviceKvFormat.BLOCK + ": " + kvDim);
+		long warps = 2L * rows * (kvDim / DeviceKvFormat.BLOCK);
+		KV_PARAMS.get().pointer(0, k).pointer(1, v).pointer(2, kBase).pointer(3, vBase).i32(4, startPos).i32(5, rows)
+				.i32(6, kvDim).i32(7, formats.k().code).i32(8, formats.v().code)
+				.launch(kvEncodeKvRows, grid(32 * warps), THREADS, stream, "cuLaunchKernel(kv_encode_kv_rows)");
 	}
 
 	/** {@code x[r][j] += bias[j]} for {@code rows x dim}. */

@@ -1,0 +1,30 @@
+[A1] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=5383979008 session_bytes=75497472 sessions=71 fp16_session_bytes=75497472 fp16_sessions=71
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=56.330
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=57.559
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=57.631
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=57.559 reps=[56.32958840000561, 57.55930420776959, 57.630941925931964]
+[B1] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5381816320 session_bytes=40108032 sessions=134 fp16_session_bytes=75497472 fp16_sessions=71
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=53.927
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=53.864
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=53.808
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=53.864 reps=[53.92697007065589, 53.86445542461362, 53.808231828637055]
+[A2] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=5383913472 session_bytes=75497472 sessions=71 fp16_session_bytes=75497472 fp16_sessions=71
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=55.447
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=57.102
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=57.047
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=57.047 reps=[55.44653712295409, 57.102286911214144, 57.04663581820513]
+[B2] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5381816320 session_bytes=40108032 sessions=134 fp16_session_bytes=75497472 fp16_sessions=71
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=53.249
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=52.394
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=51.780
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=52.394 reps=[53.248882602359096, 52.393574842968306, 51.780299978480144]
+[A3] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=5425528832 session_bytes=75497472 sessions=71 fp16_session_bytes=75497472 fp16_sessions=71
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=54.399
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=54.744
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=53.944
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=54.399 reps=[54.398979328270556, 54.74429759969491, 53.94433976411857]
+[B3] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5423366144 session_bytes=40108032 sessions=135 fp16_session_bytes=75497472 fp16_sessions=71
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=51.871
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=51.396
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=50.137
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=51.396 reps=[51.87123296770682, 51.39619225880928, 50.1371078336334]

@@ -727,7 +727,7 @@ final class ResidentQkvPath implements AutoCloseable {
 		mark = spans.begin(stream, 1);
 		attention.launch(r.q.devicePointer(), r.table, r.table.asSlice(ADDRESS.byteSize()),
 				r.table.asSlice(2 * ADDRESS.byteSize()), packed.asSlice(2 * kvBytes), 1, numHeads, gqaRatio,
-				headDim, kvDim, GqaAttentionKernel.rowsPerBlock(true, 1), window, stream);
+				headDim, kvDim, GqaAttentionKernel.rowsPerBlock(true, 1), window, mirror.formats(), stream);
 		spans.compute(DeviceComputeEvent.GQA_ATTENTION_REGION, 1, mark, stream);
 	}
 

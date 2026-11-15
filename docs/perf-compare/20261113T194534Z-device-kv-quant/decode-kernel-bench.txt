@@ -1,0 +1,17 @@
+GqaAttentionDecodeBench (-Djuno.attentionBench=true), final kernel: device microseconds per decode launch (one row,
+rowsPerBlock 1), median of 5 x 100 launches, FP16 device KV ("current") against q8_0 K and V, and q8_0 K with q4_0 V
+(ratio = quantized / FP16; below 1 is faster).
+
+tinyllama 32/4/64      ctx  1024  current    39.16  [K q8_0, V q8_0]    27.06 (0.691x)  [K q8_0, V q4_0]    28.35 (0.724x)
+tinyllama 32/4/64      ctx  2048  current    92.31  [K q8_0, V q8_0]    53.17 (0.576x)  [K q8_0, V q4_0]    55.03 (0.596x)
+qwen2.5-3b 16/2/128    ctx  1024  current    27.82  [K q8_0, V q8_0]    38.62 (1.388x)  [K q8_0, V q4_0]    36.84 (1.324x)
+qwen2.5-3b 16/2/128    ctx  2048  current    66.47  [K q8_0, V q8_0]    63.47 (0.955x)  [K q8_0, V q4_0]    68.02 (1.023x)
+phi-3.5-mini 32/32/96  ctx  1024  current    90.45  [K q8_0, V q8_0]    57.72 (0.638x)  [K q8_0, V q4_0]    55.73 (0.616x)
+phi-3.5-mini 32/32/96  ctx  2048  current   173.60  [K q8_0, V q8_0]   104.79 (0.604x)  [K q8_0, V q4_0]   100.71 (0.580x)
+mistral-7b 32/8/128    ctx  1024  current    59.42  [K q8_0, V q8_0]    51.35 (0.864x)  [K q8_0, V q4_0]    39.74 (0.669x)
+mistral-7b 32/8/128    ctx  2048  current   110.95  [K q8_0, V q8_0]    91.51 (0.825x)  [K q8_0, V q4_0]    92.31 (0.832x)
+
+The same bench on the first quantized kernel (the format switched inside the per-quad loads, interleaved quads), at
+2048: TinyLlama 2.98x, Qwen2.5-3B 8.20x, Phi-3.5-mini 2.86x, Mistral 7B 5.39x the FP16 launch; after compile-time
+format dispatch, 1.33x, 3.51x, 1.51x, 2.84x; after block-major lanes, 0.64x, 1.30x, 0.71x, 1.21x; after reads through
+the read-only cache, the table above.

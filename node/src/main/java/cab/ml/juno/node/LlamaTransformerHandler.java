@@ -169,6 +169,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/** Non-null only when {@code --gpu-attention} is active on a CUDA backend. */
 	private final CudaGqaAttention gqaGpu;
+	/** How this handler's device KV mirrors store K and V ({@link DeviceKvFormats#select}); FP16 without GPU attention. */
+	private final DeviceKvFormats deviceKvFormats;
 
 	/**
 	 * Reserved for the GPU-resident RMS-norm path. Currently always null: that path
@@ -323,6 +325,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.outputProjQ4Dev = null;
 		this.gpuLayersResolved = 0;
 		this.gqaGpu = null;
+		this.deviceKvFormats = DeviceKvFormats.F16;
 		this.rmsNormGpu = null;
 		this.residentQkv = null;
 		this.residentBatch = null;
@@ -409,6 +412,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int resolvedLayers = 0;
 		CudaGqaAttention gqa = null;
 		CudaRmsNorm rmsNorm = null;
+		// Chosen before the upload: its stop rule reserves the mirror at this size.
+		this.deviceKvFormats = backend instanceof GpuMatVec && GpuAttentionOptions.fromEnv().preferGpuAttention()
+				&& GqaAttentionKernel.isAvailable()
+						? DeviceKvFormats.select(kvLayout.cacheTypes(), cfg.headDim(),
+								() -> GqaAttentionKvKernel.tryLoad() != null)
+						: DeviceKvFormats.F16;
 		if (backend instanceof GpuMatVec cuda) {
 			if (cuda.supportsHalfResident()) {
 				resolvedLayers = uploadFp16Resident(cuda, L);
@@ -420,7 +429,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				if (gqa != null) {
 					log.info("GPU-resident attention path active (gpu-attention="
 							+ GpuAttentionOptions.fromEnv().policyLabel() + ")");
-					DeviceKvTypeNotice.announce("Llama", cab.ml.juno.kvcache.CacheTypeOptions.fromEnv());
+					DeviceKvTypeNotice.announce("Llama", kvLayout.cacheTypes(), deviceKvFormats, cfg.kvDim(),
+							cfg.headDim());
 				} else {
 					log.warning("--gpu-attention requested on " + cuda.gpuContext().backendLabel()
 							+ " backend — not yet implemented there, falling back to scalar CPU attention");
@@ -912,7 +922,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private long mirrorReserveBytes(int deviceLayers, int layerCount) {
 		if (!GpuAttentionOptions.fromEnv().preferGpuAttention())
 			return 0L;
-		return DeviceScratchBudget.kvMirrorReserveBytes(deviceLayers, layerCount - deviceLayers, cfg.kvDim());
+		return DeviceScratchBudget.kvMirrorReserveBytes(deviceLayers, layerCount - deviceLayers, cfg.kvDim(),
+				deviceKvFormats);
 	}
 
 	@Override
@@ -924,7 +935,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		for (int li = 0; li < L; li++)
 			if (layerGpuResident(li))
 				deviceLayers++;
-		return DeviceScratchBudget.kvMirrorReserveBytes(deviceLayers, L - deviceLayers, cfg.kvDim());
+		return DeviceScratchBudget.kvMirrorReserveBytes(deviceLayers, L - deviceLayers, cfg.kvDim(), deviceKvFormats);
 	}
 
 	/**
@@ -1120,7 +1131,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public boolean supportsKvPrefixSharing() {
-		return HandlerKvShare.supported(kvLayout, gqaGpu != null, kvAdapter);
+		return HandlerKvShare.supported(kvLayout, gqaGpu != null ? deviceKvFormats : null, kvAdapter);
 	}
 
 
@@ -2612,7 +2623,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		if (gqaGpu == null)
 			return null;
 		try {
-			return kvCacheDev.computeIfAbsent(requestId, k -> gqaGpu.newLayers(L, cfg.kvDim()));
+			return kvCacheDev.computeIfAbsent(requestId, k -> gqaGpu.newLayers(L, cfg.kvDim(), deviceKvFormats));
 		} catch (IllegalStateException ex) {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;

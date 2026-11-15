@@ -1,0 +1,66 @@
+{
+  "id" : "gpu.kv-quality.tinyllama-1.1b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "q8_0 device KV NLL at most 1.02x the f16 device KV NLL",
+    "passed" : true,
+    "detail" : "ratio 1.00047 (2.45773 over 2.45657)"
+  }, {
+    "name" : "q8_0 device KV stored in the selected formats",
+    "passed" : true,
+    "detail" : "Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 544 bytes per position against 1024 for FP16"
+  }, {
+    "name" : "q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL",
+    "passed" : true,
+    "detail" : "ratio 1.00077 (2.45846 over 2.45657)"
+  }, {
+    "name" : "q8_0/q4_0 device KV stored in the selected formats",
+    "passed" : true,
+    "detail" : "Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 416 bytes per position against 1024 for FP16"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, f16 device KV",
+    "unit" : "nats",
+    "values" : [ 2.456573083217955 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0 device KV",
+    "unit" : "nats",
+    "values" : [ 2.457732983116657 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "q8_0 argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 98.6328125 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0/q4_0 device KV",
+    "unit" : "nats",
+    "values" : [ 2.458464387267837 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "q8_0/q4_0 argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 96.484375 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "quantizedRunKv" : {
+      "q8_0" : "cache-type-k=q8_0 cache-type-v=q8_0",
+      "q8_0/q4_0" : "cache-type-k=q8_0 cache-type-v=q4_0"
+    },
+    "tokens" : 2048,
+    "quantizedSeconds" : {
+      "q8_0" : 2.709832007,
+      "q8_0/q4_0" : 2.548908287
+    },
+    "kernels" : "cuda",
+    "f16Seconds" : 2.400759046
+  }
+}

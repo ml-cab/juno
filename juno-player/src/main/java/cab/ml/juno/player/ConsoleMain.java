@@ -163,11 +163,13 @@ public final class ConsoleMain {
 	 */
 	private static void printGpuPathNotices() {
 		String architecture = null;
+		int headDim = 0;
 		if (modelPath != null && java.nio.file.Files.isRegularFile(java.nio.file.Path.of(modelPath))) {
 			try (cab.ml.juno.node.GgufReader r = cab.ml.juno.node.GgufReader.open(java.nio.file.Path.of(modelPath))) {
 				architecture = r.metaString("general.architecture");
+				headDim = cab.ml.juno.node.LlamaConfig.from(r).headDim();
 			} catch (Exception e) {
-				architecture = null; // the model load reports an unreadable file itself
+				// the model load reports an unreadable file itself; a width it cannot read stays unknown
 			}
 		}
 		boolean lora = loraMode || loraPlayPath != null;
@@ -178,7 +180,7 @@ public final class ConsoleMain {
 				cab.ml.juno.node.GpuAttentionSupport.cudaBackendExpected());
 		if (attention != null)
 			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, attention, Color.RESET));
-		String deviceKv = cab.ml.juno.node.DeviceKvTypeNotice.consoleNotice(architecture, lora, !useGpu,
+		String deviceKv = cab.ml.juno.node.DeviceKvTypeNotice.consoleNotice(architecture, headDim, lora, !useGpu,
 				cab.ml.juno.node.GpuAttentionSupport.cudaBackendExpected(),
 				cab.ml.juno.kvcache.CacheTypeOptions.fromEnv());
 		if (deviceKv != null)

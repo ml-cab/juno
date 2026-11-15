@@ -456,7 +456,7 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public boolean supportsKvPrefixSharing() {
-		return HandlerKvShare.supported(kvLayout, false, kvAdapter);
+		return HandlerKvShare.supported(kvLayout, null, kvAdapter);
 	}
 
 

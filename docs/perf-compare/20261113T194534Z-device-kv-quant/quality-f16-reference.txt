@@ -1,0 +1,4 @@
+DEVICE-KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 device_bytes_window=2883584 nll=2.45657 self_agree=509/512 s=16.7
+DEVICE-KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 device_bytes_window=4718592 nll=1.69616 self_agree=509/512 s=41.3
+DEVICE-KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 device_bytes_window=50331648 nll=1.35936 self_agree=512/512 s=117.7
+DEVICE-KV-QUALITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 device_bytes_window=16777216 nll=1.52942 self_agree=512/512 s=52.5

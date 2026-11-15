@@ -20,18 +20,21 @@ import java.lang.foreign.MemorySegment;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
-import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 /**
  * Device-resident mirror of one request/layer's K/V cache, for the GPU-resident
  * attention path ({@link CudaGqaAttention}).
  *
- * <p>Stored as real IEEE FP16 (binary16) — half the bytes of the host
- * {@code SessionKvTensor}'s {@code float32} storage (note: {@code kvcache}'s
- * {@code KvElementType.F16} is a misnomer for {@code float32}; this class uses
- * genuine half-precision, matching {@link DeviceHalfMatrix}'s convention).
+ * <p>Each side (K, V) is stored in its {@link DeviceKvFormat}, chosen by the
+ * handler from {@code --cache-type-k/-v} ({@link DeviceKvFormats#select}):
+ * real IEEE FP16 (binary16, half the bytes of the host {@code f16} KV, which
+ * holds {@code float32}), or the host codecs' {@code q8_0} / {@code q4_0}
+ * blocks byte for byte, so a quantized device copy holds exactly the values the
+ * host KV of that type holds. Rows are contiguous, one row per position;
+ * {@link DeviceKvFormat#rowBytes} is the stride, the one place the Java side
+ * computes a row's address ({@code kv_format.cuh} is the kernels' one place).
  * Dot products and softmax are computed in FP32 by the attention path that
- * consumes this cache.
+ * consumes this cache, which dequantizes a quantized row in registers.
  *
  * <p><b>Numerical note:</b> like every other reduced-precision path in this
  * codebase (FP16-resident weights, {@code --mmq}'s Q4_K/Q8_1 GEMV), FP16 K/V
@@ -77,6 +80,9 @@ final class DeviceKvCache implements AutoCloseable {
 	private final GpuContext ctx;
 	private final GpuBindings gpu;
 	private final int kvDim;
+	private final DeviceKvFormats formats;
+	private final long kRowBytes;
+	private final long vRowBytes;
 	private MemorySegment dK;
 	private MemorySegment dV;
 	private int capacityTokens;
@@ -88,27 +94,35 @@ final class DeviceKvCache implements AutoCloseable {
 	}
 
 	DeviceKvCache(GpuContext ctx, int kvDim, int initialTokens) {
+		this(ctx, kvDim, initialTokens, DeviceKvFormats.F16);
+	}
+
+	DeviceKvCache(GpuContext ctx, int kvDim, int initialTokens, DeviceKvFormats formats) {
 		if (ctx == null)
 			throw new IllegalArgumentException("ctx must not be null");
 		if (kvDim < 1)
 			throw new IllegalArgumentException("kvDim must be >= 1");
 		if (initialTokens < 1)
 			throw new IllegalArgumentException("initialTokens must be >= 1");
+		if (formats == null)
+			throw new IllegalArgumentException("formats must not be null");
 		this.ctx = ctx;
 		this.gpu = ctx.bindings();
 		this.kvDim = kvDim;
+		this.formats = formats;
+		this.kRowBytes = formats.k().rowBytes(kvDim);
+		this.vRowBytes = formats.v().rowBytes(kvDim);
 		this.capacityTokens = initialTokens;
-		long bytes = bytesFor(initialTokens);
-		this.dK = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
+		this.dK = gpu.deviceMalloc(ctx.deviceIndex(), initialTokens * kRowBytes);
 		try {
-			this.dV = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
+			this.dV = gpu.deviceMalloc(ctx.deviceIndex(), initialTokens * vRowBytes);
 		} catch (RuntimeException e) {
 			// Out of memory for V: give K back, or it leaks for the life of the process
 			// (no mirror exists to close it).
 			gpu.deviceFree(dK);
 			throw e;
 		}
-		ALLOCATED_BYTES.addAndGet(2 * bytes);
+		ALLOCATED_BYTES.addAndGet(bytesFor(initialTokens));
 	}
 
 	/**
@@ -120,13 +134,18 @@ final class DeviceKvCache implements AutoCloseable {
 	 * memory for good each time.
 	 */
 	static DeviceKvCache[] newLayers(GpuContext ctx, int layerCount, int kvDim) {
+		return newLayers(ctx, layerCount, kvDim, DeviceKvFormats.F16);
+	}
+
+	/** As {@link #newLayers(GpuContext, int, int)}, every layer stored in {@code formats}. */
+	static DeviceKvCache[] newLayers(GpuContext ctx, int layerCount, int kvDim, DeviceKvFormats formats) {
 		if (layerCount < 1)
 			throw new IllegalArgumentException("layerCount must be >= 1");
 		DeviceKvCache[] out = new DeviceKvCache[layerCount];
 		int i = 0;
 		try {
 			for (; i < layerCount; i++)
-				out[i] = new DeviceKvCache(ctx, kvDim);
+				out[i] = new DeviceKvCache(ctx, kvDim, INITIAL_SEQ_CAPACITY, formats);
 		} catch (RuntimeException e) {
 			for (int j = 0; j < i; j++)
 				out[j].close();
@@ -135,8 +154,14 @@ final class DeviceKvCache implements AutoCloseable {
 		return out;
 	}
 
+	/** Device bytes of {@code tokens} positions, K and V. */
 	private long bytesFor(int tokens) {
-		return (long) tokens * kvDim * Short.BYTES;
+		return tokens * (kRowBytes + vRowBytes);
+	}
+
+	/** How K and V are stored; every kernel that reads or writes this cache takes it. */
+	DeviceKvFormats formats() {
+		return formats;
 	}
 
 	int capacityTokens() {
@@ -199,29 +224,27 @@ final class DeviceKvCache implements AutoCloseable {
 	}
 
 	private void grow(int newCap) {
-		long oldBytes = bytesFor(capacityTokens);
-		long newBytes = bytesFor(newCap);
-		MemorySegment newK = gpu.deviceMalloc(ctx.deviceIndex(), newBytes);
+		MemorySegment newK = gpu.deviceMalloc(ctx.deviceIndex(), newCap * kRowBytes);
 		MemorySegment newV;
 		try {
-			newV = gpu.deviceMalloc(ctx.deviceIndex(), newBytes);
+			newV = gpu.deviceMalloc(ctx.deviceIndex(), newCap * vRowBytes);
 		} catch (RuntimeException e) {
 			// Out of memory for the second tensor: give the first one back, or it leaks
 			// for the life of the process. The mirror itself is unchanged.
 			gpu.deviceFree(newK);
 			throw e;
 		}
-		DeviceStaging.copy(gpu, newK, dK, oldBytes, GpuBindings.D2D, 0, "memcpy(K D2D grow)");
-		DeviceStaging.copy(gpu, newV, dV, oldBytes, GpuBindings.D2D, 0, "memcpy(V D2D grow)");
+		DeviceStaging.copy(gpu, newK, dK, capacityTokens * kRowBytes, GpuBindings.D2D, 0, "memcpy(K D2D grow)");
+		DeviceStaging.copy(gpu, newV, dV, capacityTokens * vRowBytes, GpuBindings.D2D, 0, "memcpy(V D2D grow)");
 		gpu.deviceFree(dK);
 		gpu.deviceFree(dV);
-		ALLOCATED_BYTES.addAndGet(2 * (newBytes - oldBytes));
+		ALLOCATED_BYTES.addAndGet(bytesFor(newCap) - bytesFor(capacityTokens));
 		dK = newK;
 		dV = newV;
 		capacityTokens = newCap;
 	}
 
-	/** Appends one K/V row at {@code pos}, growing first if needed. Packs float32 -> FP16 host-side. */
+	/** Appends one K/V row at {@code pos}, growing first if needed. Packs float32 to each side's format host-side. */
 	void appendToken(int pos, float[] k, float[] v) {
 		appendToken(pos, k, v, 1);
 	}
@@ -235,19 +258,15 @@ final class DeviceKvCache implements AutoCloseable {
 		ensureCapacity(pos);
 		if (k.length < kvDim || v.length < kvDim)
 			throw new IllegalArgumentException("k/v must hold at least kvDim=" + kvDim + " floats");
-		long rowBytes = (long) kvDim * Short.BYTES;
-		long offset = (long) pos * rowBytes;
 		try (Arena staging = Arena.ofConfined()) {
-			MemorySegment stagingK = staging.allocate(rowBytes);
-			MemorySegment stagingV = staging.allocate(rowBytes);
-			for (int i = 0; i < kvDim; i++) {
-				stagingK.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(k[i]));
-				stagingV.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(v[i]));
-			}
-			DeviceStaging.copy(gpu, dK.asSlice(offset, rowBytes), stagingK, rowBytes, GpuBindings.H2D, windowSize,
-					"memcpy(K row H2D)");
-			DeviceStaging.copy(gpu, dV.asSlice(offset, rowBytes), stagingV, rowBytes, GpuBindings.H2D, windowSize,
-					"memcpy(V row H2D)");
+			MemorySegment stagingK = staging.allocate(kRowBytes);
+			MemorySegment stagingV = staging.allocate(vRowBytes);
+			formats.k().pack(k, 0, kvDim, stagingK, 0);
+			formats.v().pack(v, 0, kvDim, stagingV, 0);
+			DeviceStaging.copy(gpu, dK.asSlice(pos * kRowBytes, kRowBytes), stagingK, kRowBytes, GpuBindings.H2D,
+					windowSize, "memcpy(K row H2D)");
+			DeviceStaging.copy(gpu, dV.asSlice(pos * vRowBytes, vRowBytes), stagingV, vRowBytes, GpuBindings.H2D,
+					windowSize, "memcpy(V row H2D)");
 		}
 		// Only extend the watermark when this row abuts the written prefix. A write
 		// past the end leaves a hole of uninitialized device memory behind it, so
@@ -259,7 +278,7 @@ final class DeviceKvCache implements AutoCloseable {
 
 	/**
 	 * Appends {@code count} K/V rows at positions {@code [startPos, startPos + count)}
-	 * from host rows: packed to FP16 on the host and copied as one contiguous
+	 * from host rows: packed to each side's format on the host and copied as one contiguous
 	 * transfer per tensor, where {@link #appendToken} pays one per row. Grows first
 	 * if needed. The watermark moves exactly as {@code count} calls to
 	 * {@link #appendToken} would move it.
@@ -269,25 +288,21 @@ final class DeviceKvCache implements AutoCloseable {
 			throw new IllegalArgumentException("window of " + count + " rows from " + k.length + " K and "
 					+ v.length + " V rows");
 		ensureCapacity(startPos + count - 1);
-		long rowBytes = (long) kvDim * Short.BYTES;
-		long bytes = rowBytes * count;
-		long offset = (long) startPos * rowBytes;
+		long kBytes = kRowBytes * count;
+		long vBytes = vRowBytes * count;
 		try (Arena staging = Arena.ofConfined()) {
-			MemorySegment stagingK = staging.allocate(bytes);
-			MemorySegment stagingV = staging.allocate(bytes);
+			MemorySegment stagingK = staging.allocate(kBytes);
+			MemorySegment stagingV = staging.allocate(vBytes);
 			for (int r = 0; r < count; r++) {
 				if (k[r].length < kvDim || v[r].length < kvDim)
 					throw new IllegalArgumentException("k/v rows must hold at least kvDim=" + kvDim + " floats");
-				long base = (long) r * kvDim;
-				for (int i = 0; i < kvDim; i++) {
-					stagingK.setAtIndex(JAVA_SHORT, base + i, Float.floatToFloat16(k[r][i]));
-					stagingV.setAtIndex(JAVA_SHORT, base + i, Float.floatToFloat16(v[r][i]));
-				}
+				formats.k().pack(k[r], 0, kvDim, stagingK, r * kRowBytes);
+				formats.v().pack(v[r], 0, kvDim, stagingV, r * vRowBytes);
 			}
-			DeviceStaging.copy(gpu, dK.asSlice(offset, bytes), stagingK, bytes, GpuBindings.H2D, count,
-					"memcpy(K window H2D)");
-			DeviceStaging.copy(gpu, dV.asSlice(offset, bytes), stagingV, bytes, GpuBindings.H2D, count,
-					"memcpy(V window H2D)");
+			DeviceStaging.copy(gpu, dK.asSlice(startPos * kRowBytes, kBytes), stagingK, kBytes, GpuBindings.H2D,
+					count, "memcpy(K window H2D)");
+			DeviceStaging.copy(gpu, dV.asSlice(startPos * vRowBytes, vBytes), stagingV, vBytes, GpuBindings.H2D,
+					count, "memcpy(V window H2D)");
 		}
 		markWritten(startPos, count);
 	}
@@ -303,25 +318,26 @@ final class DeviceKvCache implements AutoCloseable {
 			throw new IllegalArgumentException("prefix of " + seqLen + " rows from " + k.length + " K and "
 					+ v.length + " V floats");
 		ensureCapacity(seqLen - 1);
-		long n = (long) seqLen * kvDim;
-		long bytes = n * Short.BYTES;
+		long kBytes = seqLen * kRowBytes;
+		long vBytes = seqLen * vRowBytes;
 		try (Arena staging = Arena.ofConfined()) {
-			MemorySegment stagingK = staging.allocate(bytes);
-			MemorySegment stagingV = staging.allocate(bytes);
-			for (long i = 0; i < n; i++) {
-				stagingK.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(k[(int) i]));
-				stagingV.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(v[(int) i]));
+			MemorySegment stagingK = staging.allocate(kBytes);
+			MemorySegment stagingV = staging.allocate(vBytes);
+			for (int r = 0; r < seqLen; r++) {
+				formats.k().pack(k, r * kvDim, kvDim, stagingK, r * kRowBytes);
+				formats.v().pack(v, r * kvDim, kvDim, stagingV, r * vRowBytes);
 			}
-			DeviceStaging.copy(gpu, dK, stagingK, bytes, GpuBindings.H2D, seqLen, "memcpy(K prefix H2D)");
-			DeviceStaging.copy(gpu, dV, stagingV, bytes, GpuBindings.H2D, seqLen, "memcpy(V prefix H2D)");
+			DeviceStaging.copy(gpu, dK, stagingK, kBytes, GpuBindings.H2D, seqLen, "memcpy(K prefix H2D)");
+			DeviceStaging.copy(gpu, dV, stagingV, vBytes, GpuBindings.H2D, seqLen, "memcpy(V prefix H2D)");
 		}
 		validTokens = seqLen;
 	}
 
 	/**
 	 * Writes {@code count} K/V rows at {@code [startPos, startPos + count)} from
-	 * device FP32 rows ({@code [count][kvDim]}, row-major), cast to FP16 straight
-	 * into this mirror on {@code stream}: nothing crosses the host. Grows first if
+	 * device FP32 rows ({@code [count][kvDim]}, row-major), cast to FP16 (or encoded
+	 * to a quantized side's blocks, {@code kv_encode_kv_rows}, the host codec's bytes)
+	 * straight into this mirror on {@code stream}: nothing crosses the host. Grows first if
 	 * needed. Asynchronous, so the watermark does not move here; the caller marks
 	 * the window with {@link #markWritten} once the stream has completed and the
 	 * host KV tensors hold the same rows, which keeps the mirror a copy of the host
@@ -332,6 +348,10 @@ final class DeviceKvCache implements AutoCloseable {
 		if (count < 1)
 			throw new IllegalArgumentException("window of " + count + " rows");
 		ensureCapacity(startPos + count - 1);
+		if (formats.quantized()) {
+			kernels.encodeKvRows(dK32, dV32, dK, dV, startPos, count, kvDim, formats, stream);
+			return;
+		}
 		long rowBytes = (long) kvDim * Short.BYTES;
 		long bytes = rowBytes * count;
 		long offset = (long) startPos * rowBytes;
@@ -354,33 +374,52 @@ final class DeviceKvCache implements AutoCloseable {
 
 	/**
 	 * Downloads positions {@code [0, seqLen)} back to a freshly-allocated host
-	 * {@code float32} array (unpacked from FP16). Used by the Stage-1 CPU-oracle
-	 * stub in {@link CudaGqaAttention} and by tests; the real kernel (Stage 2+)
-	 * reads {@link #kPointer()}/{@link #vPointer()} directly on-device instead.
+	 * {@code float32} array, unpacked from each side's format. Used by tests; the
+	 * kernels read {@link #kPointer()}/{@link #vPointer()} directly on-device.
 	 */
 	float[] downloadK(int seqLen) {
-		return download(dK, seqLen);
+		return download(dK, formats.k(), kRowBytes, seqLen);
 	}
 
 	float[] downloadV(int seqLen) {
-		return download(dV, seqLen);
+		return download(dV, formats.v(), vRowBytes, seqLen);
 	}
 
-	private float[] download(MemorySegment d, int seqLen) {
+	/** The stored bytes of K positions {@code [0, seqLen)}, as the device holds them. For tests. */
+	byte[] rawK(int seqLen) {
+		return raw(dK, kRowBytes, seqLen);
+	}
+
+	/** The stored bytes of V positions {@code [0, seqLen)}, as the device holds them. For tests. */
+	byte[] rawV(int seqLen) {
+		return raw(dV, vRowBytes, seqLen);
+	}
+
+	private float[] download(MemorySegment d, DeviceKvFormat format, long rowBytes, int seqLen) {
+		float[] out = new float[seqLen * kvDim];
+		try (Arena staging = Arena.ofConfined()) {
+			MemorySegment host = staging.allocate(rowBytes * checkedLength(seqLen));
+			DeviceStaging.copy(gpu, host, d, host.byteSize(), GpuBindings.D2H, 0, "memcpy(D2H download)");
+			for (int r = 0; r < seqLen; r++)
+				format.unpack(host, r * rowBytes, kvDim, out, r * kvDim);
+		}
+		return out;
+	}
+
+	private byte[] raw(MemorySegment d, long rowBytes, int seqLen) {
+		try (Arena staging = Arena.ofConfined()) {
+			MemorySegment host = staging.allocate(rowBytes * checkedLength(seqLen));
+			DeviceStaging.copy(gpu, host, d, host.byteSize(), GpuBindings.D2H, 0, "memcpy(D2H raw)");
+			return host.toArray(java.lang.foreign.ValueLayout.JAVA_BYTE);
+		}
+	}
+
+	private int checkedLength(int seqLen) {
 		if (closed)
 			throw new IllegalStateException("DeviceKvCache already closed");
 		if (seqLen < 1 || seqLen > capacityTokens)
 			throw new IllegalArgumentException("seqLen=" + seqLen + " out of range [1," + capacityTokens + "]");
-		int n = seqLen * kvDim;
-		long bytes = (long) n * Short.BYTES;
-		float[] out = new float[n];
-		try (Arena staging = Arena.ofConfined()) {
-			MemorySegment stagingHost = staging.allocate(bytes);
-			DeviceStaging.copy(gpu, stagingHost, d, bytes, GpuBindings.D2H, 0, "memcpy(D2H download)");
-			for (int i = 0; i < n; i++)
-				out[i] = Float.float16ToFloat(stagingHost.getAtIndex(JAVA_SHORT, i));
-		}
-		return out;
+		return seqLen;
 	}
 
 	/**
@@ -393,15 +432,17 @@ final class DeviceKvCache implements AutoCloseable {
 	 * the table itself.
 	 *
 	 * @return {@code false}, with the mirror unchanged, when it does not hold all
-	 *         {@code seqLen} rows or the shift kernel cannot load; the caller then
-	 *         rewrites it from the host rows
+	 *         {@code seqLen} rows, the shift kernel cannot load, or a side is
+	 *         quantized (rotating a quantized key re-encodes its block, which the
+	 *         host shift does on its own rows); the caller then rewrites it from
+	 *         the host rows
 	 */
 	boolean shiftInPlace(int keep, int discard, int seqLen, RopeShift rope, int numKvHeads) {
 		if (keep < 0 || discard < 1 || keep + discard > seqLen)
 			throw new IllegalArgumentException("keep=" + keep + " discard=" + discard + " seqLen=" + seqLen);
 		if (rope.headDim() * numKvHeads != kvDim)
 			throw new IllegalArgumentException(numKvHeads + " heads of " + rope.headDim() + " for kvDim " + kvDim);
-		if (closed || validTokens < seqLen)
+		if (closed || validTokens < seqLen || formats.quantized())
 			return false;
 		KvShiftKernel kernel = KvShiftKernel.tryLoad();
 		if (kernel == null)
@@ -457,10 +498,9 @@ final class DeviceKvCache implements AutoCloseable {
 		if (!closed) {
 			closed = true;
 			GpuBindings.callInt(gpu.gpuSetDevice(), ctx.deviceIndex());
-			long bytes = bytesFor(capacityTokens);
 			gpu.deviceFree(dK);
 			gpu.deviceFree(dV);
-			ALLOCATED_BYTES.addAndGet(-2 * bytes);
+			ALLOCATED_BYTES.addAndGet(-bytesFor(capacityTokens));
 		}
 	}
 }

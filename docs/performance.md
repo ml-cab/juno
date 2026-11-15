@@ -385,6 +385,17 @@ The pass on its own is what a step would wait if it ran on the decode thread, wh
 
 Four-bit keys miss the gate on three of the four models; four-bit values beside 8-bit keys meet it on all four, so `--cache-type-k q8_0 --cache-type-v q4_0` is the 4-bit setting held to the gate, and `--cache-type-k q4_0` prints a startup warning naming the loss. Reading the quantized rows through one dispatch costs the `f16` and `q8_0` paths nothing measurable (TinyLlama, CPU, 512 tokens, unpinned: prefill 1.004x and 1.001x, decode 0.997x and 0.995x of the build before); `q4_0` prefills about 5% slower than `q8_0` at that length.
 
+**2026-11-13: the GPU's KV copy in the quantized types.** On a CUDA launch with GPU attention, `--cache-type-k/-v` now set the device copy of each request's KV as well as the host KV: the same `q8_0` / `q4_0` blocks, read by the attention kernels with the values dequantized in registers. Unpinned, GTX 1080, the four sweep models ([`perf-compare/20261113T194534Z-device-kv-quant/`](perf-compare/20261113T194534Z-device-kv-quant/INDEX.md)):
+
+| Model | Greedy agreement with the FP16 copy, `q8_0` | `q8_0` K, `q4_0` V | Attention kernel at 2,048 keys, `q8_0` over FP16 |
+|---|---|---|---|
+| TinyLlama 1.1B | 99.41% | 98.83% | 0.576x |
+| Qwen2.5-3B | 99.61% | 98.63% | 0.955x |
+| Phi-3.5-mini | 99.61% | 99.41% | 0.604x |
+| Mistral 7B | 100.00% | 99.61% | 0.825x |
+
+The device copy takes 0.531x the FP16 copy's bytes per position at `q8_0`, 0.406x at `q8_0` keys with `q4_0` values and 0.281x at `q4_0`; on Mistral 7B, 22 sessions of 2,048 tokens fit beside the weights against 11 to 12 with FP16. Decode at a 2,048-token context with `q8_0`, against the FP16 copy: the first owner gate (CPU pinned, each model's two sides at the same GPU clock) read TinyLlama 1.085x, Phi-3.5-mini 1.004x, Mistral 7B 0.999x and Qwen2.5-3B 0.918x (`perf-compare/20261113T215326Z-device-kv-tg-gate/`), Qwen2.5-3B's 16 query heads over 2 KV heads paying for a slower attention launch and KV write. The KV write now encodes K and V in one launch, one warp per 32-value block, and decode rows over a quantized copy run a 256-thread block (64 slots): a decode launch has one block per head and row, and with few heads a 128-thread block was short of warps. Unpinned, decode then reads 1.023x and 1.044x on Qwen2.5-3B, 1.225x on TinyLlama, 1.022x on Mistral 7B and 1.015x on Phi-3.5-mini, with the decode launch at 0.34x to 0.57x the FP16 kernel's time at 2,048 keys (`perf-compare/20261115T045828Z-device-kv-decode-path/`). The second owner gate (CPU pinned, the GPU clock recorded and matched per model, the card cooled to 65 C before each JVM) reads TinyLlama 1.235x, Qwen2.5-3B 1.030x, Phi-3.5-mini 1.056x and Mistral 7B 1.045x, every `q8_0` JVM faster than every FP16 JVM (`perf-compare/20261115T200324Z-device-kv-tg-gate-rerun/`). Prefill pays for the smaller copy: a 2,048-token prompt with `q8_0` takes 1.21x (Qwen2.5-3B) to 1.31x (TinyLlama, Mistral 7B) the FP16 prefill time, read from the same runs' per-layer prefill records. The FFN gate and up projections vary by up to 6% with where their input vector lands in device memory, for either format.
+
 **Cross-feature smoke** ([`target/tier14-smoke/20260910T220100Z/`](../target/tier14-smoke/20260910T220100Z/)):
 
 | Gate | Result |

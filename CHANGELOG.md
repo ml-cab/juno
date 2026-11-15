@@ -1,5 +1,32 @@
 ## Status 
 
+**Session 146** - The GPU's copy of the KV cache is stored in the `--cache-type-k/-v` types: about half the device memory at `q8_0`
+
+- **The device KV follows `--cache-type-k/-v`.** On a CUDA launch with GPU attention, `q8_0` and `q4_0` now apply to the
+  copy of each request's KV that the attention kernels read, not just to the host KV: the same GGUF blocks, byte for byte,
+  so the layers attending on the GPU read exactly the values the host KV holds. The attention kernels dequantize them in
+  registers (decode rows) or while staging their shared tiles (prefill windows); nothing is expanded into a scratch
+  buffer. The device writes encode with the host codec's own roundings, and the bytes are tested equal to the host's.
+- **Device memory.** 0.531x the FP16 copy per position at `q8_0`, 0.406x at `q8_0` keys with `q4_0` values, 0.281x at
+  `q4_0`. On Mistral 7B and an 8 GB card, 22 sessions of 2,048 tokens fit beside the weights against 11 or 12 with `f16`.
+  The device-memory reserve taken when weights are uploaded counts the copy at its real size.
+- **Quality on the GPU** (greedy agreement with the FP16 copy over 512 tokens; TinyLlama, Qwen2.5-3B, Phi-3.5-mini,
+  Mistral 7B): 99.4% to 100% at `q8_0`, 98.6% to 99.6% at `q8_0` keys with `q4_0` values; mean NLL within 0.5% of `f16`.
+- **Speed.** A separate attention kernel module, loaded only when a quantized type is selected, reads each head in whole
+  blocks; decode rows run on 256-thread blocks (64 slots), so at 2,048 keys a decode launch takes 0.34x to 0.57x the FP16
+  kernel's time. The KV write encodes K and V in one launch, one warp per 32-value block. The FP16 kernels are unchanged.
+  Decode at 2,048 tokens with `q8_0`, pinned, reads 1.03x to 1.23x the FP16 copy's rate on the four test models
+  (Qwen2.5-3B 1.03x; before this decode path it read 0.918x). A 2,048-token prefill with `q8_0` takes 1.21x to 1.31x
+  the FP16 prefill time.
+- **Prompt sharing** (`--prefix-cache-tokens`) now works beside GPU attention with a quantized type, since the device
+  copy holds the host's values. A context shift rewrites a quantized device copy from the shifted host rows.
+- **Fallback.** A model whose head width is not a multiple of 32 keeps an FP16 device copy, and the launch prints a
+  startup warning naming the reason; the warning that the device copy always stayed FP16 is gone.
+- **Hardware kit.** `gpu.kv-quality.<model>` (four sweep models, CUDA) scores the fixed text's mean NLL with the handler
+  on the GPU at `f16`, `q8_0` and `q8_0` keys with `q4_0` values, each type held to 1.02x the `f16` NLL, and fails
+  when the handler's notice does not name the selected device formats. `gpu.consistency.tinyllama` runs its decode
+  batch of eight at each of those types, every batched reply equal to its single-request reply.
+
 **Session 145** - A 4-bit KV cache type, `q4_0`, about 7.1x smaller than the float cache, with its quality measured per model
 
 - **`--cache-type-k q4_0` and `--cache-type-v q4_0`** store the host KV in the 4-bit GGUF block format: 18 bytes per 32

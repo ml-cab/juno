@@ -39,16 +39,18 @@ final class HandlerKvShare {
 	}
 
 	/**
-	 * Whether a handler may share. A device attention KV is FP16 of the rows the request computed; the host rows
-	 * equal those rows only when the host stores them unquantized, so with a quantized host KV a shared prefix's
-	 * device rows would differ from the ones the request computes itself, and sharing is refused.
+	 * Whether a handler may share. A shared prefix's device rows are rebuilt from the host rows
+	 * ({@link #uploadMirrors}), so they equal the rows the request would write itself only when the device KV holds the
+	 * host types' values ({@link DeviceKvFormats#holds}): FP16 of an {@code f16} host KV's FP32 rows, or the
+	 * {@code q8_0} / {@code q4_0} blocks of a host KV of the same type (re-encoding a decoded block gives back its
+	 * values). A device KV kept in FP16 beside a quantized host KV would differ, and sharing is refused.
+	 *
+	 * @param deviceFormats the handler's device KV formats, or {@code null} without GPU attention
 	 */
-	static boolean supported(SessionKvLayout layout, boolean deviceAttention, NodeKVCacheAdapter adapter) {
+	static boolean supported(SessionKvLayout layout, DeviceKvFormats deviceFormats, NodeKVCacheAdapter adapter) {
 		if (adapter != null)
 			return false; // the adapter's copy would lack the shared rows
-		if (!deviceAttention)
-			return true;
-		return layout.cacheTypes().typeK() == KvElementType.F16 && layout.cacheTypes().typeV() == KvElementType.F16;
+		return deviceFormats == null || deviceFormats.holds(layout.cacheTypes());
 	}
 
 	/** The arena {@code layout}'s paged KV comes from; null when its KV is dense. */

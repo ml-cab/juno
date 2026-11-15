@@ -753,7 +753,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
     @Override
     public boolean supportsKvPrefixSharing() {
-        return HandlerKvShare.supported(kvLayout, false, kvAdapter);
+        return HandlerKvShare.supported(kvLayout, null, kvAdapter);
     }
 
 

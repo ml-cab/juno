@@ -223,6 +223,27 @@ final class GqaAttentionKernel {
 	}
 
 	/**
+	 * As {@link #launch(MemorySegment, MemorySegment, MemorySegment, MemorySegment, MemorySegment, int, int, int, int,
+	 * int, int, int, MemorySegment)}, over caches stored in {@code formats}: FP16 runs this kernel, anything quantized
+	 * runs {@link GqaAttentionKvKernel}, which reads the same rows dequantized in registers.
+	 */
+	void launch(MemorySegment qBatch, MemorySegment kPtrs, MemorySegment vPtrs, MemorySegment seqLens,
+			MemorySegment outBatch, int batch, int numHeads, int gqaRatio, int headDim, int kvDim,
+			int rowsPerBlock, int window, DeviceKvFormats formats, MemorySegment stream) {
+		if (!formats.quantized()) {
+			launch(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim, kvDim, rowsPerBlock,
+					window, stream);
+			return;
+		}
+		GqaAttentionKvKernel kv = GqaAttentionKvKernel.tryLoad();
+		if (kv == null)
+			throw new IllegalStateException("device KV stored as " + formats.summary()
+					+ " but the attention kernel that reads it did not load");
+		kv.launch(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim, kvDim, rowsPerBlock,
+				window, formats, stream);
+	}
+
+	/**
 	 * As {@link #launch}, split into launches of at most {@code budget} work each ({@link BoundedLaunches}), the
 	 * split falling between whole blocks of {@code rowsPerBlock} rows, every launch with the same
 	 * {@code rowsPerBlock}: the output is bit for bit one launch's. {@code hostSeqLens} holds the values of the
@@ -233,11 +254,19 @@ final class GqaAttentionKernel {
 	int launchBounded(MemorySegment qBatch, MemorySegment kPtrs, MemorySegment vPtrs, MemorySegment seqLens,
 			MemorySegment outBatch, int[] hostSeqLens, int batch, int numHeads, int gqaRatio, int headDim, int kvDim,
 			int rowsPerBlock, int window, long budget, MemorySegment stream) {
+		return launchBounded(qBatch, kPtrs, vPtrs, seqLens, outBatch, hostSeqLens, batch, numHeads, gqaRatio, headDim,
+				kvDim, rowsPerBlock, window, budget, DeviceKvFormats.F16, stream);
+	}
+
+	/** As {@link #launchBounded} above, over caches stored in {@code formats}. */
+	int launchBounded(MemorySegment qBatch, MemorySegment kPtrs, MemorySegment vPtrs, MemorySegment seqLens,
+			MemorySegment outBatch, int[] hostSeqLens, int batch, int numHeads, int gqaRatio, int headDim, int kvDim,
+			int rowsPerBlock, int window, long budget, DeviceKvFormats formats, MemorySegment stream) {
 		long workPerKey = BoundedLaunches.attentionWorkPerKey(numHeads, headDim);
 		int end = BoundedLaunches.attentionEnd(0, hostSeqLens, batch, rowsPerBlock, window, workPerKey, budget);
 		if (end >= batch) {
 			launch(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim, kvDim, rowsPerBlock,
-					window, stream);
+					window, formats, stream);
 			return 1;
 		}
 		long rowBytes = (long) numHeads * headDim * Float.BYTES;
@@ -248,7 +277,7 @@ final class GqaAttentionKernel {
 				end = BoundedLaunches.attentionEnd(start, hostSeqLens, batch, rowsPerBlock, window, workPerKey, budget);
 			launch(qBatch.asSlice(start * rowBytes), kPtrs.asSlice(start * ptrBytes), vPtrs.asSlice(start * ptrBytes),
 					seqLens.asSlice((long) start * Integer.BYTES), outBatch.asSlice(start * rowBytes), end - start,
-					numHeads, gqaRatio, headDim, kvDim, rowsPerBlock, window, stream);
+					numHeads, gqaRatio, headDim, kvDim, rowsPerBlock, window, formats, stream);
 			launches++;
 		}
 		return launches;

@@ -24,22 +24,30 @@ import java.util.Map;
 import cab.ml.juno.kvcache.CacheTypeOptions;
 import cab.ml.juno.node.BatchForwardRequest;
 import cab.ml.juno.node.CpuMatVec;
+import cab.ml.juno.node.CudaMatVec;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
+import cab.ml.juno.node.GpuContext;
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 
 /**
- * One NLL score for {@link QualityProbe} and {@link KvQualityProbe}: {@code QualityRunMain <model> <tokens>}, on
- * whichever CPU kernels this JVM's {@code juno.cpu.integerKernels} selects and with the host KV types its
- * {@code JUNO_CACHE_TYPE_K}/{@code JUNO_CACHE_TYPE_V} properties select. Prints one line after {@link #PREFIX}.
+ * One NLL score for {@link QualityProbe}, {@link KvQualityProbe} and {@link GpuKvQualityProbe}:
+ * {@code QualityRunMain <model> <tokens>}, on whichever CPU kernels this JVM's {@code juno.cpu.integerKernels} selects
+ * and with the KV types its {@code JUNO_CACHE_TYPE_K}/{@code JUNO_CACHE_TYPE_V} properties select. With
+ * {@code -D}{@value #GPU_PROPERTY}{@code =true} the handler loads on CUDA device 0, so GPU attention reads the device
+ * copy of the KV those types set, and the line also carries the handler's notice about that copy ({@code deviceKv}).
+ * Prints one line after {@link #PREFIX}.
  */
 public final class QualityRunMain {
 
 	static final String PREFIX = "JUNO-KIT-NLL ";
 	static final int WINDOW = 128;
+
+	/** Loads the handler on CUDA device 0 instead of the CPU backend. */
+	static final String GPU_PROPERTY = "juno.kit.quality.gpu";
 
 	private QualityRunMain() {
 	}
@@ -57,7 +65,10 @@ public final class QualityRunMain {
 		if (ids.length < tokens + 1)
 			throw new IllegalStateException("the text is " + ids.length + " tokens, " + (tokens + 1) + " needed");
 		ids = Arrays.copyOf(ids, tokens + 1);
-		ForwardPassHandler handler = ForwardPassHandlerLoader.load(model, ctx, CpuMatVec.INSTANCE);
+		boolean gpu = Boolean.getBoolean(GPU_PROPERTY);
+		NoticeCapture notices = gpu ? NoticeCapture.install() : null;
+		ForwardPassHandler handler = ForwardPassHandlerLoader.load(model, ctx,
+				gpu ? new CudaMatVec(GpuContext.shared(0)) : CpuMatVec.INSTANCE);
 		long t0 = System.nanoTime();
 		int predictions = ids.length - 1;
 		int[] argmax = new int[Math.min(QualityProbe.ARGMAX_POSITIONS, predictions)];
@@ -88,9 +99,12 @@ public final class QualityRunMain {
 		out.put("meanNll", nll / predictions);
 		out.put("argmax", argmax);
 		out.put("seconds", (System.nanoTime() - t0) / 1e9);
-		out.put("kernels", "false".equalsIgnoreCase(System.getProperty("juno.cpu.integerKernels")) ? "float-activation"
-				: "integer where the Vector API is present");
+		out.put("kernels", gpu ? "cuda"
+				: "false".equalsIgnoreCase(System.getProperty("juno.cpu.integerKernels")) ? "float-activation"
+						: "integer where the Vector API is present");
 		out.put("kv", CacheTypeOptions.fromEnv().policySummary());
+		if (gpu)
+			out.put("deviceKv", GpuKvQualityProbe.deviceKvNotice(notices.messages()));
 		System.out.println(PREFIX + Json.MAPPER.writer()
 				.without(com.fasterxml.jackson.databind.SerializationFeature.INDENT_OUTPUT).writeValueAsString(out));
 		System.exit(0);

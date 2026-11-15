@@ -54,7 +54,7 @@ import cab.ml.juno.kvcache.CacheTypeOptions;
  */
 class KvQuantQualityLiveTest {
 
-	private static final Path MODELS = Path.of(System.getProperty("user.dir")).endsWith("node")
+	static final Path MODELS = Path.of(System.getProperty("user.dir")).endsWith("node")
 			? Path.of(System.getProperty("user.dir")).getParent().resolve("models")
 			: Path.of("models");
 
@@ -150,7 +150,7 @@ class KvQuantQualityLiveTest {
 	 * {@code argmax} holds the positions that predict the generated part of a {@link #PROMPT}-token-prompt sequence
 	 * (empty for a shorter one), {@code argmaxAll} every position.
 	 */
-	private static Pass teacherForce(ForwardPassHandler handler, ShardContext ctx, int[] ids, String session) {
+	static Pass teacherForce(ForwardPassHandler handler, ShardContext ctx, int[] ids, String session) {
 		int predictions = ids.length - 1;
 		int[] all = new int[predictions];
 		double nll = 0;
@@ -182,7 +182,7 @@ class KvQuantQualityLiveTest {
 	}
 
 	/** {@code count} tokens continuing {@code prompt}, each the argmax of the previous position's logits. */
-	private static int[] greedy(ForwardPassHandler handler, ShardContext ctx, int[] prompt, int count, String session) {
+	static int[] greedy(ForwardPassHandler handler, ShardContext ctx, int[] prompt, int count, String session) {
 		int[] out = new int[count];
 		try {
 			float[] last = null;
@@ -217,7 +217,7 @@ class KvQuantQualityLiveTest {
 		return best;
 	}
 
-	private static int agreement(int[] a, int[] b) {
+	static int agreement(int[] a, int[] b) {
 		int n = 0;
 		for (int i = 0; i < a.length; i++)
 			if (a[i] == b[i])
@@ -226,20 +226,20 @@ class KvQuantQualityLiveTest {
 	}
 
 	/** The first index where {@code a} and {@code b} differ, or their length when they never do. */
-	private static int firstDisagreement(int[] a, int[] b) {
+	static int firstDisagreement(int[] a, int[] b) {
 		for (int i = 0; i < a.length; i++)
 			if (a[i] != b[i])
 				return i;
 		return a.length;
 	}
 
-	private static int[] concat(int[] a, int[] b) {
+	static int[] concat(int[] a, int[] b) {
 		int[] out = Arrays.copyOf(a, a.length + b.length);
 		System.arraycopy(b, 0, out, a.length, b.length);
 		return out;
 	}
 
-	private static void restore(String key, String prev) {
+	static void restore(String key, String prev) {
 		if (prev == null)
 			System.clearProperty(key);
 		else

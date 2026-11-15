@@ -814,7 +814,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 				attention.launchBounded(q.devicePointer(), tables, tables.asSlice(ptrBytes), tables.asSlice(2 * ptrBytes),
 						attn.devicePointer(), seqLensHost, w, shape.numHeads(), shape.gqaRatio(), shape.headDim(),
 						shape.kvDim(), GqaAttentionKernel.rowsPerBlock(true, w), window,
-						BoundedLaunches.ATTENTION_WORK_PER_LAUNCH, stream);
+						BoundedLaunches.ATTENTION_WORK_PER_LAUNCH, mirror.formats(), stream);
 				spans.compute(DeviceComputeEvent.GQA_ATTENTION_REGION, w, mark, stream);
 				attn.markWritten(w);
 				return true;

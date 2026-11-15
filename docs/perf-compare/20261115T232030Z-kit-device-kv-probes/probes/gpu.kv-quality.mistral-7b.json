@@ -1,0 +1,66 @@
+{
+  "id" : "gpu.kv-quality.mistral-7b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "q8_0 device KV NLL at most 1.02x the f16 device KV NLL",
+    "passed" : true,
+    "detail" : "ratio 0.99914 (1.52810 over 1.52942)"
+  }, {
+    "name" : "q8_0 device KV stored in the selected formats",
+    "passed" : true,
+    "detail" : "Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 2176 bytes per position against 4096 for FP16"
+  }, {
+    "name" : "q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL",
+    "passed" : true,
+    "detail" : "ratio 0.99735 (1.52536 over 1.52942)"
+  }, {
+    "name" : "q8_0/q4_0 device KV stored in the selected formats",
+    "passed" : true,
+    "detail" : "Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 1664 bytes per position against 4096 for FP16"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, f16 device KV",
+    "unit" : "nats",
+    "values" : [ 1.529418539226094 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0 device KV",
+    "unit" : "nats",
+    "values" : [ 1.5280964371433903 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "q8_0 argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 99.21875 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0/q4_0 device KV",
+    "unit" : "nats",
+    "values" : [ 1.52536035946554 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "q8_0/q4_0 argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 99.0234375 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "f16Seconds" : 7.260939346,
+    "kernels" : "cuda",
+    "quantizedSeconds" : {
+      "q8_0" : 8.432579214,
+      "q8_0/q4_0" : 8.15928309
+    },
+    "tokens" : 2048,
+    "quantizedRunKv" : {
+      "q8_0" : "cache-type-k=q8_0 cache-type-v=q8_0",
+      "q8_0/q4_0" : "cache-type-k=q8_0 cache-type-v=q4_0"
+    }
+  }
+}

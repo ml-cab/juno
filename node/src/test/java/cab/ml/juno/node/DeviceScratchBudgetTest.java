@@ -162,6 +162,19 @@ class DeviceScratchBudgetTest {
 	}
 
 	@Test
+	void kvMirrorIsCountedAtTheDeviceFormatsSize() {
+		// q8_0 keys and q4_0 values: 34 and 18 bytes per 32 values, against 64 for each FP16 side.
+		DeviceKvFormats q8q4 = new DeviceKvFormats(DeviceKvFormat.Q8_0, DeviceKvFormat.Q4_0);
+		assertThat(DeviceScratchBudget.kvMirrorBytes(20, 1024, 64, q8q4)).isEqualTo(20L * 64 * (32 * 34 + 32 * 18));
+		assertThat(DeviceScratchBudget.kvMirrorBytes(20, 1024, 64, DeviceKvFormats.F16))
+				.isEqualTo(DeviceScratchBudget.kvMirrorBytes(20, 1024, 64));
+		long f16 = DeviceScratchBudget.kvMirrorReserveBytes(23, 9, 1024);
+		long q8 = DeviceScratchBudget.kvMirrorReserveBytes(23, 9, 1024,
+				new DeviceKvFormats(DeviceKvFormat.Q8_0, DeviceKvFormat.Q8_0));
+		assertThat((double) q8 / f16).isEqualTo(34.0 / 64);
+	}
+
+	@Test
 	void kvMirrorReserveScalesWithLayersAndContext() {
 		assertThat(DeviceScratchBudget.kvMirrorBytes(40, 6656, 64))
 				.isEqualTo(2 * DeviceScratchBudget.kvMirrorBytes(20, 6656, 64));

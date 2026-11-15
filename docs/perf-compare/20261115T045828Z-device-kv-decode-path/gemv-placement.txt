@@ -1,0 +1,36 @@
+# FFN gate and up GEMVs (Q4_K 11,008 x 2,048) on Qwen2.5-3B: what moves them. Scratch builds of this tree (experiments, not published code),
+# each JVM traced as above; ratio = the two launches' per-layer median time, run over reference, min and max over the 36 layers.
+
+## The quantized kernels themselves (an FP16 JVM also running them on a shadow q8_0 cache, right after its own attention; reference: the same build without)
+encoder only:            min 0.990 max 0.993
+attention only:          min 0.990 max 0.992
+encoder and attention:   min 0.990 max 0.993
+
+## Weight placement (an FP16 JVM that loads the quantized attention module before its weight upload, as a q8_0 JVM does)
+FP16 + module first over FP16: min 0.994 max 0.997
+
+## Allocation sizes (reference: FP16 JVM of the scratch build)
+q8_0, mirrors as allocated: min 1.039 max 1.042
+q8_0, mirrors allocated at FP16 size: min 0.989 max 0.992
+
+## The region's buffers (q8_0 JVM, one buffer moved to a 64 KiB boundary)
+q8_1 input vector at a 64 KiB boundary: min 1.009 max 1.013
+tail scratch (GEMV output) at a 64 KiB boundary: min 1.068 max 1.072
+
+## The q8_1 input vector's offset from a 64 KiB boundary (q8_0 JVM)
+offset 512: min 1.060 max 1.064
+offset 1024: min 1.033 max 1.036
+offset 2048: min 0.995 max 0.999
+offset 3584: min 1.027 max 1.031
+offset 4096: min 1.027 max 1.030
+offset 6144: min 1.033 max 1.036
+(offset 0: the 64 KiB line above; the FP16 JVM's own vector sits at offset 0x4800, the q8_0 JVM's at 0xbe00 within 64 KiB)
+
+## Region buffer addresses printed by the scratch build
+addr-f16-: EXP-ADDR x=764ad59fa000 xn=764ad59fc000 q8=764ace7e4800 tailScratch=764acf783000 packed=764ace7e0000
+addr-q8_0-: EXP-ADDR x=7c56899e1600 xn=7c56899e3600 q8=7c56899ebe00 tailScratch=7c56827cc400 packed=7c56899e7600
+addr-q8_0-pad: EXP-ADDR x=7544499fa000 xn=7544499fc000 q8=7544427e4800 tailScratch=754443783000 packed=7544427e0000
+
+## Weights loaded L2-only (__ldcg) in q4k_gemv
+FP16, __ldcg over FP16, .nc: min 0.961 max 0.964
+q8_0, __ldcg over FP16, __ldcg: min 1.059 max 1.062

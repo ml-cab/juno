@@ -102,9 +102,10 @@ final class QualityProbe implements KitProbe {
 
 	/**
 	 * {@code argmax} holds the first {@link #ARGMAX_POSITIONS} positions only; {@code kv} is the run's
-	 * {@code --cache-type-k/-v} policy.
+	 * {@code --cache-type-k/-v} policy; {@code deviceKv}, on a GPU run only, the handler's notice about GPU attention's
+	 * copy of the KV.
 	 */
-	record Score(double meanNll, int[] argmax, double seconds, String kernels, String kv) {
+	record Score(double meanNll, int[] argmax, double seconds, String kernels, String kv, String deviceKv) {
 	}
 
 	static String text() throws IOException {

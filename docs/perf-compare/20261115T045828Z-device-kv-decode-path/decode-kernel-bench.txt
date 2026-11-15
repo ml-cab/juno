@@ -1,0 +1,25 @@
+GqaAttentionDecodeBench (-Djuno.attentionBench=true), this tree: device microseconds per decode launch (one row), median of 5 x 100 launches,
+FP16 device KV ("current", the unchanged FP16 kernel) against q8_0 K and V and q8_0 K with q4_0 V, through GqaAttentionKernel.launch,
+which now runs quantized decode rows on the 256-thread gqa_decode_kv entries (ratio = quantized / FP16; below 1 is faster). Unpinned.
+
+lanes current; us per launch, median of 5 x 100
+tinyllama 32/4/64      ctx    64  current     7,79  [K q8_0, V q8_0]    13,56 (1,740x)  [K q8_0, V q4_0]     6,32 (0,811x)
+tinyllama 32/4/64      ctx   256  current    14,06  [K q8_0, V q8_0]     9,03 (0,642x)  [K q8_0, V q4_0]     9,62 (0,684x)
+tinyllama 32/4/64      ctx   576  current    23,73  [K q8_0, V q8_0]    14,89 (0,628x)  [K q8_0, V q4_0]    16,45 (0,693x)
+tinyllama 32/4/64      ctx  1024  current    42,78  [K q8_0, V q8_0]    21,07 (0,493x)  [K q8_0, V q4_0]    22,13 (0,517x)
+tinyllama 32/4/64      ctx  2048  current   103,09  [K q8_0, V q8_0]    34,72 (0,337x)  [K q8_0, V q4_0]    35,82 (0,347x)
+qwen2.5-3b 16/2/128    ctx    64  current     6,96  [K q8_0, V q8_0]     6,87 (0,987x)  [K q8_0, V q4_0]     6,92 (0,994x)
+qwen2.5-3b 16/2/128    ctx   256  current    11,61  [K q8_0, V q8_0]     9,73 (0,838x)  [K q8_0, V q4_0]    10,07 (0,867x)
+qwen2.5-3b 16/2/128    ctx   576  current    18,40  [K q8_0, V q8_0]    14,45 (0,785x)  [K q8_0, V q4_0]    15,13 (0,822x)
+qwen2.5-3b 16/2/128    ctx  1024  current    29,40  [K q8_0, V q8_0]    25,48 (0,867x)  [K q8_0, V q4_0]    24,18 (0,822x)
+qwen2.5-3b 16/2/128    ctx  2048  current    73,89  [K q8_0, V q8_0]    41,96 (0,568x)  [K q8_0, V q4_0]    45,31 (0,613x)
+phi-3.5-mini 32/32/96  ctx    64  current     7,91  [K q8_0, V q8_0]     9,43 (1,193x)  [K q8_0, V q4_0]     7,75 (0,981x)
+phi-3.5-mini 32/32/96  ctx   256  current    29,85  [K q8_0, V q8_0]    12,87 (0,431x)  [K q8_0, V q4_0]    11,21 (0,376x)
+phi-3.5-mini 32/32/96  ctx   576  current    58,35  [K q8_0, V q8_0]    31,83 (0,545x)  [K q8_0, V q4_0]    27,71 (0,475x)
+phi-3.5-mini 32/32/96  ctx  1024  current    97,96  [K q8_0, V q8_0]    44,39 (0,453x)  [K q8_0, V q4_0]    37,15 (0,379x)
+phi-3.5-mini 32/32/96  ctx  2048  current   184,26  [K q8_0, V q8_0]    83,44 (0,453x)  [K q8_0, V q4_0]    73,01 (0,396x)
+mistral-7b 32/8/128    ctx    64  current     8,87  [K q8_0, V q8_0]     8,29 (0,935x)  [K q8_0, V q4_0]     8,35 (0,941x)
+mistral-7b 32/8/128    ctx   256  current    15,39  [K q8_0, V q8_0]    12,52 (0,814x)  [K q8_0, V q4_0]    13,50 (0,877x)
+mistral-7b 32/8/128    ctx   576  current    41,69  [K q8_0, V q8_0]    19,15 (0,459x)  [K q8_0, V q4_0]    19,71 (0,473x)
+mistral-7b 32/8/128    ctx  1024  current    58,41  [K q8_0, V q8_0]    29,92 (0,512x)  [K q8_0, V q4_0]    35,51 (0,608x)
+mistral-7b 32/8/128    ctx  2048  current   117,34  [K q8_0, V q8_0]    59,17 (0,504x)  [K q8_0, V q4_0]    61,38 (0,523x)

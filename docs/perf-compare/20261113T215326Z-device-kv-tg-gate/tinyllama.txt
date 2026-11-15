@@ -1,0 +1,30 @@
+[A1] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=6778454016 session_bytes=46137344 sessions=146 fp16_session_bytes=46137344 fp16_sessions=146
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=116.528
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=125.094
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=125.099
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=125.094 reps=[116.52784507235542, 125.09395802300625, 125.09863110813137]
+[B1] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=6777012224 session_bytes=24510464 sessions=276 fp16_session_bytes=46137344 fp16_sessions=146
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=128.400
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=135.910
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=138.150
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=135.910 reps=[128.4001798328781, 135.91016817816205, 138.15002907518465]
+[A2] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=6793003008 session_bytes=46137344 sessions=147 fp16_session_bytes=46137344 fp16_sessions=147
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=120.885
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=125.225
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=125.396
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=125.225 reps=[120.88497533183417, 125.22507103128007, 125.3964171384977]
+[B2] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=6794051584 session_bytes=24510464 sessions=277 fp16_session_bytes=46137344 fp16_sessions=147
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=130.394
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=135.995
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=137.104
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=135.995 reps=[130.3941627895779, 135.99499999083096, 137.10430380435395]
+[A3] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=6795952128 session_bytes=46137344 sessions=147 fp16_session_bytes=46137344 fp16_sessions=147
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=119.033
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=125.289
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=125.394
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=125.289 reps=[119.03263158609423, 125.28863148243845, 125.39378890785589]
+[B3] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=6796148736 session_bytes=24510464 sessions=277 fp16_session_bytes=46137344 fp16_sessions=147
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=132.953
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=135.183
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=137.073
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=135.183 reps=[132.95262874363416, 135.18257748353787, 137.07299387724706]

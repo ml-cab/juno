@@ -96,9 +96,14 @@ final class CudaGqaAttention {
 		return new CudaGqaAttention(ctx);
 	}
 
-	/** Allocates one device KV mirror per layer for a new request. */
+	/** Allocates one device KV mirror per layer for a new request, FP16. */
 	DeviceKvCache[] newLayers(int layerCount, int kvDim) {
 		return DeviceKvCache.newLayers(ctx, layerCount, kvDim);
+	}
+
+	/** Allocates one device KV mirror per layer for a new request, stored in {@code formats}. */
+	DeviceKvCache[] newLayers(int layerCount, int kvDim, DeviceKvFormats formats) {
+		return DeviceKvCache.newLayers(ctx, layerCount, kvDim, formats);
 	}
 
 	/**
@@ -134,8 +139,12 @@ final class CudaGqaAttention {
 		int batch = qBatch.length;
 		int rowDim = numHeads * headDim;
 		boolean oneCache = true;
-		for (int b = 1; b < batch && oneCache; b++)
-			oneCache = kv[b] == kv[0];
+		for (int b = 1; b < batch; b++) {
+			oneCache &= kv[b] == kv[0];
+			if (!kv[b].formats().equals(kv[0].formats()))
+				throw new IllegalArgumentException("one launch reads one device KV format: " + kv[0].formats().summary()
+						+ " and " + kv[b].formats().summary());
+		}
 
 		long qBytes = (long) batch * rowDim * Float.BYTES;
 		long outBytes = qBytes;
@@ -184,7 +193,7 @@ final class CudaGqaAttention {
 
 			long t0 = DeviceComputeClock.start(gpu, batch);
 			kernel.launchBounded(dQ, dKPtrs, dVPtrs, dSeqLens, dOut, seqLens, batch, numHeads, gqaRatio, headDim,
-					kvDim, rowsPerBlock, window, BoundedLaunches.ATTENTION_WORK_PER_LAUNCH, null);
+					kvDim, rowsPerBlock, window, BoundedLaunches.ATTENTION_WORK_PER_LAUNCH, kv[0].formats(), null);
 			DeviceComputeClock.done(gpu, DeviceComputeEvent.GQA_ATTENTION, batch, t0);
 
 			MemorySegment hostOut = staging.allocate(outBytes);

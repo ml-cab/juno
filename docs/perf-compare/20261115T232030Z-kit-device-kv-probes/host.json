@@ -1,0 +1,57 @@
+{
+  "os" : "Linux",
+  "osVersion" : "7.0.0-42-generic",
+  "arch" : "amd64",
+  "cpuModel" : "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+  "cores" : 6,
+  "threads" : 12,
+  "ramBytes" : 67363024896,
+  "freeDiskBytes" : 83882766336,
+  "cpuFlags" : [ "ssbd", "pni", "erms", "dtes64", "pti", "dtherm", "constant_tsc", "flexpriority", "pts", "popcnt", "f16c", "monitor", "avx", "ht", "aperfmperf", "cx16", "tm", "nx", "vme", "pdcm", "apic", "fpu", "pdpe1gb", "xtpr", "aes", "sep", "msr", "smep", "pebs", "vpid", "mmx", "fxsr", "vmx", "sse2", "rdrand", "arch_perfmon", "rdtscp", "cpuid_fault", "rep_good", "de", "clflush", "arat", "md_clear", "cpuid", "stibp", "dts", "tm2", "dca", "mca", "cmov", "est", "mce", "xtopology", "acpi", "vnmi", "sse", "ibpb", "cx8", "mtrr", "tpr_shadow", "flush_l1d", "smx", "pclmulqdq", "nonstop_tsc", "xsave", "xsaveopt", "fsgsbase", "pln", "tsc", "ida", "lm", "pae", "lahf_lm", "pge", "tsc_deadline_timer", "pse", "x2apic", "epb", "ssse3", "pat", "pcid", "sse4_1", "sse4_2", "ibrs", "pse36", "ds_cpl", "ss", "ept", "bts", "pbe", "syscall", "nopl" ],
+  "intVectorBits" : 128,
+  "floatVectorBits" : 128,
+  "useAvx" : "1",
+  "cuda" : true,
+  "rocm" : false,
+  "gpus" : [ {
+    "vendor" : "NVIDIA",
+    "name" : "NVIDIA GeForce GTX 1080",
+    "memoryBytes" : 8589934592,
+    "driver" : "580.178.04"
+  } ],
+  "power" : {
+    "hasBattery" : false,
+    "onBattery" : false,
+    "percent" : -1
+  },
+  "metered" : "no",
+  "clockSource" : "hpet",
+  "backend" : {
+    "os.name" : "Linux",
+    "java.vm.name" : "OpenJDK 64-Bit Server VM",
+    "floatVectorBits" : 128,
+    "os.version" : "7.0.0-42-generic",
+    "cpuThreads" : 12,
+    "os.arch" : "amd64",
+    "jfrClockRatio" : 1.0000496938917827,
+    "cudaLibraries" : {
+      "runtime" : "libcudart.so.12",
+      "cublas" : "libcublas.so.12",
+      "driver" : "libcuda.so.1"
+    },
+    "cuda" : true,
+    "java.vendor" : "Ubuntu",
+    "availableProcessors" : 12,
+    "clockSource" : "hpet",
+    "useAvx" : "1",
+    "rocm" : false,
+    "maxHeapBytes" : 536870912,
+    "rocmDevices" : [ ],
+    "intVectorBits" : 128,
+    "java.version" : "25.0.4.1",
+    "cudaDevices" : [ {
+      "memoryBytes" : 8497594368,
+      "name" : "NVIDIA GeForce GTX 1080"
+    } ]
+  }
+}

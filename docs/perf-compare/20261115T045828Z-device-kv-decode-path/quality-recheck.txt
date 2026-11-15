@@ -1,0 +1,8 @@
+DeviceKvQuantQualityLiveTest on this tree (the wide decode and the warp encoder), TinyLlama and Qwen2.5-3B: the bar's reading (teacher-forced
+greedy agreement over 512 positions, prefill width) and NLL are the values of 20261113T194534Z-device-kv-quant, unchanged; the free-running
+reply (decode width, the path the wide decode serves) now shares a longer prefix with the FP16 reply.
+
+DEVICE-KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 device_bytes_window=2883584 nll=2.45657 self_agree=509/512 s=17.6
+DEVICE-KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 device_bytes_window=1531904 nll=2.45773 nll_f16=2.45657 ratio=1.00047 greedy_agree=509/512 (99.41%) first_disagree=11 free_running_same_prefix=28/512 s=17.8
+DEVICE-KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 device_bytes_window=4718592 nll=1.69616 self_agree=509/512 s=42.5
+DEVICE-KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 device_bytes_window=2506752 nll=1.69806 nll_f16=1.69616 ratio=1.00112 greedy_agree=510/512 (99.61%) first_disagree=1 free_running_same_prefix=33/512 s=43.0

@@ -1,0 +1,30 @@
+[A1] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=3174498304 session_bytes=268435456 sessions=11 fp16_session_bytes=268435456 fp16_sessions=11
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=32.338
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=32.192
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=32.365
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=32.338 reps=[32.33829195547905, 32.19191519284601, 32.365312042819504]
+[B1] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=3175350272 session_bytes=142606336 sessions=22 fp16_session_bytes=268435456 fp16_sessions=11
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=33.221
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=33.173
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=32.585
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=33.173 reps=[33.22051939950395, 33.17262614441679, 32.5847650614726]
+[A2] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=3177185280 session_bytes=268435456 sessions=11 fp16_session_bytes=268435456 fp16_sessions=11
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=33.488
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=33.225
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=32.966
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=33.225 reps=[33.48803183709698, 33.224504064952924, 32.96646361345135]
+[B2] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=3175153664 session_bytes=142606336 sessions=22 fp16_session_bytes=268435456 fp16_sessions=11
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=33.013
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=33.203
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=33.493
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=33.203 reps=[33.01341923584583, 33.202847637973555, 33.49298065219124]
+[A3] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=3177250816 session_bytes=268435456 sessions=11 fp16_session_bytes=268435456 fp16_sessions=11
+[A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=33.453
+[A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=33.369
+[A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=33.525
+[A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=33.453 reps=[33.453176734165815, 33.36899232489557, 33.524663626077285]
+[B3] DEVICE-KV-CAPACITY mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=3175088128 session_bytes=142606336 sessions=22 fp16_session_bytes=268435456 fp16_sessions=11
+[B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=33.336
+[B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=33.402
+[B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=33.677
+[B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=33.402 reps=[33.33628645084002, 33.40159072784701, 33.67657500987703]
