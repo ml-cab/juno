@@ -125,7 +125,8 @@ class DeviceKvDecodeTgLiveTest {
 				file, type, formats.summary(), context, decode, sorted[reps / 2], Arrays.toString(tg));
 	}
 
-	private static ForwardPassHandler load(Path model, ShardContext ctx, String kType, String vType) throws Exception {
+	/** Loads {@code model} on CUDA with host KV, and so the device KV, of types {@code kType}/{@code vType}. */
+	static ForwardPassHandler load(Path model, ShardContext ctx, String kType, String vType) throws Exception {
 		String prevK = System.getProperty(CacheTypeOptions.ENV_K);
 		String prevV = System.getProperty(CacheTypeOptions.ENV_V);
 		System.setProperty(CacheTypeOptions.ENV_K, kType);

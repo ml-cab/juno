@@ -1,0 +1,18 @@
+[A1] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=2005.89 reps=[1999.316131, 2005.365087, 2113.262955, 2215.46895, 2005.890739]
+[A1] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=2710.31 reps=[2548.396454, 2740.247333, 2710.306832, 2777.103196, 2640.570641]
+[A1] CLOCK start=62 C after 35s loaded_samples=56 below_lock=0 above_lock=56 lock NOT applied (clock recorded, not fixed) hottest=80C reasons=0x0000000000000004:3 0x0000000000000000:53 
+[B1] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=1926.95 reps=[1926.948712, 1863.229118, 2022.157484, 1910.958753, 1954.729786]
+[B1] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=2425.86 reps=[2414.295689, 2591.180504, 2425.857776, 2394.811973, 2520.21266]
+[B1] CLOCK start=65 C after 15s loaded_samples=52 below_lock=0 above_lock=52 lock NOT applied (clock recorded, not fixed) hottest=82C reasons=0x0000000000000004:19 0x0000000000000000:33 
+[A2] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=2074.93 reps=[2013.517986, 2074.930178, 2075.470674, 2064.281163, 2099.798429]
+[A2] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=2707.19 reps=[2609.419535, 2738.323199, 2583.526599, 2714.153048, 2707.19349]
+[A2] CLOCK start=65 C after 20s loaded_samples=54 below_lock=0 above_lock=54 lock NOT applied (clock recorded, not fixed) hottest=82C reasons=0x0000000000000020:1 0x0000000000000004:12 0x0000000000000000:41 
+[B2] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=1967.97 reps=[1967.972769, 1899.043441, 1987.037885, 1991.182514, 1905.586516]
+[B2] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=2472.30 reps=[2408.529581, 2553.722394, 2472.301707, 2619.227363, 2414.192153]
+[B2] CLOCK start=64 C after 70s loaded_samples=51 below_lock=0 above_lock=51 lock NOT applied (clock recorded, not fixed) hottest=81C reasons=0x0000000000000004:2 0x0000000000000000:49 
+[A3] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=2169.48 reps=[2010.516158, 2040.69621, 2196.269437, 2245.229148, 2169.47953]
+[A3] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=2798.16 reps=[2748.621189, 2798.161912, 2834.515919, 3028.975746, 2592.430912]
+[A3] CLOCK start=65 C after 20s loaded_samples=59 below_lock=0 above_lock=59 lock NOT applied (clock recorded, not fixed) hottest=82C reasons=0x0000000000000004:8 0x0000000000000000:51 
+[B3] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=1959.29 reps=[1965.587626, 1959.291904, 2015.844023, 1880.580653, 1893.593317]
+[B3] DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=2472.89 reps=[2557.181988, 2549.237867, 2472.894445, 2467.527748, 2419.820799]
+[B3] CLOCK start=65 C after 25s loaded_samples=52 below_lock=0 above_lock=52 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:2 0x0000000000000004:12 0x0000000000000000:38 

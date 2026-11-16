@@ -141,6 +141,20 @@ public final class DenseKvTensor implements SessionKvTensor {
 		writtenTokens = Math.max(writtenTokens, startPos + rows);
 	}
 
+	/** One bulk copy into the packed rows. */
+	@Override
+	public void writeEncodedRows(int startPos, int rows, MemorySegment src, long srcOffset) {
+		if (type == KvElementType.F16)
+			throw new IllegalArgumentException("f16 rows are stored as floats, not encoded");
+		if (rows < 1)
+			return;
+		ensureCapacity(startPos + rows - 1);
+		exposeThrough(startPos);
+		int bpt = bytesPerToken();
+		MemorySegment.copy(src, ValueLayout.JAVA_BYTE, srcOffset, packed, startPos * bpt, rows * bpt);
+		writtenTokens = Math.max(writtenTokens, startPos + rows);
+	}
+
 	/**
 	 * Copy restored float data for positions {@code [0, seqLen)}. Used by
 	 * {@code NodeKVCacheAdapter} restore into an empty tensor.

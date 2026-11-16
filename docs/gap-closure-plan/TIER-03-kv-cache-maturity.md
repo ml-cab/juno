@@ -40,8 +40,16 @@ quantized path (decision 4). Owner re-run 2026-11-15: TinyLlama 1.235x, Qwen2.5-
 takes 1.21x to 1.31x the FP16 time, outside every bar. Owner decisions 2026-11-15: 1 (a), item 6 before step 7; 3 (a),
 rotated keys deferred; 4 (a) and 5 (a), the FFN GEMV and the FP16 wide decode block as out-of-tier follow-ups; 6 (a),
 item 7's prefill with a quantized device KV held to <= 1.10x FP16. Item 7's kit probes in 2026-11-15
-(`gpu.kv-quality.<model>`, the GPU batch of eight at each KV type; first run 16 of 16 and 44 of 44). Next: item 7's
-prefill; then decisions 5 and 4; then item 6; then step 7.
+(`gpu.kv-quality.<model>`, the GPU batch of eight at each KV type; first run 16 of 16 and 44 of 44). Decision 6 (a) begun
+2026-11-15: traced, the prefill's extra time over FP16 was 9% to 45% the attention launch and the rest the host KV encoded on
+the CPU after each layer (about 9 ns a value, one thread; 3.6 s a prefill on Phi-3.5-mini); the attention's quantized tile
+staging reworked, now 0.90x to 0.95x the FP16 kernel with outputs unchanged bit for bit; prefill `q8_0` over FP16, unpinned,
+1.09x to 1.17x in one window (Phi-3.5-mini 1.84x), so the 1.10x bar waits on decision 7 (the host encode) and decision 8 (the
+widths it scores). Owner decisions 7 (a) and 8 (a), 2026-11-15. Decision 7 (a) in 2026-11-16: a whole-layer prefill window
+writes the host KV from the device copy's stored rows (no CPU encode; a quarter of the bytes over the bus), host bytes
+unchanged; prefill `q8_0` over FP16, unpinned, 0.90x to 0.99x in one window and 0.90x to 0.97x in 128-row windows, every
+sweep model; kit probe `gpu.kv-prefill.<model>` in. The owner's pinned prefill gate (decision 8 (a)), 2026-11-16: 0.877x to
+0.961x at both widths, 8 of 8 under 1.10x. Next: decisions 5 (a) and 4 (a) (out-of-tier follow-ups); then item 6; then step 7.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -322,6 +330,14 @@ README execution rule 10.
   - Defragmentation (item 3): replies unchanged under page churn, with the compaction counted. *(2026-11-11: in
     `schedule.tinyllama` and `gpu.schedule.tinyllama`, the continuous leg; `coverage.tsv` line `feature:kv-page-reclaim`.)*
   - The host KV footprint per session (item 6), as a reading.
+  - Item 7's prefill bar (decision 6 (a)): the 2,048-token prefill time with `q8_0` device KV over FP16, as a reading, on the
+    sweep models. *(2026-11-15: owed with decision 7, which settles what the bar scores; `DeviceKvPrefillTimeLiveTest` is
+    the reading it would run. 2026-11-16: in: `gpu.kv-prefill.<model>` on the four sweep models, CUDA, `KvPrefillRunMain`
+    with the handler on the GPU at `f16` and `q8_0`, the 2,048-token quality text in one window and in 128-token windows
+    (decision 8 (a)'s widths); per width both sides' times and the ratio, a reading; a run whose GPU attention, device
+    prefill region or selected device formats did not open fails the probe; `coverage.tsv` line
+    `feature:device-kv-prefill`. First run 0.874x to 1.031x, every probe NOISY on the shared desktop,
+    [`20261116T150000Z-kit-device-kv-prefill`](../perf-compare/20261116T150000Z-kit-device-kv-prefill/INDEX.md).)*
   - A change, the bounded launches landed before item 7 ([Tier 02G](TIER-02G-cuda-on-windows.md)'s item 3, option (a)):
     `gpu.kernel-timing` reads the heaviest of the launches the prefill paths split a window into, and adds a check at the
     longest window the device KV holds (32,768 tokens) against the same 500 ms bar. *(2026-11-12: in; its self-test expects
@@ -392,7 +408,11 @@ in `models/`.)*
       ([`20261115T200324Z-device-kv-tg-gate-rerun`](../perf-compare/20261115T200324Z-device-kv-tg-gate-rerun/INDEX.md)),
       CPU pinned, GPU clock recorded and matched per model, read TinyLlama 1.235x, Qwen2.5-3B 1.030x, Phi-3.5-mini 1.056x
       and Mistral 7B 1.045x. Not a bar: a 2,048-token prefill takes 1.21x to 1.31x the FP16 time (decision 6 of that
-      entry).)*
+      entry). Decisions 6 (a) and 8 (a) added a prefill bar: a 2,048-token prefill with `q8_0` <= 1.10x the FP16 time, one
+      window and 128-row windows, every sweep model, pinned. 2026-11-16, met: the owner's gate
+      ([`20261116T163811Z-device-kv-prefill-gate`](../perf-compare/20261116T163811Z-device-kv-prefill-gate/INDEX.md)), CPU
+      pinned, GPU clock recorded and matched within 25 MHz per model, read TinyLlama 0.961x / 0.961x, Qwen2.5-3B 0.944x /
+      0.912x, Phi-3.5-mini 0.877x / 0.877x and Mistral 7B 0.953x / 0.952x (one window / 128-row windows), 8 of 8.)*
 - [ ] Disk-backed session save/restore round-trips correctly across a process restart.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
@@ -2022,3 +2042,294 @@ met 2026-11-13), and TinyLlama's argmax flips more often on the text.
 
 **Next for the executor:** decision 6 (a): item 7's prefill with a quantized device KV, held to <= 1.10x the FP16 prefill
 time at 2,048 tokens on the sweep models (pinned, the owner's run), parity and quality tests unchanged.
+
+### 2026-11-15, later: decision 6 (a): item 7's prefill traced; the attention's quantized tile staging reworked (now 0.90x to 0.95x the FP16 kernel); the host KV encode found, raised with the owner
+
+**Plan against code, verified with HEAD `a4a91182`, tree clean but for the untracked `.github/` (not this session's).**
+`check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep, build or test was running. Every claim this step
+depends on held: prefill windows of more than 8 rows run in the device region on the Llama, Phi-3 and Qwen3 handlers
+(`PrefillWindowRegion.MAX_HOST_WINDOW`); a window's attention is `gqa_attention_kv_d64/_d128/_d256` at `rowsPerBlock` 32 over
+`q8_0`/`q4_0` K and V, staged into FP32 shared tiles by `gqa_stage_kv` (one `kv_load2_t` per pair: a scale read and two bytes);
+the window's device KV write is `kv_encode_kv_rows`. The four sweep models are on disk. Both attention modules rebuilt from
+source byte for byte with the local nvcc 12.0 before any edit.
+
+**The trace** ([`20261116T004641Z-device-kv-prefill-staging`](../perf-compare/20261116T004641Z-device-kv-prefill-staging/INDEX.md),
+section 2; `nvprof`, since this host's `nsys` cannot import its own traces). A new live test,
+`DeviceKvPrefillTimeLiveTest`, times a 2,048-token prompt through `forwardBatch`, the serving prefill path, one model and type
+per JVM, in one window (the local GPU surface's default chunk when the window fits) and in 128-row windows. One window, under
+the profiler:
+
+| Model | Prefill FP16 -> `q8_0` | Attention launch a layer, FP16 -> `q8_0` | Off the device |
+|---|---|---|---|
+| TinyLlama | 1,002 -> 1,339 ms (1.34x) | 14.17 -> 21.08 ms (1.49x), +152 ms a prefill | +185 ms |
+| Qwen2.5-3B | 2,267 -> 2,766 ms (1.22x) | 19.76 -> 25.35 ms (1.28x), +201 ms | +310 ms |
+| Phi-3.5-mini | 3,419 -> 6,985 ms (**2.04x**) | 36.13 -> 45.70 ms (1.26x), +306 ms | +3,274 ms |
+| Mistral 7B | 4,768 -> 6,234 ms (1.31x) | 39.87 -> 51.01 ms (1.28x), +356 ms | +1,101 ms |
+
+**Drift against decision 6's premise.** The 2026-11-15 entry put the prefill cost in "item 7's quantized prefill path (the
+tiled attention kernel over `q8_0` K and V in 128-row windows)". The kernel is 9% to 45% of it. The rest is off the device,
+about 8 ns per host KV value on every model: after each layer the region downloads the window's K and V as FP32
+(`ResidentActivation.materializeToKv`, after `chain.sync()`) and `DenseKvTensor.writeRows` encodes every row to `q8_0` on the
+CPU, one thread (`Q8_0KvCodec.encodeBlock`), while the device waits. Read alone (`host-kv-encode.txt`): 9.0 to 9.3 ns a value
+for `q8_0` against 0.27 to 0.58 ns for the `f16` host type (FP32-backed, a copy); Phi-3.5-mini (KV width 3,072, no grouping)
+pays 57 ms per tensor per layer, about 3.6 s a prefill. The host encode is the host type's cost, not the device copy's, and
+predates item 7; it is visible on the GPU because nothing overlaps it. The kernel work below cannot remove it, so the 1.10x
+bar is not reachable within decision 6's scope. Decision 7.
+
+**What changed (the kernel half of decision 6 (a)).**
+- `kv_format.cuh`: `kv_load8_t`, eight values of one block as one scale and two realigned quant words (`kv_words`), the values
+  `kv_load2_t` gives, bit for bit (the same scale times the same integer, `__fmul_rn`).
+- `gqa_attention.cuh`: `gqa_stage_kv8` stages a tile eight values of a key per thread (index stepped without a division);
+  every format pair with a quantized side takes it, `(F16, F16)` keeps `gqa_stage_kv`'s pairs. `gqa_attention_tiled` gains
+  `QDECODE` (default `QUANT`): `gqa_attention_kv_d64/_d128` are compiled without the quantized decode loop, whose rows
+  `GqaAttentionKvKernel` already sends to the wide decode entries; a row of one would still be served, by the 32-key tiles.
+  `_d256` keeps it (16-key tiles). Registers: `_d64` 196 -> 127 (the FP16 entry's count: four blocks per multiprocessor
+  instead of two), `_d128` 226 -> 217, `_d256` 245 -> 247; no spills.
+- `GqaAttentionKvKernel.launch` refuses a quantized format at a head width that is not a multiple of 32 (`DeviceKvFormat`'s
+  rule, which the handlers already apply when they select formats); the eight-value read needs it, as the decode lanes do.
+- `gqa_attention.ptx` (FP16): code unchanged; it differs from the committed PTX only in the mangled names of its shared arrays
+  (the template gained an argument), byte for byte equal once they are normalised.
+
+**Tests** (written before the kernel change):
+
+| Test | Result | What it shows |
+|---|---|---|
+| `DeviceKvQuantParityTest#prefillTileOverExactValues_isTheFp16Kernel` (new, GPU) | passed on HEAD's kernel (a regression test, not seen failing there) and on the new one | blocks whose values FP16 stores exactly (power-of-two scales, integer steps the encoders give back): a prefill window over the quantized cache equals the FP16 kernel's bit for bit, five format pairs, head widths 64, 96, 128, 256 (all three entries), windows of 40, 33 (sliding, 64) and 5 rows |
+| `DeviceKvQuantParityTest#quantizedLaunch_refusesAHeadWidthNotAMultipleOf32` (new, GPU) | failed first ("Expecting code to raise a throwable"), passes with the refusal | `rowsPerBlock` 1 and 4 at head width 36 |
+| `DeviceKvQuantParityTest` (12), `ResidentBatchDecodeTest` (22), `GqaAttentionKernelParityTest` (2), `GqaAttentionTiledTest` (9) | pass on the new kernel | the existing parity bounds, decode batches bit for bit their single decodes |
+| `DeviceKvQuantQualityLiveTest`, TinyLlama and Qwen2.5-3B, `f16`, `q8_0`, `q8_0`/`q4_0` | every printed figure equals the readings on the previous kernels | outputs unchanged (`quality-recheck.txt`) |
+
+Shown able to fail, each defect put in and taken out (`cmp` of source and PTX afterwards):
+
+| Defect | Fails |
+|---|---|
+| `kv_load8_t` takes `q4_0`'s other nibble half | `prefillTileOverExactValues_isTheFp16Kernel`, `prefillWindow_matchesTheCpu`, `slidingWindow_matchesTheCpu` |
+| `gqa_stage_kv8` drops the key step when the value index wraps | `prefillTileOverExactValues_isTheFp16Kernel` and `prefillWindow_matchesTheCpu`, on Phi-3.5-mini's head width 96 only, the one shape where the index wraps |
+
+**Readings, unpinned** (section 3 of the published entry). Attention launch a layer at a 2,048-row window, `q8_0` over FP16:
+TinyLlama 0.95x, Qwen2.5-3B 0.90x, Phi-3.5-mini 0.92x, Mistral 7B 0.91x (before 1.49x, 1.28x, 1.26x, 1.28x). Prefill time
+`q8_0` over FP16, median of five, one JVM per side, same session:
+
+| Model | One 2,048-row window | 128-row windows |
+|---|---|---|
+| TinyLlama | **1.094** (before 1.259) | **1.046** (before 1.210) |
+| Qwen2.5-3B | 1.150 | 1.076 |
+| Phi-3.5-mini | 1.835 | 1.650 |
+| Mistral 7B | 1.172 | 1.103 |
+
+Against the 1.10x bar: TinyLlama under it in both widths; the others over it by roughly what the host encode costs.
+
+**Cross-surface rows for this change.** 1 CPU: N/A (device kernel). 2 CUDA: PASS (parity, quality unchanged, the four sweep
+models timed). 3 ROCm: N/A, no ROCm attention kernel. 4 Static: PASS (the live prefill readings). 5 Continuous: its prefill
+chunks run the same region and kernel; the parity tests cover the kernel, not run live. 6 Local: PASS. 7, 8 Clusters: nodes
+run the same handlers; not run on a cluster. 9 LoRA training, 10 LoRA playback: N/A, attention on the CPU. 11 Vision: the
+text handler's GPU attention, unchanged in kind; not run live. 12, 13 REST: N/A. 14 CLI: N/A, no flag changed. 15 Embedding
+facade: unchanged.
+
+**Docs.** `docs/howto.md` (`--cache-type-k`'s prefill figures and their cause), `docs/performance.md` (the 2026-11-13
+paragraph's prefill sentence), `docs/agent-arch.txt` (`kv_load8_t`, the eight-value staging, the entries without the decode
+loop, the launcher's refusal), `CHANGELOG.md` (Session 147), `docs/perf-compare/README.md`.
+
+**Out-of-tier changes (README rule 9):** none. The kernel change is item 7's own follow-up (decision 6 (a)); the FP16 module
+was regenerated with unchanged code.
+
+**Tests run.** `DeviceKvQuantParityTest` 12 of 12 (GPU group) before the suite. The unit suite (`mvn -o test -pl
+api,tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player,juno-kit -am -Dgroups='gpu | !gpu'
+-Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 1 h 14 min): `registry` 93, `lora` 116, `kvcache` 219, `health`
+23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 417 (1 skipped) and its integer-kernel execution 1, `vision` 98,
+`metrics` 86, `juno-player` 158 (2 skipped), `juno-master` 15 and `juno-kit` 147 pass; `node` 1,620 run (the two new parity
+tests; the new prefill-time live test skipped without its property), 59 skipped, **3 failures**, in two classes, each re-run
+alone after:
+  - `DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix`, 2 of 4 (Q5_K 512x2048 round 1, row 231: -38.88 right
+    after the upload against 44.98 once the device was idle; Q6_K round 1, row 177: -5.19 against -13.95). Alone: 4 of 4 pass,
+    three runs. No class on its path is in this change. The upload race recorded in the entries above.
+  - `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`: 88,735,744 bytes reported free with the device
+    full against <= 67,108,864; alone 84,148,224. The test and `DeviceScratchBudget.ALLOCATOR_HOLDBACK_BYTES` are not in the diff;
+    the test only allocates until the driver refuses. The driver holdback recorded in the entries above. Bound not loosened.
+
+**Exit criteria:** 6 of 15, unchanged. Criterion 7 stays ticked (decision 6 (a)); the prefill bar stays open.
+
+**Owed to the owner:** no run yet. The pinned prefill A/B is prepared once decision 7 is settled: today it would fail on
+three of four models for a cause outside the kernel.
+
+**Decisions for the owner.**
+7. **The host KV encode on the prefill path** (about 9 ns a value on one thread; with the quantized attention now faster than
+   FP16's, it is all of what is left of `q8_0`'s prefill cost over FP16; 3.6 s a prefill on Phi-3.5-mini). (a) Recommended: the host KV takes the device's encoded rows.
+   When a whole layer runs in the region, the device copy already holds the window's rows in the host codec's bytes
+   (`kv_encode_kv_rows`, held equal to `Q8_0KvCodec`/`Q4_0KvCodec` byte for byte by `DeviceKvQuantParityTest`), so the region
+   downloads those bytes into the host tensor's packed storage (a packed-row write on `SessionKvTensor`, dense and paged)
+   instead of FP32 rows to encode: no CPU encode, and 34 (`q8_0`) or 18 (`q4_0`) bytes per 32 values crossing the bus instead
+   of 128. Projected, not measured: `q8_0` prefill at or under the FP16 time on all four models, since the quantized attention
+   is already faster than FP16's. Item 6 can then do the same for real FP16 host storage (the device's FP16 rows). Tests: the
+   host tensor's bytes after a region prefill equal the host codec's, every handler family, both schedules; the pinned A/B
+   after. (b) Encode on the CPU worker pool, rows across threads (CPU prefill gains too; the FP32 download stays): about
+   6x less host time at 6 threads, which leaves Phi-3.5-mini near 1.15x by the readings above, likely still over the bar.
+   (c) Score decision 6's bar on the attention launch (met, 0.90x to 0.95x), keep the prefill ratio as a reading, and leave
+   the host encode documented beside `--cache-type-k` (the docs already say it).
+8. **Which prefill the bar scores** (with 7 (a) or (b)). (a) Recommended: both widths, one 2,048-row window (the local GPU
+   default when the prompt fits) and 128-row windows (a typical `--prefill-batch`), each `q8_0` over FP16 <= 1.10x, sweep
+   models, pinned, A B A B A B per model as the decode gate ran. (b) The one-window prefill only.
+
+**Next for the executor:** decision 7; then the prefill gate (decision 8) for the owner; then decisions 5 and 4; item 6;
+step 7.
+
+**Owner decisions 2026-11-15, later.**
+- **7 (a):** a whole-layer prefill window writes the host KV from the device copy's encoded rows: where a side's device
+  format is that side's host type (`q8_0` or `q4_0`), the region downloads the window's stored blocks into the host
+  tensor's packed rows (dense and paged) instead of FP32 rows the CPU encodes; an `f16` side, and a side the device holds
+  as FP16 (a head width not a multiple of 32), keep the FP32 download. Tests: the host bytes after a region window equal
+  the host codec's encoding of the window's FP32 rows, every format pair, dense and paged.
+- **8 (a):** the prefill bar scores both widths, one 2,048-row window and 128-row windows, each `q8_0` over FP16
+  **<= 1.10x** on every sweep model, pinned, A B A B A B per model (the decode gate's protocol).
+
+**Next for the executor:** decision 7 (a); the prefill kit probe (owed with it); then the pinned prefill gate (decision 8
+(a)) for the owner; then decisions 5 and 4; item 6; step 7.
+
+### 2026-11-16: decision 7 (a): the host KV takes the device copy's encoded rows; `q8_0` prefill under the FP16 time on every sweep model (unpinned); the pinned prefill gate owed
+
+**Plan against code, verified with HEAD `a4a91182` plus the previous entry's uncommitted kernel change.**
+`check-plan-thresholds.sh` passed first (26 tier files). No gate, sweep, build or test was running. Every claim decision 7 (a)
+rests on held: a window of more than 8 rows runs whole layers in `PrefillWindowRegion.Window.runLayer`, which writes the
+window's K and V into the device copy (`DeviceKvCache.writeWindowOnDevice`, `kv_encode_kv_rows`) before its attention, then
+downloads the same K and V as FP32 (`ResidentActivation.materializeToKv`) for `writeRows` to encode on the CPU; the device
+encoder is the host codecs' arithmetic byte for byte, rounding ties included
+(`DeviceKvQuantParityTest#deviceWindowWrite_isTheHostEncoding`). No drift.
+
+**What changed.**
+- `SessionKvTensor.writeEncodedRows(startPos, rows, src, srcOffset)`: rows already in the tensor type's blocks, written as
+  they are. `DenseKvTensor`: one copy into the packed rows, a gap before `startPos` exposed as zeros as `writeRows` does.
+  `PagedKvTensor` -> `KvPageTable.writeEncodedRows`: one copy per page run; a page boundary at the end appends a new page, an
+  existing page is taken through `writablePage` (a page shared with another session is copied first); `KvBlockPool` copies
+  under its lock and refuses a shared block. An `f16` tensor refuses (its rows are floats).
+- `DeviceKvCache.encodedRowsK/V(hostType, startPos, count)`: the device rows as they are stored, where that side's device
+  format is quantized and is the host type; null otherwise (an `f16` side, or a side kept as FP16 at a head width that is not
+  a multiple of 32).
+- `ResidentActivation.materializeToKv` queues each side's download, the stored rows (JFR `juno.DeviceStaging` site
+  `materialize(<name> encoded)`, `count x rowBytes`: 34 bytes per 32 values at `q8_0`, 18 at `q4_0`) or the FP32 rows (128
+  bytes per 32 values) as before, syncs once, then writes with `writeEncodedRows` or `writeRows`. It refuses stored rows for
+  an `f16` host tensor and a download larger than the staging buffer.
+- `PrefillWindowRegion.Window.runLayer` passes the two slices. Per window and layer: two segment slices, as the window's device
+  write already takes; nothing per row.
+
+**Tests:**
+
+| Test | Result | What it shows |
+|---|---|---|
+| `PrefillRegionEncodedKvTest` (new, GPU; dense and paged) | failed first on HEAD's region (the download counts; the stored bytes already equal), passes after | a synthetic region (8 heads, 4 KV heads, head width 64) prefilled in two windows (40 rows, then 24): the host tensor's bytes equal those the FP32 rows written through `writeRows` give, seven device and host format pairs (`q8_0`/`q8_0`, `q8_0`/`q4_0`, `q4_0`/`q4_0`, `f16`/`q8_0`, `q4_0`/`f16`, an FP16 device copy over `q8_0`/`q4_0` hosts, `f16`/`f16`); a quantized side downloads stored rows only (two copies, 64 x row bytes), every other side FP32 rows only |
+| `KvWriteEncodedRowsTest` (new, 9) | passes; written with the method, shown able to fail below | dense and paged, `q8_0` and `q4_0`, starting inside a page, at 0 and on a page boundary; a reused dense tensor's gap reads zeros; a page shared with another session is copied before the write and the other session's rows stay; `f16` refused |
+| `GpuKvPrefillProbeTest` (new, 5), `ProbeCatalogTest` 5, `CoverageTest` 7, `GpuKvQualityProbeTest` 5 | pass | the kit probe below: its parse, readings and ratio, a missing width, and the checks that refuse to read another path's time |
+| `ProbeSelfTests#gpuKvPrefillProbeFailsWhereTheDeviceCopyIsNotInTheSelectedFormats` (new, CUDA) | passes | on the synthetic model (head width 16, an FP16 device copy) the probe fails with the handler's warning instead of reading |
+| 17 neighbouring `node` classes, GPU group (139 tests); `kvcache` 228 of 228 | pass | |
+| `DeviceKvQuantQualityLiveTest`, TinyLlama, Qwen2.5-3B, Phi-3.5-mini, `f16`, `q8_0`, `q8_0`/`q4_0` | every printed figure equals the previous readings | outputs unchanged (`quality-recheck.txt`) |
+
+Shown able to fail, each defect put in and taken out (`cmp` of the source afterwards):
+
+| Defect | Fails |
+|---|---|
+| `DenseKvTensor.writeEncodedRows` without the gap's zeros | `KvWriteEncodedRowsTest.denseReused`, `q8_0` and `q4_0` |
+| `KvPageTable.writeEncodedRows` writes the page in place (`blockIds.get`, not `writablePage`) | `pagedSharedPages`, both types (the pool refuses: "block 2 is shared by 2 holders and cannot be written") |
+| a page run's length ignores the slot it starts at | `paged` and `pagedSharedPages`, both types (the pool refuses: "slots [5, 21) outside a page of 16") |
+| the region passes K's stored rows for the V side | `PrefillRegionEncodedKvTest.dense` and `.paged` (the V bytes) |
+| `DeviceKvCache.encodedRows` slices from row 0, not from the window's start | `PrefillRegionEncodedKvTest.dense` and `.paged` (the second window's K bytes) |
+
+**Readings, unpinned**
+([`20261116T032708Z-device-kv-prefill-encoded-rows`](../perf-compare/20261116T032708Z-device-kv-prefill-encoded-rows/INDEX.md)).
+Prefill time of the 2,048-token quality text through `forwardBatch`, median of five, one JVM per model and type, same
+session, `q8_0` over FP16:
+
+| Model | One 2,048-row window | 128-row windows | `q8_0`/`q4_0`, one window / 128 |
+|---|---|---|---|
+| TinyLlama | **0.938** (before 1.094) | **0.926** (before 1.046) | 0.956 / 0.927 |
+| Qwen2.5-3B | **0.989** (1.150) | **0.971** (1.076) | 1.018 / 1.002 |
+| Phi-3.5-mini | **0.895** (1.835) | **0.895** (1.650) | 0.891 / 0.895 |
+| Mistral 7B | **0.938** (1.172) | **0.948** (1.103) | 0.933 / 0.949 |
+
+Under the 1.10x bar on every sweep model at both widths, unpinned; the owner's pinned gate scores it.
+
+**The kit probe** ([`20261116T150000Z-kit-device-kv-prefill`](../perf-compare/20261116T150000Z-kit-device-kv-prefill/INDEX.md)):
+`gpu.kv-prefill.<model>` (new; `GpuKvPrefillProbe`, child `KvPrefillRunMain`; `coverage.tsv` row
+`feature:device-kv-prefill`) prefills the 2,048-token text with the handler on CUDA at `f16` then `q8_0`, both widths, and
+reads the ratio of medians. It refuses to read unless both runs opened GPU attention and the device prefill region and the
+`q8_0` handler logged its copy in the selected formats. First run, reference host, every probe NOISY (the desktop used 5% to
+12% of the CPU, three attempts each): all 24 ratios 0.874x to 1.031x; the device copy logged as `q8_0` on every run. The
+catalog takes its costs (28, 52, 73, 100 s at the reference speed) and device peaks (1,172 to 5,266 MiB) from this run.
+
+**Cross-surface rows for this change.** 1 CPU: N/A, the CPU path writes rows as before (`writeRows`). 2 CUDA: PASS (the
+region test, the four sweep models timed, quality unchanged on three). 3 ROCm: N/A, no ROCm device KV attention, so no
+region download changes. 4 Static: PASS (dense tensor, the live readings). 5 Continuous: the paged write is covered by
+`PrefillRegionEncodedKvTest.paged` and `KvWriteEncodedRowsTest`; not run live (no live test runs the continuous schedule on
+the GPU with a quantized KV). 6 Local: PASS. 7, 8 Clusters: nodes run the same handlers; not run on a cluster. 9 LoRA
+training, 10 LoRA playback: N/A, attention on the CPU. 11 Vision: the text handler's region, unchanged in kind; not run
+live. 12, 13 REST: N/A. 14 CLI: N/A, no flag changed. 15 Embedding facade: unchanged.
+
+**Docs.** `docs/howto.md` (`--cache-type-k`: the type costs no time to first token, with the figures), `docs/performance.md`
+(the readings and their cite), `docs/agent-arch.txt` (`writeEncodedRows`, the region's stored-row download, the kit probe),
+`CHANGELOG.md` (Session 148), `docs/perf-compare/README.md`; the kit's `coverage.tsv` (`feature:device-kv-prefill`).
+
+**Out-of-tier changes (README rule 9):** none.
+
+**Tests run.** The unit suite (`mvn -o test -pl
+api,tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player,juno-kit -am -Dgroups='gpu | !gpu'
+-Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 1 h 19 min): `registry` 93, `lora` 116, `kvcache` 228 (the
+nine new), `health` 23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 417 (1 skipped) and its integer-kernel
+execution 1, `vision` 98, `metrics` 86, `juno-player` 158 (2 skipped) and `juno-master` 15 pass; `node` 1,622 run (the two
+new region tests), 59 skipped, **3 failures**; `juno-kit` 153 run (the six new), **1 failure**. Each failing class re-run
+alone after:
+  - `DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix`, 2 of 4 (Q5_K 512x2048 round 1, row 259: 5.51 right
+    after the upload against -19.85 once the device was idle; Q6_K round 1, row 182: -32.79 against -44.76). Alone: 4 of 4
+    pass, two runs. The upload race recorded in the entries above; no class on its path is in this change.
+  - `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`: 84,541,440 bytes reported free with the
+    device full against <= 67,108,864, in the suite and alone (two runs). The driver holdback recorded in the entries above;
+    neither the test nor `DeviceScratchBudget` is in the diff. Bound not loosened.
+  - `ProbeRunnerTest.aProbeRunsInItsOwnJvmAndLeavesItsReportAndLog`: the runner re-ran `EnvProbe` and reported NOISY because
+    other processes used 12% of the CPU (desktop programs: an editor, a browser, a game client); alone 3 of 3 the same, at
+    15% to 51%. The test asserts one attempt and a DONE status, which a busy desktop prevents; `EnvProbe` and the runner are
+    not in this change (147 of 147 passed in the previous entry's suite on a quieter desktop). Not changed.
+
+**Exit criteria:** 6 of 15, unchanged. The prefill bar (decisions 6 (a) and 8 (a)) stays open until the owner's gate.
+
+**Owed to the owner:** the pinned prefill gate, `bash dist/device-kv-prefill/wait-and-run.sh`, started in a terminal left
+open (it asks for sudo once, waits for `dist/device-kv-prefill/READY` and for no Maven or test process, checks the tree is
+the one READY names, then runs `run-gate.sh`): per sweep model six JVMs, A B A B A B (A `f16`, B `q8_0`), each the
+2,048-token prefill in one window and in 128-row windows, one warm-up and five measured repetitions; CPU governor
+performance, turbo off, the GPU clock lock requested at 1,300 MHz and recorded per JVM (this host's driver accepts it without
+applying it), the card cooled to 65 C before each JVM. About 1 to 1.5 h. The desktop's programs (a browser, an editor, a game
+client) used 5% to 51% of the CPU through this entry's runs; closing them before the gate keeps both sides alike. Results: `dist/device-kv-prefill/runs/<UTC>/results.txt`,
+eight `RESULT` lines (four models, two widths), each PASS at a ratio <= 1.10.
+
+**Decisions for the owner:** none.
+
+**Next for the executor:** the owner's prefill gate: publish it and score the prefill bar; then decisions 5 and 4 (the
+out-of-tier follow-ups); item 6; step 7.
+
+### 2026-11-16, later: the owner's prefill gate passes on every sweep model at both widths; item 7's prefill bar met
+
+**The run** ([`20261116T163811Z-device-kv-prefill-gate`](../perf-compare/20261116T163811Z-device-kv-prefill-gate/INDEX.md)):
+`dist/device-kv-prefill/run-gate.sh`, owner run 2026-11-16T16:38Z, started by the waiter on `READY`. The tree hash it
+checked (`head a4a91182...`, `diff 023fd7eb880c6512`) still matched after the run, so the gate measured the tree the entry
+above tested. CPU pinned (performance, turbo off); the GPU lock was requested and not applied, as on every run on this card,
+so the clock was recorded: each model's two sides ran within 25 MHz of each other's median loaded clock, the `q8_0` side the
+lower and warmer, at the same memory clock. All 24 JVMs passed their test and logged no Juno warning.
+
+| Model | One 2,048-row window | 128-row windows |
+|---|---|---|
+| TinyLlama | **0.9608** | **0.9609** |
+| Qwen2.5-3B | **0.9443** | **0.9122** |
+| Phi-3.5-mini | **0.8772** | **0.8769** |
+| Mistral 7B | **0.9525** | **0.9515** |
+
+`q8_0` over FP16, median of three JVMs per side, A B A B A B; bar <= 1.10x: 8 of 8 pass. Every `q8_0` JVM is faster than
+every FP16 JVM on every model at both widths (the slowest `q8_0` over the fastest FP16 at most 0.982).
+
+**Docs.** `docs/howto.md` (`--cache-type-k`: the pinned figures), `docs/performance.md` (the gate and its cite),
+`CHANGELOG.md` (Session 148's figures), `docs/perf-compare/README.md`; exit criterion 7's note.
+
+**Exit criteria:** 6 of 15. Criterion 7 stays ticked, now with its prefill bar met (decisions 6 (a) and 8 (a)).
+
+**Owed to the owner:** nothing.
+
+**Decisions for the owner:** none.
+
+**Next for the executor:** decisions 5 (a) and 4 (a), the out-of-tier follow-ups under README rule 9 (the FP16 decode
+attention taking the wide decode block; the FFN gate and up GEMVs reading the q8_1 input once for two rows), each with its
+own A/B and gates; then item 6 (exact host KV growth and real FP16 host storage, exit criterion 6); then step 7.

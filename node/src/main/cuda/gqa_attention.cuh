@@ -97,6 +97,54 @@ static __device__ __forceinline__ void gqa_stage_kv(float* Ks, float* Vs, int LD
     }
 }
 
+/*
+ * Stages the same tile as gqa_stage_kv, eight values of a key a thread at a time (kv_load8_t: one scale and two
+ * quant words per eight values, where gqa_stage_kv reads a scale and two bytes per pair), so the tile holds the same
+ * floats in far fewer loads and address computations. Needs a head width that is a multiple of 8, which every
+ * quantized format's multiple of 32 is. Unit u = t * nOcts + c is values 8c .. 8c + 7 of key t0 + t; t and c step
+ * by the block's stride without a division.
+ */
+template <int KT, int VT>
+static __device__ __forceinline__ void gqa_stage_kv8(float* Ks, float* Vs, int LD, const unsigned char* Kb,
+        const unsigned char* Vb, int kvDim, int kElemBase, int t0, int hi, int nOcts, int tileOcts, int tid) {
+    int t = tid / nOcts;
+    int c = tid - t * nOcts;
+    const int dt = GQA_THREADS / nOcts;
+    const int dc = GQA_THREADS - dt * nOcts;
+    for (int u = tid; u < tileOcts; u += GQA_THREADS) {
+        const int pos = t0 + t;
+        float4 k0 = make_float4(0.f, 0.f, 0.f, 0.f);
+        float4 k1 = k0, v0 = k0, v1 = k0;
+        if (pos < hi) {
+            const int e = kElemBase + 8 * c;
+            kv_load8_t<KT>(kv_row_t<KT>(Kb, kvDim, pos), e, k0, k1);
+            kv_load8_t<VT>(kv_row_t<VT>(Vb, kvDim, pos), e, v0, v1);
+        }
+        float4* kd = reinterpret_cast<float4*>(Ks + t * LD + 8 * c);
+        float4* vd = reinterpret_cast<float4*>(Vs + t * LD + 8 * c);
+        kd[0] = k0;
+        kd[1] = k1;
+        vd[0] = v0;
+        vd[1] = v1;
+        c += dc;
+        t += dt;
+        if (c >= nOcts) {
+            c -= nOcts;
+            t++;
+        }
+    }
+}
+
+/* A tile of the pair (KT, VT): eight values at a time when either side is quantized, else gqa_stage_kv's pairs. */
+template <int KT, int VT, int TILE>
+static __device__ __forceinline__ void gqa_stage_pair(float* Ks, float* Vs, int LD, const unsigned char* Kb,
+        const unsigned char* Vb, int kvDim, int kElemBase, int t0, int hi, int headDim, int tid) {
+    if constexpr (KT == KV_F16 && VT == KV_F16)
+        gqa_stage_kv<KT, VT>(Ks, Vs, LD, Kb, Vb, kvDim, kElemBase, t0, hi, headDim >> 1, TILE * (headDim >> 1), tid);
+    else
+        gqa_stage_kv8<KT, VT>(Ks, Vs, LD, Kb, Vb, kvDim, kElemBase, t0, hi, headDim >> 3, TILE * (headDim >> 3), tid);
+}
+
 #define GQA_KV_PAIRS(X) \
     X(KV_F16, KV_F16) X(KV_F16, KV_Q8_0) X(KV_F16, KV_Q4_0) \
     X(KV_Q8_0, KV_F16) X(KV_Q8_0, KV_Q8_0) X(KV_Q8_0, KV_Q4_0) \
@@ -116,12 +164,13 @@ static __device__ __forceinline__ void gqa_decode_kv_dispatch(int kType, int vTy
 #undef GQA_DECODE_CASE
 }
 
+template <int TILE>
 static __device__ __forceinline__ void gqa_stage_kv_dispatch(int kType, int vType, float* Ks, float* Vs, int LD,
-        const unsigned char* Kb, const unsigned char* Vb, int kvDim, int kElemBase, int t0, int hi, int nPairs,
-        int tileElems, int tid) {
+        const unsigned char* Kb, const unsigned char* Vb, int kvDim, int kElemBase, int t0, int hi, int headDim,
+        int tid) {
 #define GQA_STAGE_CASE(K, V) \
     case K * 3 + V: \
-        gqa_stage_kv<K, V>(Ks, Vs, LD, Kb, Vb, kvDim, kElemBase, t0, hi, nPairs, tileElems, tid); \
+        gqa_stage_pair<K, V, TILE>(Ks, Vs, LD, Kb, Vb, kvDim, kElemBase, t0, hi, headDim, tid); \
         break;
     switch (kType * 3 + vType) { GQA_KV_PAIRS(GQA_STAGE_CASE) }
 #undef GQA_STAGE_CASE
@@ -141,7 +190,13 @@ static __device__ __forceinline__ int gqa_quad(int lane, int i, int rowsPerBlock
     return lane + GQA_LANES * i;
 }
 
-template <int DMAX, int TILE, bool QUANT>
+/*
+ * QDECODE (QUANT only): whether rows of one (rowsPerBlock 1) run the quantized decode loop. The 64- and 128-wide
+ * quantized entries leave it out, since GqaAttentionKvKernel sends their decode rows to the wide decode entries:
+ * its nine format pairs cost the prefill tiles registers (and blocks per multiprocessor) they never use. Without
+ * it the tiles serve a row of one as well: at TILE = 32 each of the 32 slots takes one key of a tile.
+ */
+template <int DMAX, int TILE, bool QUANT, bool QDECODE = QUANT>
 static __device__ __forceinline__ void gqa_attention_tiled(
         const float* __restrict__ qBatch,
         const half* const* __restrict__ kPtrs,
@@ -153,6 +208,8 @@ static __device__ __forceinline__ void gqa_attention_tiled(
     constexpr int QUADS = DMAX / 4 / GQA_LANES;   // groups of four values per lane, at most
     constexpr int LD = GqaTile<DMAX, TILE>::LD;
     static_assert(2 * TILE * LD >= GQA_SLOTS * DMAX, "tiles double as the merge buffer");
+    constexpr bool TILES_ONLY = QUANT && !QDECODE;
+    static_assert(!TILES_ONLY || TILE >= GQA_SLOTS, "a row of one needs a key per slot in each tile");
 
     // K tile, V tile (FP32); reused as the merge buffer ([slot][DMAX] floats) at the end.
     __shared__ __align__(16) float tiles[2 * GqaTile<DMAX, TILE>::FLOATS];
@@ -200,7 +257,7 @@ static __device__ __forceinline__ void gqa_attention_tiled(
     const float4* q4 = reinterpret_cast<const float4*>(qBatch + ((size_t)b * numHeads + h) * headDim);
 #pragma unroll
     for (int i = 0; i < QUADS; i++) {
-        const int c = gqa_quad<QUANT, QUADS>(lane, i, rowsPerBlock);
+        const int c = gqa_quad<QUANT && QDECODE, QUADS>(lane, i, rowsPerBlock);
         float4 v = make_float4(0.f, 0.f, 0.f, 0.f);
         if (rowValid && c < nQuads) {
             v = q4[c];
@@ -228,9 +285,11 @@ static __device__ __forceinline__ void gqa_attention_tiled(
 
     if constexpr (QUANT) {
         // Decode over a quantized cache: the loop below, with the formats fixed at compile time.
-        if (rowsPerBlock == 1)
-            gqa_decode_kv_dispatch<DMAX, GQA_SLOTS>(kType, vType, qv, acc, runMax, runSum, Kb, Vb, kvDim, kElemBase, lane, split,
-                    lo, seqLen, rangeLo, hi, nQuads);
+        if constexpr (QDECODE) {
+            if (rowsPerBlock == 1)
+                gqa_decode_kv_dispatch<DMAX, GQA_SLOTS>(kType, vType, qv, acc, runMax, runSum, Kb, Vb, kvDim, kElemBase,
+                        lane, split, lo, seqLen, rangeLo, hi, nQuads);
+        }
     } else if (rowsPerBlock == 1) {
         // Decode: one row, so no other row shares a staged key. Each slot reads its keys
         // straight from global memory: slot s takes keys base + s, base + s + 32, ... with
@@ -285,10 +344,10 @@ static __device__ __forceinline__ void gqa_attention_tiled(
         }
     }
 
-    for (int t0 = (rangeLo / TILE) * TILE; rowsPerBlock > 1 && t0 < hi; t0 += TILE) {
+    for (int t0 = (rangeLo / TILE) * TILE; (TILES_ONLY || rowsPerBlock > 1) && t0 < hi; t0 += TILE) {
         __syncthreads(); // the previous tile is no longer read
         if constexpr (QUANT) {
-            gqa_stage_kv_dispatch(kType, vType, Ks, Vs, LD, Kb, Vb, kvDim, kElemBase, t0, hi, nPairs, tileElems, tid);
+            gqa_stage_kv_dispatch<TILE>(kType, vType, Ks, Vs, LD, Kb, Vb, kvDim, kElemBase, t0, hi, headDim, tid);
         } else {
             for (int e = tid; e < tileElems; e += GQA_THREADS) {
                 const int t = e / nPairs;
@@ -382,7 +441,7 @@ static __device__ __forceinline__ void gqa_attention_tiled(
     }
 #pragma unroll
     for (int i = 0; i < QUADS; i++) {
-        const int c = gqa_quad<QUANT, QUADS>(lane, i, rowsPerBlock);
+        const int c = gqa_quad<QUANT && QDECODE, QUADS>(lane, i, rowsPerBlock);
         if (c < nQuads)
             *reinterpret_cast<float4*>(mergeAcc + slot * DMAX + 4 * c) = acc[i];
     }

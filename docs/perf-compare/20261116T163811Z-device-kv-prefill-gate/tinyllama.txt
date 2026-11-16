@@ -1,0 +1,18 @@
+[A1] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=796.60 reps=[857.626015, 846.091615, 795.315786, 796.597723, 790.166225]
+[A1] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=1093.55 reps=[1093.554124, 1114.341327, 1106.095693, 1073.094178, 1063.305397]
+[A1] CLOCK start=47 C after 0s loaded_samples=22 below_lock=0 above_lock=22 lock NOT applied (clock recorded, not fixed) hottest=67C reasons=0x0000000000000004:2 0x0000000000000000:20 
+[B1] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=763.20 reps=[868.969601, 763.200507, 837.396414, 760.405931, 761.006146]
+[B1] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=1026.99 reps=[1057.502408, 1026.99368, 1090.783202, 1017.610535, 1020.497708]
+[B1] CLOCK start=57 C after 0s loaded_samples=22 below_lock=0 above_lock=22 lock NOT applied (clock recorded, not fixed) hottest=71C reasons=0x0000000000000004:4 0x0000000000000000:18 
+[A2] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=791.72 reps=[927.915061, 791.715475, 796.645862, 787.024634, 788.920757]
+[A2] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=1065.64 reps=[1093.842675, 1085.478872, 1065.638713, 1064.732586, 1064.273862]
+[A2] CLOCK start=61 C after 0s loaded_samples=22 below_lock=0 above_lock=22 lock NOT applied (clock recorded, not fixed) hottest=72C reasons=0x0000000000000000:22 
+[B2] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=765.35 reps=[876.460182, 870.673251, 763.956075, 763.192495, 765.348429]
+[B2] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=1046.10 reps=[1142.207762, 1046.102789, 1063.114217, 1024.60068, 1025.63922]
+[B2] CLOCK start=63 C after 0s loaded_samples=22 below_lock=0 above_lock=22 lock NOT applied (clock recorded, not fixed) hottest=76C reasons=0x0000000000000004:4 0x0000000000000000:18 
+[A3] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=850.38 reps=[928.959823, 891.663347, 850.377315, 794.18788, 792.127623]
+[A3] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=1080.78 reps=[1194.321158, 1153.441464, 1076.432139, 1080.776765, 1073.314617]
+[A3] CLOCK start=61 C after 5s loaded_samples=24 below_lock=0 above_lock=24 lock NOT applied (clock recorded, not fixed) hottest=76C reasons=0x0000000000000004:2 0x0000000000000000:22 
+[B3] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=771.03 reps=[868.182997, 766.5269, 769.220264, 782.710842, 771.03097]
+[B3] DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=1038.50 reps=[1053.192805, 1038.499621, 1030.559897, 1027.6672, 1047.067344]
+[B3] CLOCK start=64 C after 5s loaded_samples=23 below_lock=0 above_lock=23 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000004:6 0x0000000000000000:17 

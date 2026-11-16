@@ -19,6 +19,7 @@ import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -329,7 +330,127 @@ class DeviceKvQuantParityTest {
 		}
 	}
 
+	@Test
+	@DisplayName("a prefill tile over quantized rows whose values FP16 holds exactly is the FP16 kernel bit for bit")
+	void prefillTileOverExactValues_isTheFp16Kernel() {
+		// Every value is q * 2^-k with an integer q the encoder reproduces, so the q8_0 and q4_0 blocks decode to
+		// exactly the floats an FP16 cache holds: the tiles a prefill window stages are the same either way, and the
+		// arithmetic after staging is shared, so any staging defect (wrong element, block, scale or nibble) shows here
+		// as a bit difference.
+		int[][] windows = { { 37, 40, 0 }, { 200, 33, 64 }, { 3, 5, 0 } }; // startPos, rows, sliding window
+		for (Shape shape : SHAPES) {
+			int kvDim = shape.kvDim();
+			for (DeviceKvFormats f : QUANTIZED) {
+				for (int[] win : windows) {
+					int startPos = win[0];
+					int w = win[1];
+					int rows = startPos + w;
+					Random rng = new Random(shape.name().hashCode() * 13 + f.hashCode() + startPos);
+					float[][] k = exactRows(rng, rows, kvDim, f.k());
+					float[][] v = exactRows(rng, rows, kvDim, f.v());
+					assertThat(hostValues(f.k(), k, kvDim)).as("K values survive the host codec").isEqualTo(flatten(k));
+					assertThat(hostValues(f.v(), v, kvDim)).as("V values survive the host codec").isEqualTo(flatten(v));
+					float[][] q = gaussianRows(rng, w, shape.numHeads() * shape.headDim());
+					float[][] fp16Out = attendWindow(shape, DeviceKvFormats.F16, k, v, q, startPos, win[2]);
+					float[][] quantOut = attendWindow(shape, f, k, v, q, startPos, win[2]);
+					for (int b = 0; b < w; b++)
+						for (int i = 0; i < fp16Out[b].length; i++)
+							assertThat(Float.floatToRawIntBits(quantOut[b][i]))
+									.as("%s %s start %d rows %d window %d row %d [%d]", shape.name(), f.summary(),
+											startPos, w, win[2], b, i)
+									.isEqualTo(Float.floatToRawIntBits(fp16Out[b][i]));
+				}
+			}
+		}
+	}
+
+	@Test
+	@DisplayName("the quantized kernel refuses a head width that is not a multiple of 32, as DeviceKvFormat does")
+	void quantizedLaunch_refusesAHeadWidthNotAMultipleOf32() {
+		// kvDim 288 is whole blocks, so the formats store it; a head of 36 puts heads across block boundaries, which
+		// the decode lanes and the eight-value prefill reads do not handle.
+		int headDim = 36;
+		int numHeads = 8;
+		int kvDim = 8 * headDim;
+		int batch = 4;
+		Random rng = new Random(5);
+		GpuBindings gpu = ctx.bindings();
+		try (DeviceKvCache cache = new DeviceKvCache(ctx, kvDim, DeviceKvCache.INITIAL_SEQ_CAPACITY, Q8);
+				Arena arena = Arena.ofConfined()) {
+			cache.appendWindow(0, gaussianRows(rng, batch, kvDim), gaussianRows(rng, batch, kvDim), batch);
+			long qBytes = (long) batch * numHeads * headDim * Float.BYTES;
+			long ptrBytes = batch * ADDRESS.byteSize();
+			MemorySegment dQ = gpu.deviceMalloc(ctx.deviceIndex(), qBytes);
+			MemorySegment dOut = gpu.deviceMalloc(ctx.deviceIndex(), qBytes);
+			MemorySegment dTables = gpu.deviceMalloc(ctx.deviceIndex(), 2 * ptrBytes + batch * Integer.BYTES);
+			try {
+				MemorySegment ht = arena.allocate(2 * ptrBytes + batch * Integer.BYTES, 8);
+				for (int b = 0; b < batch; b++) {
+					ht.setAtIndex(ADDRESS, b, cache.kPointer());
+					ht.setAtIndex(ADDRESS, batch + b, cache.vPointer());
+					ht.set(JAVA_INT, 2 * ptrBytes + (long) b * Integer.BYTES, b + 1);
+				}
+				DeviceStaging.copy(gpu, dTables, ht, ht.byteSize(), GpuBindings.H2D, 0, "test tables");
+				for (int rowsPerBlock : new int[] { 1, 4 })
+					assertThatThrownBy(() -> GqaAttentionKvKernel.tryLoad().launch(dQ, dTables, dTables.asSlice(ptrBytes),
+							dTables.asSlice(2 * ptrBytes), dOut, batch, numHeads, 1, headDim, kvDim, rowsPerBlock, 0, Q8,
+							null)).as("rowsPerBlock " + rowsPerBlock).isInstanceOf(IllegalArgumentException.class)
+							.hasMessageContaining("multiple of 32");
+			} finally {
+				download(gpu, dOut, 1, arena); // waits for anything launched on the default stream
+				gpu.deviceFree(dQ);
+				gpu.deviceFree(dOut);
+				gpu.deviceFree(dTables);
+			}
+		}
+	}
+
 	// ---- helpers --------------------------------------------------------------------------------------------------
+
+	/** A prefill window of {@code q.length} rows from {@code startPos} over one cache of {@code f}, on the GPU. */
+	private float[][] attendWindow(Shape shape, DeviceKvFormats f, float[][] k, float[][] v, float[][] q, int startPos,
+			int window) {
+		int w = q.length;
+		try (DeviceKvCache cache = new DeviceKvCache(ctx, shape.kvDim(), DeviceKvCache.INITIAL_SEQ_CAPACITY, f)) {
+			cache.appendWindow(0, k, v, k.length);
+			int[] seqLens = new int[w];
+			DeviceKvCache[] perRow = new DeviceKvCache[w];
+			for (int b = 0; b < w; b++) {
+				seqLens[b] = startPos + b + 1;
+				perRow[b] = cache;
+			}
+			float[][] out = new float[w][];
+			boolean ok = CudaGqaAttention.tryCreate(ctx).attendBatched(perRow, q, seqLens, out, shape.numHeads(),
+					shape.headDim(), shape.gqaRatio(), shape.kvDim(), window);
+			assertThat(ok).as("kernel must load").isTrue();
+			return out;
+		}
+	}
+
+	/**
+	 * Rows whose every 32-value block is {@code q * 2^-e} for integers the host encoder of {@code format} gives back
+	 * unchanged: for q8_0 one value per block at +-127 (so the scale is exactly 2^-e) and the rest in [-127, 127];
+	 * for q4_0 one value at -8 (the block's first largest magnitude, scale 2^-e) and the rest in [-7, 7]. FP16 holds
+	 * each value exactly (at most 8 significant bits), so an FP16 cache stores the same floats. An FP16 format gets
+	 * the q8_0 construction.
+	 */
+	private static float[][] exactRows(Random rng, int rows, int kvDim, DeviceKvFormat format) {
+		boolean q4 = format == DeviceKvFormat.Q4_0;
+		float[][] out = new float[rows][kvDim];
+		for (int r = 0; r < rows; r++) {
+			for (int b = 0; b < kvDim; b += 32) {
+				float scale = Math.scalb(1f, -(3 + rng.nextInt(6)));
+				int peak = rng.nextInt(32);
+				for (int i = 0; i < 32; i++) {
+					int qv = q4 ? rng.nextInt(15) - 7 : rng.nextInt(255) - 127;
+					if (i == peak)
+						qv = q4 ? -8 : (rng.nextBoolean() ? 127 : -127);
+					out[r][b + i] = qv * scale;
+				}
+			}
+		}
+		return out;
+	}
 
 	private void runStreams(Shape shape, DeviceKvFormats f, int[] positions, int window) {
 		int kvDim = shape.kvDim();

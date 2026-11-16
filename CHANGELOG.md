@@ -1,5 +1,34 @@
 ## Status 
 
+**Session 148** - A quantized GPU KV copy no longer costs prefill time: the host copy takes the blocks the GPU encoded
+
+- **No second encode.** When a prefill window runs a whole layer on the GPU, the host copy of the KV now takes the
+  `q8_0`/`q4_0` blocks the GPU's KV write already encoded (with the host codec's own arithmetic, so the host holds the
+  bytes it held before), downloaded as they are, instead of FP32 rows encoded again on one CPU thread while the GPU
+  waited. A quarter of the bytes cross the bus at `q8_0`. Both schedules: the dense KV in one copy, the paged KV one
+  copy per page. An `f16` side, and a model whose head width keeps an FP16 GPU copy, download FP32 rows as before.
+- **Time to first token.** A 2,048-token prefill with `q8_0`, clocks pinned, in one window: 0.96x the FP16 time on
+  TinyLlama, 0.94x on Qwen2.5-3B, 0.88x on Phi-3.5-mini (was 1.84x unpinned), 0.95x on Mistral 7B; in 128-token chunks
+  0.88x to 0.96x. Every `q8_0` run of the owner's gate was faster than every FP16 run. Outputs, NLL and greedy agreement are unchanged (re-checked on TinyLlama, Qwen2.5-3B and Phi-3.5-mini).
+- **Hardware kit.** `gpu.kv-prefill.<model>` reads the prefill time with `q8_0` against `f16` on each sweep model, in
+  one window and in 128-token windows, and fails rather than reading another path when GPU attention, the device prefill
+  region or the selected device formats did not open. First run on the reference host: 0.87x to 1.03x.
+
+**Session 147** - Prefill over a quantized GPU KV copy: the attention kernel now runs faster than over the FP16 copy
+
+- **Prefill attention over `q8_0`/`q4_0`.** A prefill window's attention stages each tile of keys and values eight values
+  per thread and read (one block scale and two quant words for eight values, where it read a scale and two bytes per
+  pair), and the 64- and 128-wide kernels no longer carry the decode loop their decode rows never take (TinyLlama's
+  kernel: 196 registers to 127). At a 2,048-token window the attention launch takes 0.90x to 0.95x the FP16 kernel's
+  time on TinyLlama, Qwen2.5-3B, Phi-3.5-mini and Mistral 7B (it took 1.26x to 1.49x). The staged values are the
+  same floats, so outputs, NLL and greedy agreement are unchanged, bit for bit; the FP16 kernels are unchanged.
+- **Time to first token.** A 2,048-token prefill with `q8_0`, unpinned, in one window: 1.09x the FP16 time on
+  TinyLlama (was 1.26x), 1.15x on Qwen2.5-3B, 1.17x on Mistral 7B, 1.84x on Phi-3.5-mini; in 128-token chunks 1.05x to
+  1.10x, Phi-3.5-mini 1.65x. What remains is the host copy of the KV being encoded to `q8_0` on the CPU after each
+  layer, which grows with the KV width (Phi-3.5-mini has 32 KV heads).
+- **Fail closed.** The quantized attention launcher refuses a head width that is not a multiple of 32, the width every
+  quantized device format needs (the handlers already keep an FP16 copy for such models).
+
 **Session 146** - The GPU's copy of the KV cache is stored in the `--cache-type-k/-v` types: about half the device memory at `q8_0`
 
 - **The device KV follows `--cache-type-k/-v`.** On a CUDA launch with GPU attention, `q8_0` and `q4_0` now apply to the

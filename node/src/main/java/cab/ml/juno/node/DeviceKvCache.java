@@ -19,6 +19,8 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.concurrent.atomic.AtomicLong;
 
+import cab.ml.juno.kvcache.KvElementType;
+
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 
 /**
@@ -52,7 +54,10 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
  * exactly as before (preserving CPU fallback, paged/continuous KV, quantized
  * KV, and cluster eviction/restore paths untouched); this class only receives
  * an additional copy of the same pre-quantization row when the GPU attention
- * path is active for a GPU-resident layer.
+ * path is active for a GPU-resident layer. A whole-layer prefill window runs the
+ * other way round for a quantized side: the device encodes the window's rows here
+ * first ({@link #writeWindowOnDevice}), and the host tensor takes those blocks
+ * ({@link #encodedRowsK}), the same bytes its own codec would have written.
  *
  * <p>Growth is grow-and-preserve (not grow-and-discard like per-call scratch
  * buffers): KV history is irreplaceable, so growing allocates a larger device
@@ -370,6 +375,35 @@ final class DeviceKvCache implements AutoCloseable {
 			throw new IllegalStateException("DeviceKvCache already closed");
 		if (startPos <= validTokens && startPos + count > validTokens)
 			validTokens = startPos + count;
+	}
+
+	/**
+	 * The device address of K rows {@code [startPos, startPos + count)} when they are, byte for
+	 * byte, the rows a host KV tensor of {@code hostType} stores; otherwise {@code null}. A
+	 * quantized side of that type holds the host codec's blocks ({@link DeviceKvFormat}); an
+	 * FP16 side holds the FP16 rounding of the host's FP32 rows, so it never does. Lets a prefill
+	 * window download the rows {@link #writeWindowOnDevice} encoded instead of encoding them again
+	 * on the host ({@link ResidentActivation#materializeToKv}).
+	 */
+	MemorySegment encodedRowsK(KvElementType hostType, int startPos, int count) {
+		return encodedRows(dK, formats.k(), kRowBytes, hostType, startPos, count);
+	}
+
+	/** As {@link #encodedRowsK}, for the V rows. */
+	MemorySegment encodedRowsV(KvElementType hostType, int startPos, int count) {
+		return encodedRows(dV, formats.v(), vRowBytes, hostType, startPos, count);
+	}
+
+	private MemorySegment encodedRows(MemorySegment d, DeviceKvFormat format, long rowBytes, KvElementType hostType,
+			int startPos, int count) {
+		if (closed)
+			throw new IllegalStateException("DeviceKvCache already closed");
+		if (startPos < 0 || count < 1 || startPos + count > capacityTokens)
+			throw new IllegalArgumentException("rows [" + startPos + ", " + (startPos + count) + ") outside [0, "
+					+ capacityTokens + ")");
+		if (!format.quantized() || format.hostType() != hostType)
+			return null;
+		return d.asSlice(startPos * rowBytes, count * rowBytes);
 	}
 
 	/**

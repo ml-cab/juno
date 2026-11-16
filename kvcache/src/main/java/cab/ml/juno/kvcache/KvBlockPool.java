@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.kvcache;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -319,6 +321,26 @@ public final class KvBlockPool {
 			System.arraycopy(src, srcOff, f32, slot * kvDim, kvDim);
 		else
 			KvRowCodec.encode(type, src, srcOff, kvDim, q8, slot * bytesPerToken);
+	}
+
+	/**
+	 * Copies {@code count} stored rows ({@link #bytesPerToken} bytes each, already in this pool's blocks) from
+	 * {@code src} at byte offset {@code srcOffset} into slots {@code [slot, slot + count)} of page {@code blockId}.
+	 *
+	 * @throws IllegalArgumentException for an {@code F16} pool, whose rows are floats, not blocks
+	 */
+	public void writeEncodedRows(int blockId, int slot, int count, MemorySegment src, long srcOffset) {
+		if (bytePages == null)
+			throw new IllegalArgumentException("f16 rows are stored as floats, not encoded");
+		if (slot < 0 || count < 1 || slot + count > pageSize)
+			throw new IllegalArgumentException("slots [" + slot + ", " + (slot + count) + ") outside a page of "
+					+ pageSize);
+		byte[] page;
+		synchronized (lock) {
+			checkWritable(blockId);
+			page = bytePages.get(blockId);
+		}
+		MemorySegment.copy(src, ValueLayout.JAVA_BYTE, srcOffset, page, slot * bytesPerToken, count * bytesPerToken);
 	}
 
 	public void readToken(int blockId, int slot, float[] dst) {

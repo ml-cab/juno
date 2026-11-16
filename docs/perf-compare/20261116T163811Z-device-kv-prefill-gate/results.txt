@@ -1,0 +1,8 @@
+RESULT tinyllama window=2048 f16_ms=796.60 q8_0_ms=765.35 ratio=0.9608 bar<=1.10 PASS
+RESULT tinyllama window=128 f16_ms=1080.78 q8_0_ms=1038.50 ratio=0.9609 bar<=1.10 PASS
+RESULT qwen25 window=2048 f16_ms=2074.93 q8_0_ms=1959.29 ratio=0.9443 bar<=1.10 PASS
+RESULT qwen25 window=128 f16_ms=2710.31 q8_0_ms=2472.30 ratio=0.9122 bar<=1.10 PASS
+RESULT phi35 window=2048 f16_ms=3095.26 q8_0_ms=2715.01 ratio=0.8772 bar<=1.10 PASS
+RESULT phi35 window=128 f16_ms=3736.42 q8_0_ms=3276.58 ratio=0.8769 bar<=1.10 PASS
+RESULT mistral window=2048 f16_ms=4505.68 q8_0_ms=4291.71 ratio=0.9525 bar<=1.10 PASS
+RESULT mistral window=128 f16_ms=5318.55 q8_0_ms=5060.34 ratio=0.9515 bar<=1.10 PASS

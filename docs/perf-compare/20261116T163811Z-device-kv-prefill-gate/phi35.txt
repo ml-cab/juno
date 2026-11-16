@@ -1,0 +1,18 @@
+[A1] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=3200.46 reps=[3176.090659, 3108.243812, 3236.365059, 3200.459508, 3242.444761]
+[A1] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=3841.14 reps=[3783.372385, 3841.139343, 3973.471598, 3830.50108, 3877.513378]
+[A1] CLOCK start=65 C after 25s loaded_samples=83 below_lock=0 above_lock=83 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:7 0x0000000000000004:10 0x0000000000000000:66 
+[B1] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=2778.24 reps=[2751.414147, 2828.070913, 2772.957503, 2986.42323, 2778.240439]
+[B1] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=3381.10 reps=[3381.095174, 3412.373776, 3415.183691, 3329.22241, 3298.685518]
+[B1] CLOCK start=65 C after 70s loaded_samples=74 below_lock=0 above_lock=74 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:13 0x0000000000000004:3 0x0000000000000000:58 
+[A2] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=3095.26 reps=[3067.025123, 3043.609961, 3095.263679, 3194.711436, 3099.011449]
+[A2] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=3716.80 reps=[3697.107776, 3653.37116, 3816.213121, 3716.802658, 3724.965564]
+[A2] CLOCK start=65 C after 40s loaded_samples=80 below_lock=0 above_lock=80 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:5 0x0000000000000004:9 0x0000000000000000:66 
+[B2] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=2715.01 reps=[2703.604697, 2715.006373, 2677.470329, 2805.062797, 2773.446194]
+[B2] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=3276.58 reps=[3279.887355, 3243.467608, 3276.583046, 3253.043601, 3316.656903]
+[B2] CLOCK start=65 C after 40s loaded_samples=70 below_lock=0 above_lock=70 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:11 0x0000000000000004:8 0x0000000000000000:49 0x0000000000000024:2 
+[A3] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=3094.81 reps=[3073.664077, 3040.044568, 3094.810756, 3198.30086, 3142.987792]
+[A3] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=3736.42 reps=[3693.021233, 3649.296828, 3806.211447, 3736.422943, 3749.626382]
+[A3] CLOCK start=65 C after 35s loaded_samples=82 below_lock=0 above_lock=82 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:6 0x0000000000000004:4 0x0000000000000000:72 
+[B3] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=2709.20 reps=[2703.715472, 2709.204403, 2674.102996, 2878.189103, 2807.128931]
+[B3] DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=3272.66 reps=[3261.171941, 3224.745338, 3272.779478, 3272.663784, 3302.504493]
+[B3] CLOCK start=65 C after 40s loaded_samples=72 below_lock=0 above_lock=72 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:8 0x0000000000000004:9 0x0000000000000000:55 

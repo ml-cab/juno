@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.node;
 
+import cab.ml.juno.kvcache.KvElementType;
+import cab.ml.juno.kvcache.KvRowCodec;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
 import java.lang.foreign.MemorySegment;
@@ -53,6 +55,8 @@ final class ResidentActivation implements AutoCloseable {
 	/** The {@code juno.DeviceStaging} sites of this activation's upload and download. */
 	private final String uploadSite;
 	private final String materializeSite;
+	/** The site of a download of this activation's rows as a host KV tensor stores them ({@link #materializeToKv}). */
+	private final String encodedSite;
 
 	private int rows;
 
@@ -70,6 +74,7 @@ final class ResidentActivation implements AutoCloseable {
 		this.staging = staging;
 		this.uploadSite = "upload(" + name + ")";
 		this.materializeSite = "materialize(" + name + ")";
+		this.encodedSite = "materialize(" + name + " encoded)";
 	}
 
 	static ResidentActivation allocate(ResidentChain chain, int capacityRows, int dim) {
@@ -215,25 +220,55 @@ final class ResidentActivation implements AutoCloseable {
 
 	/**
 	 * Downloads the window's K and V rows with one wait and writes them into the host KV
-	 * tensors at {@code startPos} straight from the download buffers
-	 * ({@link SessionKvTensor#writeRows}): one copy into each tensor, where
-	 * {@link #materializeAll} into row arrays and a write per row would make two.
+	 * tensors at {@code startPos} straight from the download buffers: one copy into each
+	 * tensor, where {@link #materializeAll} into row arrays and a write per row would make two.
+	 *
+	 * <p>A side given an {@code encoded} device address - the same rows already in that host
+	 * tensor's stored blocks, as a quantized device KV holds them - downloads those bytes
+	 * instead of its FP32 rows ({@code materialize(name encoded)}) and is written as they are
+	 * ({@link SessionKvTensor#writeEncodedRows}): the host encodes nothing, and 34 or 18 bytes
+	 * per 32 values cross the bus instead of 128. A side given {@code null} downloads its FP32
+	 * rows ({@link SessionKvTensor#writeRows}). The encoded rows must have been written on this
+	 * chain's stream.
+	 *
+	 * @throws IllegalArgumentException when an {@code f16} host tensor is given encoded rows
 	 */
 	static void materializeToKv(ResidentActivation k, ResidentActivation v, SessionKvTensor kHost,
-			SessionKvTensor vHost, int startPos) {
+			SessionKvTensor vHost, int startPos, MemorySegment kEncoded, MemorySegment vEncoded) {
 		k.requireOpen();
 		v.requireOpen();
 		if (k.chain != v.chain)
 			throw new IllegalArgumentException("K and V are on different chains");
 		if (k.rows == 0 || k.rows != v.rows)
 			throw new IllegalStateException("K holds " + k.rows + " rows and V " + v.rows);
-		k.copyAsync(k.staging, k.device, (long) k.rows * k.dim * Float.BYTES, GpuBindings.D2H, k.rows,
-				k.materializeSite);
-		v.copyAsync(v.staging, v.device, (long) v.rows * v.dim * Float.BYTES, GpuBindings.D2H, v.rows,
-				v.materializeSite);
+		k.queueKvDownload(kHost, kEncoded);
+		v.queueKvDownload(vHost, vEncoded);
 		k.chain.sync();
-		kHost.writeRows(startPos, k.rows, k.staging, 0);
-		vHost.writeRows(startPos, v.rows, v.staging, 0);
+		k.writeKv(kHost, kEncoded, startPos);
+		v.writeKv(vHost, vEncoded, startPos);
+	}
+
+	/** Queues the download of this activation's rows for {@code host}: its FP32 rows, or {@code encoded}'s blocks. */
+	private void queueKvDownload(SessionKvTensor host, MemorySegment encoded) {
+		if (encoded == null) {
+			copyAsync(staging, device, (long) rows * dim * Float.BYTES, GpuBindings.D2H, rows, materializeSite);
+			return;
+		}
+		if (host.type() == KvElementType.F16)
+			throw new IllegalArgumentException("an f16 host KV tensor holds floats; it takes FP32 rows, not encoded ones");
+		long n = (long) rows * KvRowCodec.rowBytes(host.type(), dim);
+		if (n > bytes)
+			throw new IllegalArgumentException(rows + " encoded rows of " + dim + " values take " + n
+					+ " bytes, more than this activation's " + bytes);
+		copyAsync(staging, encoded, n, GpuBindings.D2H, rows, encodedSite);
+	}
+
+	/** Writes the downloaded rows into {@code host} at {@code startPos}, as {@link #queueKvDownload} fetched them. */
+	private void writeKv(SessionKvTensor host, MemorySegment encoded, int startPos) {
+		if (encoded == null)
+			host.writeRows(startPos, rows, staging, 0);
+		else
+			host.writeEncodedRows(startPos, rows, staging, 0);
 	}
 
 	/** Valid rows: the last upload, or the last operation that wrote into this activation. */

@@ -148,6 +148,11 @@ final class GqaAttentionKvKernel {
 			throw new IllegalArgumentException("window must be >= 0 (got " + window + ")");
 		formats.k().rowBytes(kvDim); // refuses a kvDim the format cannot store
 		formats.v().rowBytes(kvDim);
+		// A head of whole blocks: the decode lanes read whole blocks of one head, and a prefill tile is staged eight
+		// values at a time from one block. DeviceKvFormat selects quantized formats only for such heads.
+		if (formats.quantized() && headDim % DeviceKvFormat.BLOCK != 0)
+			throw new IllegalArgumentException("a quantized device KV needs a head width that is a multiple of "
+					+ DeviceKvFormat.BLOCK + " (got " + headDim + ")");
 
 		CudaDriverBindings drv = CudaDriverBindings.instance();
 		int width = GqaAttentionKernel.registerWidth(headDim);

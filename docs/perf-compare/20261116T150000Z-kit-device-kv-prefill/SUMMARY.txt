@@ -1,0 +1,35 @@
+Juno hardware validation kit 0.1.2, Juno a4a911826d5800a1f177ee3f63533810a2e989b3 (modified tree)
+Suite custom, started 20261116T150000Z, finished 20261116T151426Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+JFR clock: the operating system's; kernel clock source hpet
+
+gpu.kv-prefill.tinyllama-1.1b  NOISY    1:33, 3 attempts, GPU 1172 MiB, attempt 1 re-run: other processes used 10% of the CPU. attempt 2 re-run: other processes used 9% of the CPU. still: prefill ms, f16 device KV, windows of 2048 tokens spread 17% > 15%; other processes used 9% of the CPU
+    prefill ms, f16 device KV, windows of 2048 tokens    median 842.84, min 807.01, max 950.86 ms (n=3, spread 17.1%)
+    prefill ms, q8_0 device KV, windows of 2048 tokens   median 869.07, min 780.25, max 889.20 ms (n=3, spread 12.5%)
+    q8_0 over f16 prefill time, windows of 2048 tokens   median 1.0311, min 1.0311, max 1.0311 x (n=1)
+    prefill ms, f16 device KV, windows of 128 tokens     median 1115, min 1089, max 1203 ms (n=3, spread 10.2%)
+    prefill ms, q8_0 device KV, windows of 128 tokens    median 1075, min 1045, max 1153 ms (n=3, spread 10.1%)
+    q8_0 over f16 prefill time, windows of 128 tokens    median 0.9647, min 0.9647, max 0.9647 x (n=1)
+gpu.kv-prefill.qwen2.5-3b      NOISY    2:52, 3 attempts, GPU 2730 MiB, attempt 1 re-run: other processes used 8% of the CPU. attempt 2 re-run: other processes used 6% of the CPU. still: other processes used 7% of the CPU
+    prefill ms, f16 device KV, windows of 2048 tokens    median 2185, min 2176, max 2214 ms (n=3, spread 1.8%)
+    prefill ms, q8_0 device KV, windows of 2048 tokens   median 2114, min 2084, max 2118 ms (n=3, spread 1.6%)
+    q8_0 over f16 prefill time, windows of 2048 tokens   median 0.9676, min 0.9676, max 0.9676 x (n=1)
+    prefill ms, f16 device KV, windows of 128 tokens     median 2819, min 2734, max 2844 ms (n=3, spread 3.9%)
+    prefill ms, q8_0 device KV, windows of 128 tokens    median 2707, min 2700, max 2714 ms (n=3, spread 0.5%)
+    q8_0 over f16 prefill time, windows of 128 tokens    median 0.9600, min 0.9600, max 0.9600 x (n=1)
+gpu.kv-prefill.phi-3.5-mini    NOISY    4:03, 3 attempts, GPU 3824 MiB, attempt 1 re-run: other processes used 7% of the CPU. attempt 2 re-run: other processes used 5% of the CPU. still: other processes used 6% of the CPU
+    prefill ms, f16 device KV, windows of 2048 tokens    median 3322, min 3313, max 3347 ms (n=3, spread 1.0%)
+    prefill ms, q8_0 device KV, windows of 2048 tokens   median 2960, min 2947, max 2970 ms (n=3, spread 0.8%)
+    q8_0 over f16 prefill time, windows of 2048 tokens   median 0.8909, min 0.8909, max 0.8909 x (n=1)
+    prefill ms, f16 device KV, windows of 128 tokens     median 4065, min 4063, max 4071 ms (n=3, spread 0.2%)
+    prefill ms, q8_0 device KV, windows of 128 tokens    median 3640, min 3638, max 3658 ms (n=3, spread 0.6%)
+    q8_0 over f16 prefill time, windows of 128 tokens    median 0.8955, min 0.8955, max 0.8955 x (n=1)
+gpu.kv-prefill.mistral-7b      NOISY    5:31, 3 attempts, GPU 5266 MiB, attempt 1 re-run: other processes used 6% of the CPU. attempt 2 re-run: other processes used 5% of the CPU. still: other processes used 6% of the CPU
+    prefill ms, f16 device KV, windows of 2048 tokens    median 5031, min 4833, max 5124 ms (n=3, spread 5.8%)
+    prefill ms, q8_0 device KV, windows of 2048 tokens   median 4916, min 4816, max 5129 ms (n=3, spread 6.4%)
+    q8_0 over f16 prefill time, windows of 2048 tokens   median 0.9773, min 0.9773, max 0.9773 x (n=1)
+    prefill ms, f16 device KV, windows of 128 tokens     median 5677, min 5583, max 5679 ms (n=3, spread 1.7%)
+    prefill ms, q8_0 device KV, windows of 128 tokens    median 5528, min 5526, max 5558 ms (n=3, spread 0.6%)
+    q8_0 over f16 prefill time, windows of 128 tokens    median 0.9736, min 0.9736, max 0.9736 x (n=1)

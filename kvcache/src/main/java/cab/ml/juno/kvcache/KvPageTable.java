@@ -15,6 +15,7 @@
  */
 package cab.ml.juno.kvcache;
 
+import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -168,6 +169,49 @@ public final class KvPageTable {
 			return;
 		}
 		pool.writeToken(writablePage(pos / pageSize), pos % pageSize, src, srcOff);
+	}
+
+	/**
+	 * Writes {@code rows} stored rows ({@link KvBlockPool#bytesPerToken} bytes each, in the pool's blocks) from
+	 * {@code src} at byte offset {@code srcOffset} to positions {@code [pos, pos + rows)}, one copy per page they
+	 * cover. The rules of {@link #writeToken} hold: positions ahead of {@code seqLen} are zero-filled first, a full
+	 * last page gets a new one, and a page another table holds is copied before it is written.
+	 *
+	 * @throws IllegalArgumentException for an {@code F16} pool, whose rows are floats, not blocks
+	 */
+	public void writeEncodedRows(int pos, int rows, MemorySegment src, long srcOffset) {
+		if (pool.type() == KvElementType.F16)
+			throw new IllegalArgumentException("f16 rows are stored as floats, not encoded");
+		if (rows < 1)
+			return;
+		if (pos < 0)
+			throw new IllegalArgumentException("pos must be >= 0");
+		if (pos + rows > DenseKvTensor.MAX_SEQ_LEN)
+			throw new IllegalStateException("KV cache position " + (pos + rows - 1) + " exceeds MAX_SEQ_LEN="
+					+ DenseKvTensor.MAX_SEQ_LEN);
+		if (pos > seqLen) {
+			float[] zeros = new float[pool.kvDim()];
+			while (seqLen < pos)
+				appendToken(zeros);
+		}
+		int pageSize = pool.pageSize();
+		long rowBytes = pool.bytesPerToken();
+		for (int done = 0; done < rows;) {
+			int p = pos + done;
+			int slot = p % pageSize;
+			int n = Math.min(rows - done, pageSize - slot);
+			int block;
+			if (p == seqLen && slot == 0) {
+				block = pool.allocate();
+				blockIds.add(block);
+				track(blockIds.size() - 1, block);
+			} else {
+				block = writablePage(p / pageSize);
+			}
+			pool.writeEncodedRows(block, slot, n, src, srcOffset + done * rowBytes);
+			seqLen = Math.max(seqLen, p + n);
+			done += n;
+		}
 	}
 
 	/**

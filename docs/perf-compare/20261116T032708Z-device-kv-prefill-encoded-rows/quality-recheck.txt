@@ -1,0 +1,15 @@
+# DeviceKvQuantQualityLiveTest on this tree (the host KV takes the device copy's encoded rows), one JVM per model and type.
+# TinyLlama and Qwen2.5-3B: every figure equals 20261116T004641Z-device-kv-prefill-staging/quality-recheck.txt.
+# Phi-3.5-mini: every figure equals the readings since the decode-path change (the kit's gpu.kv-quality.phi-3.5-mini of
+# 20261115T232030Z-kit-device-kv-probes: q8_0 NLL 1.36070, q8_0/q4_0 1.36423, the same text); 20261113T194534Z-device-kv-quant
+# predates that change. Command: mvn -o test -pl node -am -Dgroups=gpu -Dtest=DeviceKvQuantQualityLiveTest
+#   -Djuno.test.deviceKvQuality=true -Djuno.test.deviceKvQuality.models=<model> -Djuno.test.deviceKvQuality.type=<type>
+DEVICE-KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 device_bytes_window=2883584 nll=2.45657 self_agree=509/512 s=16.1
+DEVICE-KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 device_bytes_window=1531904 nll=2.45773 nll_f16=2.45657 ratio=1.00047 greedy_agree=509/512 (99.41%) first_disagree=11 free_running_same_prefix=28/512 s=15.3
+DEVICE-KV-QUALITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0/q4_0 device=K q8_0, V q4_0 device_bytes_window=1171456 nll=2.45846 nll_f16=2.45657 ratio=1.00077 greedy_agree=506/512 (98.83%) first_disagree=9 free_running_same_prefix=20/512 s=15.6
+DEVICE-KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 device_bytes_window=4718592 nll=1.69616 self_agree=509/512 s=38.3
+DEVICE-KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 device_bytes_window=2506752 nll=1.69806 nll_f16=1.69616 ratio=1.00112 greedy_agree=510/512 (99.61%) first_disagree=1 free_running_same_prefix=33/512 s=38.2
+DEVICE-KV-QUALITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0/q4_0 device=K q8_0, V q4_0 device_bytes_window=1916928 nll=1.70292 nll_f16=1.69616 ratio=1.00398 greedy_agree=505/512 (98.63%) first_disagree=1 free_running_same_prefix=1/512 s=37.9
+DEVICE-KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 device_bytes_window=50331648 nll=1.35936 self_agree=512/512 s=110.7
+DEVICE-KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 device_bytes_window=26738688 nll=1.36070 nll_f16=1.35936 ratio=1.00099 greedy_agree=510/512 (99.61%) first_disagree=4 free_running_same_prefix=4/512 s=113.3
+DEVICE-KV-QUALITY Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0/q4_0 device=K q8_0, V q4_0 device_bytes_window=20447232 nll=1.36423 nll_f16=1.35936 ratio=1.00358 greedy_agree=507/512 (99.02%) first_disagree=12 free_running_same_prefix=12/512 s=112.2

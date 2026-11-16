@@ -76,6 +76,7 @@ public final class ProbeMain {
 		case "QualityProbe" -> new QualityProbe();
 		case "KvQualityProbe" -> new KvQualityProbe();
 		case "GpuKvQualityProbe" -> new GpuKvQualityProbe();
+		case "GpuKvPrefillProbe" -> new GpuKvPrefillProbe();
 		case "ParallelProbe" -> new ParallelProbe();
 		case "ScheduleProbe" -> new ScheduleProbe();
 		case "MixedPrefillProbe" -> new MixedPrefillProbe();

@@ -1,0 +1,133 @@
+# DeviceKvPrefillTimeLiveTest: wall time of a 2,048-token prefill through forwardBatch, one JVM per model and type, unpinned.
+# Windows: 2048 (the whole prompt in one window) and 128 (--prefill-batch 128). One warm-up, then the measured repetitions.
+## before: HEAD a4a91182 kernels (TinyLlama, 5 reps)
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=0 ms=977.46
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=0 ms=1292.22
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=1 ms=959.83
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=1 ms=1294.66
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=2 ms=957.89
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=2 ms=1211.67
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=3 ms=870.63
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=3 ms=1172.64
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=4 ms=880.85
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=4 ms=1185.37
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=957.89 reps=[977.464139, 959.82816, 957.885766, 870.633099, 880.846301]
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=1211.67 reps=[1292.221195, 1294.656217, 1211.667821, 1172.640123, 1185.373362]
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=0 ms=1321.72
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=0 ms=1486.68
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=1 ms=1206.03
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=1 ms=1464.73
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=2 ms=1202.04
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=2 ms=1459.24
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=3 ms=1214.27
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=3 ms=1466.72
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=4 ms=1199.04
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=4 ms=1474.72
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=1206.03 reps=[1321.717605, 1206.026311, 1202.039285, 1214.27147, 1199.036591]
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=1466.72 reps=[1486.677263, 1464.725878, 1459.244784, 1466.716321, 1474.715095]
+## before, under nvprof (the split in INDEX section 2; window 2048, 2 reps; the profiler adds the same overhead to both types)
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=1001.68 reps=[1001.678688, 1000.239099]
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=1338.68 reps=[1338.684335, 1334.584112]
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=2266.59 reps=[2256.154083, 2266.59215]
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=2765.58 reps=[2765.580963, 2741.966052]
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=3419.07 reps=[3419.067796, 3404.39446]
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=6985.23 reps=[6974.322485, 6985.228013]
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=4768.40 reps=[4744.342934, 4768.397959]
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=6234.10 reps=[6220.437298, 6234.096529]
+## after: this tree's kernels (5 reps)
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=0 ms=982.25
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=0 ms=1315.75
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=1 ms=979.64
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=1 ms=1280.94
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=2 ms=968.77
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=2 ms=1280.92
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=3 ms=973.02
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=3 ms=1180.98
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=4 ms=877.43
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=4 ms=1178.05
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=973.02 reps=[982.25303, 979.63773, 968.766915, 973.01637, 877.428105]
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=1280.92 reps=[1315.745501, 1280.943031, 1280.924241, 1180.983152, 1178.054262]
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=0 ms=1157.74
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=0 ms=1371.42
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=1 ms=1046.13
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=1 ms=1345.56
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=2 ms=1064.01
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=2 ms=1328.50
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=3 ms=1039.10
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=3 ms=1339.26
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=4 ms=1064.13
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=4 ms=1323.87
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=1064.01 reps=[1157.740456, 1046.127543, 1064.006422, 1039.101799, 1064.130037]
+DEVICE-KV-PP tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=1339.26 reps=[1371.423717, 1345.55758, 1328.495077, 1339.259866, 1323.867142]
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=0 ms=2201.80
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=0 ms=2836.98
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=1 ms=2285.91
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=1 ms=2959.79
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=2 ms=2251.38
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=2 ms=2834.17
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=3 ms=2207.03
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=3 ms=2827.06
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=4 ms=2204.91
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=4 ms=2815.51
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=2207.03 reps=[2201.798293, 2285.912992, 2251.375639, 2207.027745, 2204.913554]
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=2834.17 reps=[2836.980755, 2959.793972, 2834.170648, 2827.059412, 2815.509797]
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=0 ms=2462.79
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=0 ms=2971.80
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=1 ms=2515.85
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=1 ms=3104.20
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=2 ms=2627.13
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=2 ms=2984.21
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=3 ms=2537.77
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=3 ms=3050.01
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=4 ms=2597.33
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=4 ms=3081.87
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=2537.77 reps=[2462.790545, 2515.847766, 2627.133096, 2537.772983, 2597.329474]
+DEVICE-KV-PP qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=3050.01 reps=[2971.800785, 3104.196924, 2984.206418, 3050.008233, 3081.869575]
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=0 ms=3630.04
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=0 ms=4227.87
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=1 ms=3639.34
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=1 ms=4269.44
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=2 ms=3749.18
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=2 ms=4475.95
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=3 ms=3871.82
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=3 ms=4465.65
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=4 ms=3713.98
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=4 ms=4495.00
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=3713.98 reps=[3630.036196, 3639.339948, 3749.183731, 3871.815828, 3713.978736]
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=4465.65 reps=[4227.873689, 4269.439403, 4475.945872, 4465.650397, 4495.000844]
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=0 ms=6736.46
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=0 ms=7285.66
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=1 ms=6780.32
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=1 ms=7298.12
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=2 ms=6814.11
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=2 ms=7370.24
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=3 ms=6890.49
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=3 ms=7383.24
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=4 ms=6855.64
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=4 ms=7418.88
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=6814.11 reps=[6736.45758, 6780.315683, 6814.1093, 6890.490642, 6855.637294]
+DEVICE-KV-PP Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=7370.24 reps=[7285.655229, 7298.123969, 7370.237625, 7383.244567, 7418.88431]
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=0 ms=5243.12
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=0 ms=6290.28
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=1 ms=5223.25
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=1 ms=6462.52
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=2 ms=5162.95
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=2 ms=6441.02
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=3 ms=5384.15
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=3 ms=6505.06
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 rep=4 ms=5230.47
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 rep=4 ms=6299.85
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=2048 median_ms=5230.47 reps=[5243.120151, 5223.253482, 5162.945537, 5384.152987, 5230.472679]
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 window=128 median_ms=6441.02 reps=[6290.279331, 6462.518025, 6441.017681, 6505.060363, 6299.854885]
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=0 ms=6132.43
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=0 ms=7159.84
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=1 ms=6221.10
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=1 ms=7361.09
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=2 ms=6154.25
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=2 ms=7103.14
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=3 ms=6043.84
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=3 ms=7033.64
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 rep=4 ms=6061.91
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 rep=4 ms=7037.49
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=2048 median_ms=6132.43 reps=[6132.432233, 6221.096824, 6154.249853, 6043.839068, 6061.909342]
+DEVICE-KV-PP mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 window=128 median_ms=7103.14 reps=[7159.83899, 7361.086254, 7103.137761, 7033.641788, 7037.486846]

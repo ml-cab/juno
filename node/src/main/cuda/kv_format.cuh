@@ -184,6 +184,32 @@ static __device__ __forceinline__ float4 kv_quad_ints(const unsigned int* words,
 }
 
 /*
+ * Elements e .. e + 7 of a row of format T (e a multiple of 8, so all eight lie in one block), into lo and hi: the
+ * values kv_load2_t gives for them, bit for bit (the same scale times the same integer, __fmul_rn), read as one
+ * scale and two realigned quant words (kv_words) instead of a scale and a two-byte read per pair. A prefill tile is
+ * staged through it.
+ */
+template <int T>
+static __device__ __forceinline__ void kv_load8_t(const unsigned char* row, int e, float4& lo, float4& hi) {
+    if constexpr (T == KV_F16) {
+        lo = kv_load4_t<KV_F16>(row, e);
+        hi = kv_load4_t<KV_F16>(row, e + 4);
+    } else {
+        const unsigned char* blk = row + (size_t)(e / KV_BLOCK) * kv_block_bytes_t<T>();
+        const float d = kv_scale(blk);
+        const int j = e & (KV_BLOCK - 1);
+        unsigned int words[2];
+        // q8_0: the eight bytes from j. q4_0: bytes (j & 15) .. +7, their low nibbles for j < 16, else the high ones.
+        kv_words<2>(blk + 2 + (T == KV_Q8_0 ? j : (j & 15)), words);
+        const bool high = T == KV_Q4_0 && j >= 16;
+        const float4 a = kv_quad_ints<T>(words, 0, high);
+        const float4 b = kv_quad_ints<T>(words, 1, high);
+        lo = make_float4(__fmul_rn(d, a.x), __fmul_rn(d, a.y), __fmul_rn(d, a.z), __fmul_rn(d, a.w));
+        hi = make_float4(__fmul_rn(d, b.x), __fmul_rn(d, b.y), __fmul_rn(d, b.z), __fmul_rn(d, b.w));
+    }
+}
+
+/*
  * A decode lane's chunk: QUADS consecutive quads of one head, starting at element e0
  * of a row of format T, of which the first nValid exist (the head may end inside the
  * chunk). A quantized chunk is whole blocks, or the first or second half of one

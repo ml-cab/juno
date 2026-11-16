@@ -83,7 +83,11 @@ Module dependency (excerpt):
         layers return their pages as before. DenseKvTensor keeps a written watermark and
         zeroes any gap before it is written past or read, so a reused tensor never shows an
         earlier request's values. SessionKvTensor.writeRows writes a window's rows from native
-        memory in one call (DenseKvTensor F16: one bulk copy). Handlers (LLaMA family, Phi-3,
+        memory in one call (DenseKvTensor F16: one bulk copy); SessionKvTensor.writeEncodedRows
+        writes rows already in a q8_0/q4_0 tensor's stored blocks as they are (DenseKvTensor: one
+        bulk copy; PagedKvTensor through KvPageTable.writeEncodedRows, one KvBlockPool
+        .writeEncodedRows copy per page, a page another table holds copied first; f16 refused).
+        Handlers (LLaMA family, Phi-3,
         Qwen3) count running passes per request (node InFlightRequests) and reuse only when
         none is running; otherwise the layers are dropped as before. The LoRA handlers
         --lora-play serves on (LoraTrainableHandler, Phi3LoraTrainableHandler,
@@ -369,7 +373,11 @@ Module dependency (excerpt):
               q4_0 values through -DJUNO_CACHE_TYPE_K/V, CPU; NLL held to 1.02x), GpuKvQualityProbe
               (QualityRunMain with -Djuno.kit.quality.gpu=true, the handler on CUDA: f16, then q8_0 and
               q8_0/q4_0 device KV; per type NLL held to 1.02x and the handler's device KV notice must
-              name the selected formats), ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
+              name the selected formats), GpuKvPrefillProbe + KvPrefillRunMain (the 2048-token
+              quality text prefilled through forwardBatch on CUDA, one window and 128-token windows,
+              f16 then q8_0 device KV, each in its own JVM; per width both sides' ms and the q8_0 median
+              over the f16 one, a reading; a run whose GPU attention or device prefill region did not
+              open, or whose device KV notice names other formats, fails), ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
               LoraProbe, VisionProbe, LauncherProbe (also: no [DBG] lines; on Windows nothing
               written to the registry, HKCU\Console's last-write time read through FFM by
               ConsoleRegistryKey), GpuKernelTimingProbe (GpuKernelTimings at a 2048-token window
@@ -855,7 +863,8 @@ GPU FFI (node module — Panama project, JEP 454):
         a quantized mirror (the caller rewrites it from the shifted host rows); rawK/rawV return
         the stored bytes for tests.
   kv_format.cuh — the device side of DeviceKvFormat: kv_row_t (a row's address), kv_load2_t /
-        kv_load4_t (values the host codecs decode, bit for bit), kv_dot_chunk / kv_axpy_chunk (a
+        kv_load4_t / kv_load8_t (values the host codecs decode, bit for bit; kv_load8_t reads eight
+        values of one block as one scale and two realigned quant words), kv_dot_chunk / kv_axpy_chunk (a
         decode lane's whole blocks: one scale, realigned 4-byte words through the read-only
         cache), kv_encode_block_warp (the host encoders, one warp per block and one value per lane,
         the block's largest magnitude reduced with the scalar scan's comparisons; the FP16 scale
@@ -866,7 +875,14 @@ GPU FFI (node module — Panama project, JEP 454):
         (entries gqa_attention_kv_d64/_d128/_d256, plus kType and vType). One switch per launch
         picks a decode loop and a tile-staging loop compiled for the format pair; a decode row's
         lanes hold the head block-major (gqa_quad) so each reads whole blocks; the prefill tiles
-        are staged dequantized into the same FP32 shared tiles. Decode rows (rowsPerBlock 1) at
+        are staged dequantized into the same FP32 shared tiles, eight values of a key per thread
+        (gqa_stage_kv8 through kv_load8_t; the FP16/FP16 pair keeps gqa_stage_kv's pairs), so a
+        tile holds the floats an FP16 cache of those values would. gqa_attention_kv_d64/_d128 are
+        compiled without the quantized decode loop (gqa_attention_tiled's QDECODE false: their
+        decode rows go to the wide entries below, and the loop's nine format pairs cost the
+        tiles registers; a row of one would still be served, by the 32-key tiles); _d256 keeps
+        it. The launcher refuses a quantized format at a head width that is not a multiple of 32
+        (DeviceKvFormat's rule). Decode rows (rowsPerBlock 1) at
         head widths up to 128 take gqa_decode_kv_d64/_d128 instead: one block per row and head of
         256 threads, 64 slots of 4 lanes (the same per-slot loop at a 64-key stride, the same
         merge over 64 slots, about 120 registers), since a decode launch's one block per head
@@ -1187,7 +1203,12 @@ GPU FFI (node module — Panama project, JEP 454):
   PrefillWindowRegion — the prefill-window device region (on by default on CUDA; PrefillRegionOptions):
         a whole-layer window's K and V rows go from the download buffer straight into the
         request's host KV tensors (runLayer with kHost/vHost, ResidentActivation.materializeToKv
-        then SessionKvTensor.writeRows), one copy, not a row array and then the tensor;
+        then SessionKvTensor.writeRows), one copy, not a row array and then the tensor; a side
+        whose device KV format is the host tensor's type (q8_0 or q4_0: DeviceKvCache.encodedRowsK/V
+        give the window's rows the mirror write encoded, the host codec's bytes) is downloaded as
+        those blocks instead of FP32 rows (staging site materialize(prefill k encoded) / (prefill v
+        encoded)) and written by SessionKvTensor.writeEncodedRows, so the host encodes nothing;
+        an f16 side, or a quantized host side the device holds as FP16, downloads FP32 rows;
         a transformer layer over a prefill window of more than 8 rows with the activations on the
         device between its operations. The residual stream x stays on the device across layers: it
         is uploaded at the window's first layer (or the first after a layer that ran on the host)

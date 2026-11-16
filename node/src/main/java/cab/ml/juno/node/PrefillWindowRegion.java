@@ -563,7 +563,10 @@ final class PrefillWindowRegion implements AutoCloseable {
 		 * when the whole layer runs and {@code kHost}/{@code vHost} are given, the window's K and
 		 * V rows go straight from the download into those host KV tensors at
 		 * {@code startPos} ({@link ResidentActivation#materializeToKv}) instead of into
-		 * {@code kOut}/{@code vOut}, and the caller does not write them again.
+		 * {@code kOut}/{@code vOut}, and the caller does not write them again. A side the
+		 * mirror stores in that host tensor's blocks ({@link DeviceKvCache#encodedRowsK}: a
+		 * quantized device KV of the host's type) is downloaded as the blocks the mirror
+		 * write encoded, so the host encodes nothing; any other side as FP32 rows.
 		 */
 		boolean runLayer(int li, float[][] xHost, int startPos, DeviceKvCache mirror, float[][] qOut,
 				float[][] kOut, float[][] vOut, SessionKvTensor kHost, SessionKvTensor vHost) {
@@ -586,7 +589,9 @@ final class PrefillWindowRegion implements AutoCloseable {
 					}
 					feedForward(li, w);
 					if (kHost != null && vHost != null) {
-						ResidentActivation.materializeToKv(kvActs[0], kvActs[1], kHost, vHost, startPos);
+						ResidentActivation.materializeToKv(kvActs[0], kvActs[1], kHost, vHost, startPos,
+								mirror.encodedRowsK(kHost.type(), startPos, w),
+								mirror.encodedRowsV(vHost.type(), startPos, w));
 					} else {
 						kvOuts[0] = kOut;
 						kvOuts[1] = vOut;

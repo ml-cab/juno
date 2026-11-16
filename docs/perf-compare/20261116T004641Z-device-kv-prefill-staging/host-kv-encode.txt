@@ -1,0 +1,10 @@
+# Host KV write of a 2,048-row window, DenseKvTensor.writeRows (the prefill region's host KV write after each layer), one thread,
+# best of 15, kvcache classes of this tree; source: host-kv-encode-bench.java (run: java -cp kvcache/target/classes host-kv-encode-bench.java).
+# kvDim 256: TinyLlama, Qwen2.5-3B; 1024: Mistral 7B; 3072: Phi-3.5-mini. Per layer the region writes K and V, so twice these.
+# Taken with the machine otherwise idle (a later run during the unit suite read within 4% of it).
+kvDim  256 F16   writeRows of 2048 rows:    0.14 ms (0.27 ns/value)
+kvDim  256 Q8_0  writeRows of 2048 rows:    4.85 ms (9.25 ns/value)
+kvDim 1024 F16   writeRows of 2048 rows:    1.12 ms (0.53 ns/value)
+kvDim 1024 Q8_0  writeRows of 2048 rows:   19.59 ms (9.34 ns/value)
+kvDim 3072 F16   writeRows of 2048 rows:    3.66 ms (0.58 ns/value)
+kvDim 3072 Q8_0  writeRows of 2048 rows:   56.66 ms (9.01 ns/value)

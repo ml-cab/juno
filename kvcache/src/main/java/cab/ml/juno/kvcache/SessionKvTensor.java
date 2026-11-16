@@ -55,6 +55,17 @@ public interface SessionKvTensor {
 	}
 
 	/**
+	 * Writes {@code rows} consecutive positions from {@code startPos}, given as this tensor's stored rows:
+	 * {@link KvRowCodec#rowBytes} bytes each, back to back in {@code src} from byte offset {@code srcOffset}, already
+	 * in the type's blocks. Copied as they are, nothing decoded or encoded: a window's rows from a download of a device
+	 * KV that stores the same blocks. Rows that are {@link KvRowCodec#encode} of some floats leave the tensor holding
+	 * exactly what {@link #writeRows} of those floats leaves.
+	 *
+	 * @throws IllegalArgumentException for an {@code F16} tensor, whose rows are floats, not blocks
+	 */
+	void writeEncodedRows(int startPos, int rows, MemorySegment src, long srcOffset);
+
+	/**
 	 * Positions {@code [0, seqLen)} as attention reads them: the stored rows in place ({@link KvRows}), the pool's
 	 * pages for a paged tensor and the backing array for a dense one, never a copy. Valid until the tensor is next
 	 * written. {@code 1 <= seqLen}; a paged tensor needs {@code seqLen} rows written, and a dense one reads zero at

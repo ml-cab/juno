@@ -1,0 +1,17 @@
+# ptxas -arch=sm_61 -v on gqa_attention_kv.ptx (registers per thread, 128-thread blocks for gqa_attention_kv_*). No spills in either.
+## before (HEAD a4a91182)
+Compiling entry function 'gqa_decode_kv_d128' for 'sm_61'	Used 120 registers, 33280 bytes smem
+Compiling entry function 'gqa_decode_kv_d64' for 'sm_61'	Used 84 registers, 16896 bytes smem
+Compiling entry function 'gqa_attention_kv_d256' for 'sm_61'	Used 245 registers, 33544 bytes smem
+Compiling entry function 'gqa_attention_kv_d128' for 'sm_61'	Used 226 registers, 34056 bytes smem
+Compiling entry function 'gqa_attention_kv_d64' for 'sm_61'	Used 196 registers, 17672 bytes smem
+## after
+Compiling entry function 'gqa_decode_kv_d128' for 'sm_61'	Used 120 registers, 33280 bytes smem
+Compiling entry function 'gqa_decode_kv_d64' for 'sm_61'	Used 84 registers, 16896 bytes smem
+Compiling entry function 'gqa_attention_kv_d256' for 'sm_61'	Used 247 registers, 33544 bytes smem
+Compiling entry function 'gqa_attention_kv_d128' for 'sm_61'	Used 217 registers, 34056 bytes smem
+Compiling entry function 'gqa_attention_kv_d64' for 'sm_61'	Used 127 registers, 17672 bytes smem
+## FP16 module (gqa_attention.ptx), unchanged code
+Compiling entry function 'gqa_attention_d256' for 'sm_61'	Used 250 registers, 33544 bytes smem
+Compiling entry function 'gqa_attention_d128' for 'sm_61'	Used 211 registers, 34056 bytes smem
+Compiling entry function 'gqa_attention_d64' for 'sm_61'	Used 127 registers, 17672 bytes smem

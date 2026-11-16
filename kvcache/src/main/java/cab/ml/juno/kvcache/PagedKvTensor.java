@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.kvcache;
 
+import java.lang.foreign.MemorySegment;
+
 /**
  * Continuous-schedule KV tensor: fixed-size pages from a shared
  * {@link KvBlockPool} via a {@link KvPageTable}.
@@ -89,6 +91,11 @@ public final class PagedKvTensor implements SessionKvTensor {
 	@Override
 	public void writeToken(int pos, float[] src, int srcOff) {
 		table.writeToken(pos, src, srcOff);
+	}
+
+	@Override
+	public void writeEncodedRows(int startPos, int rows, MemorySegment src, long srcOffset) {
+		table.writeEncodedRows(startPos, rows, src, srcOffset);
 	}
 
 	/** The block table's pages, read in place ({@link KvPageTable#rows}). */

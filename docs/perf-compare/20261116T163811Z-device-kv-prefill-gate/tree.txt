@@ -1,0 +1,27 @@
+a4a911826d5800a1f177ee3f63533810a2e989b3
+ M CHANGELOG.md
+ M docs/agent-arch.txt
+ M docs/gap-closure-plan/TIER-03-kv-cache-maturity.md
+ M docs/howto.md
+ M docs/perf-compare/README.md
+ M docs/performance.md
+ M juno-kit/src/main/java/cab/ml/juno/kit/ProbeCatalog.java
+ M juno-kit/src/main/java/cab/ml/juno/kit/ProbeMain.java
+ M juno-kit/src/main/resources/cab/ml/juno/kit/coverage.tsv
+ M juno-kit/src/test/java/cab/ml/juno/kit/ProbeSelfTests.java
+ M kvcache/src/main/java/cab/ml/juno/kvcache/DenseKvTensor.java
+ M kvcache/src/main/java/cab/ml/juno/kvcache/KvBlockPool.java
+ M kvcache/src/main/java/cab/ml/juno/kvcache/KvPageTable.java
+ M kvcache/src/main/java/cab/ml/juno/kvcache/PagedKvTensor.java
+ M kvcache/src/main/java/cab/ml/juno/kvcache/SessionKvTensor.java
+ M node/src/main/cuda/gqa_attention.cuh
+ M node/src/main/cuda/gqa_attention_kv.cu
+ M node/src/main/cuda/kv_format.cuh
+ M node/src/main/java/cab/ml/juno/node/DeviceKvCache.java
+ M node/src/main/java/cab/ml/juno/node/GqaAttentionKvKernel.java
+ M node/src/main/java/cab/ml/juno/node/PrefillWindowRegion.java
+ M node/src/main/java/cab/ml/juno/node/ResidentActivation.java
+ M node/src/main/resources/cab/ml/juno/node/gqa_attention.ptx
+ M node/src/main/resources/cab/ml/juno/node/gqa_attention_kv.ptx
+ M node/src/test/java/cab/ml/juno/node/DeviceKvDecodeTgLiveTest.java
+ M node/src/test/java/cab/ml/juno/node/DeviceKvQuantParityTest.java

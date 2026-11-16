@@ -510,6 +510,21 @@ class ProbeSelfTests {
 		assertThat(r.facts()).containsEntry("kernels", "cuda");
 	}
 
+	/**
+	 * The prefill probe on the synthetic model: both runs prefill on CUDA, but the q8_0 run's handler keeps an FP16
+	 * device copy (head width 16), so the probe fails with that warning instead of reading another path's time. Needs
+	 * CUDA.
+	 */
+	@Test
+	void gpuKvPrefillProbeFailsWhereTheDeviceCopyIsNotInTheSelectedFormats(@TempDir Path dir) throws Exception {
+		org.junit.jupiter.api.Assumptions.assumeTrue(cab.ml.juno.node.CudaAvailability.isAvailable(), "no CUDA device");
+		Path model = SyntheticGguf.write(dir);
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> new GpuKvPrefillProbe().run("gpu.kv-prefill.synthetic",
+				Map.of("model", model.toString(), "tokens", "128", "windows", "128,32", "reps", "1", "childHeap", "1g")))
+				.isInstanceOf(IllegalStateException.class).hasMessageContaining("q8_0 run")
+				.hasMessageContaining("head width 16");
+	}
+
 	@Test
 	void theKitsQualityTextIsTheNllTestsText() throws Exception {
 		Path original = Path.of("..", "node", "src", "test", "resources", "cab", "ml", "juno", "node",

@@ -6,8 +6,12 @@
  * the same geometry, the same online softmax and the same order of every
  * accumulation; only the reads of K and V go through kv_format.cuh, which
  * dequantizes each value in registers (decode rows) or while staging the FP32
- * shared tiles (prefill windows). The gqa_decode_kv entries below run decode rows
- * with a wider block. No scratch buffer holds dequantized keys or values.
+ * shared tiles (prefill windows, eight values of a key per thread and read, the
+ * same floats an FP16 cache of those values stages). The gqa_decode_kv entries
+ * below run decode rows with a wider block, so gqa_attention_kv_d64 and _d128
+ * leave the decode loop out (GqaAttentionKvKernel sends no decode row to them; a
+ * row of one would still be correct, through the tiles); _d256 keeps it. No
+ * scratch buffer holds dequantized keys or values.
  *
  * A separate module from gqa_attention.ptx, loaded only when a request's device
  * KV is quantized, so an FP16 launch loads and compiles exactly what it did.
@@ -44,13 +48,13 @@
 
 extern "C" __global__ void __launch_bounds__(GQA_THREADS)
 gqa_attention_kv_d64(GQA_KV_ARGS) {
-    gqa_attention_tiled<64, 32, true>(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim,
+    gqa_attention_tiled<64, 32, true, false>(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim,
             kvDim, rowsPerBlock, window, kType, vType);
 }
 
 extern "C" __global__ void __launch_bounds__(GQA_THREADS)
 gqa_attention_kv_d128(GQA_KV_ARGS) {
-    gqa_attention_tiled<128, 32, true>(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim,
+    gqa_attention_tiled<128, 32, true, false>(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim,
             kvDim, rowsPerBlock, window, kType, vType);
 }
 
