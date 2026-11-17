@@ -31,8 +31,8 @@ import java.util.logging.Logger;
  * Host-side launcher for {@code gqa_attention_kv.ptx}: {@link GqaAttentionKernel}'s attention over a device KV whose
  * keys and values are stored in any {@link DeviceKvFormat}, dequantized in registers inside the kernel. Same
  * geometry, arguments and order of accumulation as the FP16 kernel, plus the two formats; decode rows at head widths up
- * to 128 run a wider block instead ({@code gqa_decode_kv_d64/_d128}: 64 slots, the same per-slot loop and merge), since
- * a decode launch has one block per head and row and few heads leave a 128-thread block short of warps. A separate module, loaded
+ * to 128 run the wide decode block, as the FP16 kernel's do ({@code gqa_decode_kv_d64/_d128}: 64 slots, the same
+ * per-slot loop and merge, each lane holding a contiguous chunk of the head). A separate module, loaded
  * the first time a handler selects a quantized device KV ({@link DeviceKvFormats#select}), so an FP16 launch loads
  * and compiles exactly what it did. {@link GqaAttentionKernel#launch} routes here for quantized formats.
  */
@@ -41,8 +41,6 @@ final class GqaAttentionKvKernel {
 	private static final Logger log = Logger.getLogger(GqaAttentionKvKernel.class.getName());
 	private static final String RESOURCE = "/cab/ml/juno/node/gqa_attention_kv.ptx";
 	private static final int GQA_THREADS = 128;
-	/** Threads of a wide decode block: {@code GQD_THREADS}, 64 slots of 4 lanes. */
-	private static final int DECODE_THREADS = 256;
 
 	private static final AtomicReference<GqaAttentionKvKernel> INSTANCE = new AtomicReference<>();
 	private static volatile boolean failed;
@@ -157,7 +155,7 @@ final class GqaAttentionKvKernel {
 		CudaDriverBindings drv = CudaDriverBindings.instance();
 		int width = GqaAttentionKernel.registerWidth(headDim);
 		MemorySegment streamOrNull = stream == null ? MemorySegment.NULL : stream;
-		if (rowsPerBlock == 1 && width <= 128) {
+		if (GqaAttentionKernel.wideDecode(rowsPerBlock, headDim)) {
 			launchDecode(drv, width == 64 ? fnDecodeD64 : fnDecodeD128, qBatch, kPtrs, vPtrs, seqLens, outBatch, batch,
 					numHeads, gqaRatio, headDim, kvDim, window, formats, streamOrNull);
 			return;
@@ -205,7 +203,8 @@ final class GqaAttentionKvKernel {
 			params.setAtIndex(ADDRESS, 11, intArg(arena, formats.k().code));
 			params.setAtIndex(ADDRESS, 12, intArg(arena, formats.v().code));
 			CudaDriverBindings.check(CudaDriverBindings.callInt(drv.cuLaunchKernel, fn, batch, numHeads, 1,
-					DECODE_THREADS, 1, 1, 0, stream, params, MemorySegment.NULL), "cuLaunchKernel(gqa_decode_kv)");
+					GqaAttentionKernel.DECODE_THREADS, 1, 1, 0, stream, params, MemorySegment.NULL),
+					"cuLaunchKernel(gqa_decode_kv)");
 		}
 	}
 

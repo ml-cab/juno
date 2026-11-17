@@ -1,0 +1,116 @@
+# GqaAttentionDecodeBench, alternating trees: before-1, after-1, before-2, after-2 (us per launch, median of 5 x 100)
+
+## before-1
+lanes current. tiled. [f16 block-major]. quantized; us per launch. median of 5 x 100
+tinyllama 32/4/64      ctx    64  current     6.43  tiled     8.71 (current/tiled 0.738)  [f16 block-major]    12.83 (1.996x)  [K q8_0. V q8_0]    37.81 (5.879x)  [K q8_0. V q4_0]    24.04 (3.739x)
+tinyllama 32/4/64      ctx   256  current     7.23  tiled    12.35 (current/tiled 0.585)  [f16 block-major]     9.78 (1.353x)  [K q8_0. V q8_0]     8.10 (1.120x)  [K q8_0. V q4_0]     9.68 (1.339x)
+tinyllama 32/4/64      ctx   576  current    10.35  tiled    25.33 (current/tiled 0.409)  [f16 block-major]    16.83 (1.626x)  [K q8_0. V q8_0]    13.79 (1.332x)  [K q8_0. V q4_0]    14.03 (1.355x)
+tinyllama 32/4/64      ctx  1024  current    15.30  tiled    37.82 (current/tiled 0.405)  [f16 block-major]    23.28 (1.521x)  [K q8_0. V q8_0]    18.68 (1.221x)  [K q8_0. V q4_0]    19.99 (1.307x)
+tinyllama 32/4/64      ctx  2048  current    32.68  tiled   101.26 (current/tiled 0.323)  [f16 block-major]    44.64 (1.366x)  [K q8_0. V q8_0]    37.31 (1.142x)  [K q8_0. V q4_0]    38.32 (1.173x)
+qwen2.5-3b 16/2/128    ctx    64  current     7.12  tiled     7.08 (current/tiled 1.006)  [f16 block-major]     7.86 (1.105x)  [K q8_0. V q8_0]     6.96 (0.978x)  [K q8_0. V q4_0]     7.02 (0.987x)
+qwen2.5-3b 16/2/128    ctx   256  current     9.04  tiled    11.71 (current/tiled 0.772)  [f16 block-major]    14.53 (1.607x)  [K q8_0. V q8_0]     9.86 (1.091x)  [K q8_0. V q4_0]    10.20 (1.128x)
+qwen2.5-3b 16/2/128    ctx   576  current    13.88  tiled    21.41 (current/tiled 0.648)  [f16 block-major]    29.85 (2.151x)  [K q8_0. V q8_0]    14.63 (1.055x)  [K q8_0. V q4_0]    15.35 (1.106x)
+qwen2.5-3b 16/2/128    ctx  1024  current    18.38  tiled    30.67 (current/tiled 0.599)  [f16 block-major]    44.71 (2.432x)  [K q8_0. V q8_0]    22.07 (1.201x)  [K q8_0. V q4_0]    24.67 (1.342x)
+qwen2.5-3b 16/2/128    ctx  2048  current    33.98  tiled    71.74 (current/tiled 0.474)  [f16 block-major]    84.54 (2.488x)  [K q8_0. V q8_0]    39.42 (1.160x)  [K q8_0. V q4_0]    42.68 (1.256x)
+phi-3.5-mini 32/32/96  ctx    64  current     6.22  tiled     7.91 (current/tiled 0.786)  [f16 block-major]     9.30 (1.496x)  [K q8_0. V q8_0]     8.94 (1.438x)  [K q8_0. V q4_0]     7.76 (1.249x)
+phi-3.5-mini 32/32/96  ctx   256  current    19.46  tiled    29.87 (current/tiled 0.651)  [f16 block-major]    27.66 (1.422x)  [K q8_0. V q8_0]    11.78 (0.605x)  [K q8_0. V q4_0]    11.23 (0.577x)
+phi-3.5-mini 32/32/96  ctx   576  current    41.96  tiled    58.87 (current/tiled 0.713)  [f16 block-major]    46.45 (1.107x)  [K q8_0. V q8_0]    32.41 (0.772x)  [K q8_0. V q4_0]    26.54 (0.633x)
+phi-3.5-mini 32/32/96  ctx  1024  current    64.07  tiled    96.20 (current/tiled 0.666)  [f16 block-major]    77.57 (1.211x)  [K q8_0. V q8_0]    43.27 (0.675x)  [K q8_0. V q4_0]    40.14 (0.626x)
+phi-3.5-mini 32/32/96  ctx  2048  current   128.40  tiled   183.75 (current/tiled 0.699)  [f16 block-major]   148.10 (1.153x)  [K q8_0. V q8_0]    82.83 (0.645x)  [K q8_0. V q4_0]    72.34 (0.563x)
+mistral-7b 32/8/128    ctx    64  current     6.47  tiled     8.67 (current/tiled 0.746)  [f16 block-major]    13.75 (2.125x)  [K q8_0. V q8_0]     9.98 (1.543x)  [K q8_0. V q4_0]    11.28 (1.744x)
+mistral-7b 32/8/128    ctx   256  current    12.14  tiled    16.19 (current/tiled 0.750)  [f16 block-major]    25.11 (2.067x)  [K q8_0. V q8_0]    14.47 (1.191x)  [K q8_0. V q4_0]    11.89 (0.979x)
+mistral-7b 32/8/128    ctx   576  current    20.30  tiled    39.75 (current/tiled 0.511)  [f16 block-major]    51.65 (2.545x)  [K q8_0. V q8_0]    19.05 (0.938x)  [K q8_0. V q4_0]    19.66 (0.969x)
+mistral-7b 32/8/128    ctx  1024  current    29.74  tiled    60.05 (current/tiled 0.495)  [f16 block-major]    87.09 (2.929x)  [K q8_0. V q8_0]    31.81 (1.070x)  [K q8_0. V q4_0]    31.07 (1.045x)
+mistral-7b 32/8/128    ctx  2048  current    54.88  tiled   117.98 (current/tiled 0.465)  [f16 block-major]   164.24 (2.993x)  [K q8_0. V q8_0]    56.78 (1.035x)  [K q8_0. V q4_0]    60.79 (1.108x)
+
+## after-1
+lanes current. tiled. [f16 block-major]. quantized; us per launch. median of 5 x 100
+tinyllama 32/4/64      ctx    64  current     7.22  tiled     7.80 (current/tiled 0.925)  [f16 block-major]    30.98 (4.291x)  [K q8_0. V q8_0]    30.73 (4.257x)  [K q8_0. V q4_0]    30.74 (4.258x)
+tinyllama 32/4/64      ctx   256  current     7.29  tiled    13.73 (current/tiled 0.531)  [f16 block-major]     7.38 (1.013x)  [K q8_0. V q8_0]     8.04 (1.103x)  [K q8_0. V q4_0]     7.65 (1.049x)
+tinyllama 32/4/64      ctx   576  current    12.02  tiled    23.72 (current/tiled 0.507)  [f16 block-major]    11.08 (0.922x)  [K q8_0. V q8_0]    12.37 (1.029x)  [K q8_0. V q4_0]    11.05 (0.919x)
+tinyllama 32/4/64      ctx  1024  current    17.38  tiled    38.17 (current/tiled 0.455)  [f16 block-major]    16.14 (0.929x)  [K q8_0. V q8_0]    18.68 (1.075x)  [K q8_0. V q4_0]    18.42 (1.060x)
+tinyllama 32/4/64      ctx  2048  current    29.86  tiled   101.95 (current/tiled 0.293)  [f16 block-major]    28.56 (0.956x)  [K q8_0. V q8_0]    30.58 (1.024x)  [K q8_0. V q4_0]    28.94 (0.969x)
+qwen2.5-3b 16/2/128    ctx    64  current     7.08  tiled     7.07 (current/tiled 1.001)  [f16 block-major]     6.87 (0.971x)  [K q8_0. V q8_0]     6.56 (0.928x)  [K q8_0. V q4_0]     6.59 (0.932x)
+qwen2.5-3b 16/2/128    ctx   256  current     9.74  tiled    11.68 (current/tiled 0.833)  [f16 block-major]    10.12 (1.039x)  [K q8_0. V q8_0]     8.83 (0.906x)  [K q8_0. V q4_0]     8.56 (0.879x)
+qwen2.5-3b 16/2/128    ctx   576  current    13.88  tiled    18.53 (current/tiled 0.749)  [f16 block-major]    15.68 (1.130x)  [K q8_0. V q8_0]    13.35 (0.962x)  [K q8_0. V q4_0]    11.69 (0.843x)
+qwen2.5-3b 16/2/128    ctx  1024  current    17.06  tiled    29.52 (current/tiled 0.578)  [f16 block-major]    26.51 (1.554x)  [K q8_0. V q8_0]    17.62 (1.033x)  [K q8_0. V q4_0]    17.64 (1.034x)
+qwen2.5-3b 16/2/128    ctx  2048  current    32.03  tiled    71.80 (current/tiled 0.446)  [f16 block-major]    45.45 (1.419x)  [K q8_0. V q8_0]    28.77 (0.898x)  [K q8_0. V q4_0]    28.90 (0.902x)
+phi-3.5-mini 32/32/96  ctx    64  current     6.21  tiled     7.92 (current/tiled 0.784)  [f16 block-major]     7.65 (1.233x)  [K q8_0. V q8_0]     7.80 (1.257x)  [K q8_0. V q4_0]     7.67 (1.236x)
+phi-3.5-mini 32/32/96  ctx   256  current    21.24  tiled    31.19 (current/tiled 0.681)  [f16 block-major]    23.11 (1.088x)  [K q8_0. V q8_0]    11.81 (0.556x)  [K q8_0. V q4_0]    11.24 (0.529x)
+phi-3.5-mini 32/32/96  ctx   576  current    39.56  tiled    55.61 (current/tiled 0.711)  [f16 block-major]    44.72 (1.130x)  [K q8_0. V q8_0]    29.09 (0.735x)  [K q8_0. V q4_0]    24.71 (0.625x)
+phi-3.5-mini 32/32/96  ctx  1024  current    65.81  tiled    94.73 (current/tiled 0.695)  [f16 block-major]    76.65 (1.165x)  [K q8_0. V q8_0]    48.28 (0.734x)  [K q8_0. V q4_0]    37.65 (0.572x)
+phi-3.5-mini 32/32/96  ctx  2048  current   124.68  tiled   183.47 (current/tiled 0.680)  [f16 block-major]   146.48 (1.175x)  [K q8_0. V q8_0]    81.59 (0.654x)  [K q8_0. V q4_0]    72.73 (0.583x)
+mistral-7b 32/8/128    ctx    64  current     6.45  tiled     8.69 (current/tiled 0.742)  [f16 block-major]     8.48 (1.314x)  [K q8_0. V q8_0]     8.14 (1.262x)  [K q8_0. V q4_0]     8.12 (1.259x)
+mistral-7b 32/8/128    ctx   256  current    12.13  tiled    15.45 (current/tiled 0.785)  [f16 block-major]    15.11 (1.246x)  [K q8_0. V q8_0]    11.42 (0.941x)  [K q8_0. V q4_0]    11.28 (0.930x)
+mistral-7b 32/8/128    ctx   576  current    20.22  tiled    37.09 (current/tiled 0.545)  [f16 block-major]    27.32 (1.351x)  [K q8_0. V q8_0]    20.15 (0.996x)  [K q8_0. V q4_0]    18.34 (0.907x)
+mistral-7b 32/8/128    ctx  1024  current    31.30  tiled    64.66 (current/tiled 0.484)  [f16 block-major]    48.29 (1.543x)  [K q8_0. V q8_0]    30.88 (0.987x)  [K q8_0. V q4_0]    25.60 (0.818x)
+mistral-7b 32/8/128    ctx  2048  current    56.65  tiled   120.51 (current/tiled 0.470)  [f16 block-major]    88.44 (1.561x)  [K q8_0. V q8_0]    52.54 (0.928x)  [K q8_0. V q4_0]    50.41 (0.890x)
+
+## before-2
+lanes current. tiled. [f16 block-major]. quantized; us per launch. median of 5 x 100
+tinyllama 32/4/64      ctx    64  current     5.53  tiled     6.76 (current/tiled 0.818)  [f16 block-major]    12.50 (2.261x)  [K q8_0. V q8_0]    17.16 (3.104x)  [K q8_0. V q4_0]     8.17 (1.478x)
+tinyllama 32/4/64      ctx   256  current     7.29  tiled    14.02 (current/tiled 0.520)  [f16 block-major]    12.76 (1.750x)  [K q8_0. V q8_0]     8.97 (1.230x)  [K q8_0. V q4_0]     9.14 (1.254x)
+tinyllama 32/4/64      ctx   576  current    12.10  tiled    24.85 (current/tiled 0.487)  [f16 block-major]    15.39 (1.272x)  [K q8_0. V q8_0]    13.69 (1.131x)  [K q8_0. V q4_0]    14.26 (1.179x)
+tinyllama 32/4/64      ctx  1024  current    17.67  tiled    38.35 (current/tiled 0.461)  [f16 block-major]    22.94 (1.298x)  [K q8_0. V q8_0]    20.58 (1.165x)  [K q8_0. V q4_0]    19.87 (1.124x)
+tinyllama 32/4/64      ctx  2048  current    28.41  tiled   102.24 (current/tiled 0.278)  [f16 block-major]    47.77 (1.682x)  [K q8_0. V q8_0]    38.45 (1.354x)  [K q8_0. V q4_0]    39.15 (1.378x)
+qwen2.5-3b 16/2/128    ctx    64  current     6.44  tiled     7.10 (current/tiled 0.908)  [f16 block-major]     7.92 (1.229x)  [K q8_0. V q8_0]     7.03 (1.092x)  [K q8_0. V q4_0]     7.08 (1.099x)
+qwen2.5-3b 16/2/128    ctx   256  current     9.75  tiled    11.72 (current/tiled 0.831)  [f16 block-major]    14.64 (1.502x)  [K q8_0. V q8_0]     9.91 (1.017x)  [K q8_0. V q4_0]    10.25 (1.051x)
+qwen2.5-3b 16/2/128    ctx   576  current    13.11  tiled    18.63 (current/tiled 0.704)  [f16 block-major]    28.54 (2.177x)  [K q8_0. V q8_0]    14.75 (1.125x)  [K q8_0. V q4_0]    15.40 (1.175x)
+qwen2.5-3b 16/2/128    ctx  1024  current    18.54  tiled    31.02 (current/tiled 0.598)  [f16 block-major]    44.22 (2.384x)  [K q8_0. V q8_0]    21.42 (1.155x)  [K q8_0. V q4_0]    25.60 (1.380x)
+qwen2.5-3b 16/2/128    ctx  2048  current    38.58  tiled    71.56 (current/tiled 0.539)  [f16 block-major]    84.80 (2.198x)  [K q8_0. V q8_0]    38.99 (1.011x)  [K q8_0. V q4_0]    42.04 (1.089x)
+phi-3.5-mini 32/32/96  ctx    64  current     6.25  tiled     7.97 (current/tiled 0.784)  [f16 block-major]     9.37 (1.500x)  [K q8_0. V q8_0]    10.21 (1.634x)  [K q8_0. V q4_0]     7.81 (1.251x)
+phi-3.5-mini 32/32/96  ctx   256  current    24.07  tiled    28.25 (current/tiled 0.852)  [f16 block-major]    26.64 (1.107x)  [K q8_0. V q8_0]    10.98 (0.456x)  [K q8_0. V q4_0]    11.28 (0.469x)
+phi-3.5-mini 32/32/96  ctx   576  current    39.42  tiled    60.65 (current/tiled 0.650)  [f16 block-major]    51.18 (1.298x)  [K q8_0. V q8_0]    27.50 (0.698x)  [K q8_0. V q4_0]    24.75 (0.628x)
+phi-3.5-mini 32/32/96  ctx  1024  current    65.84  tiled    96.52 (current/tiled 0.682)  [f16 block-major]    77.78 (1.181x)  [K q8_0. V q8_0]    43.26 (0.657x)  [K q8_0. V q4_0]    39.42 (0.599x)
+phi-3.5-mini 32/32/96  ctx  2048  current   125.51  tiled   184.61 (current/tiled 0.680)  [f16 block-major]   147.65 (1.176x)  [K q8_0. V q8_0]    82.95 (0.661x)  [K q8_0. V q4_0]    70.75 (0.564x)
+mistral-7b 32/8/128    ctx    64  current     6.48  tiled     9.75 (current/tiled 0.665)  [f16 block-major]    12.98 (2.003x)  [K q8_0. V q8_0]    11.22 (1.731x)  [K q8_0. V q4_0]     9.99 (1.542x)
+mistral-7b 32/8/128    ctx   256  current    10.43  tiled    15.48 (current/tiled 0.674)  [f16 block-major]    27.31 (2.617x)  [K q8_0. V q8_0]    13.32 (1.277x)  [K q8_0. V q4_0]    13.71 (1.314x)
+mistral-7b 32/8/128    ctx   576  current    21.39  tiled    38.88 (current/tiled 0.550)  [f16 block-major]    52.87 (2.472x)  [K q8_0. V q8_0]    19.47 (0.910x)  [K q8_0. V q4_0]    18.86 (0.882x)
+mistral-7b 32/8/128    ctx  1024  current    28.19  tiled    63.39 (current/tiled 0.445)  [f16 block-major]    87.50 (3.104x)  [K q8_0. V q8_0]    35.33 (1.253x)  [K q8_0. V q4_0]    31.45 (1.116x)
+mistral-7b 32/8/128    ctx  2048  current    57.83  tiled   115.45 (current/tiled 0.501)  [f16 block-major]   164.01 (2.836x)  [K q8_0. V q8_0]    55.88 (0.966x)  [K q8_0. V q4_0]    59.73 (1.033x)
+
+## after-2
+lanes current. tiled. [f16 block-major]. quantized; us per launch. median of 5 x 100
+tinyllama 32/4/64      ctx    64  current     8.65  tiled     7.02 (current/tiled 1.232)  [f16 block-major]    31.35 (3.624x)  [K q8_0. V q8_0]    25.89 (2.992x)  [K q8_0. V q4_0]    29.32 (3.388x)
+tinyllama 32/4/64      ctx   256  current     7.30  tiled    12.42 (current/tiled 0.588)  [f16 block-major]     7.42 (1.017x)  [K q8_0. V q8_0]     8.08 (1.107x)  [K q8_0. V q4_0]     7.68 (1.052x)
+tinyllama 32/4/64      ctx   576  current    13.35  tiled    22.78 (current/tiled 0.586)  [f16 block-major]    10.41 (0.780x)  [K q8_0. V q8_0]    13.30 (0.996x)  [K q8_0. V q4_0]    11.10 (0.831x)
+tinyllama 32/4/64      ctx  1024  current    16.38  tiled    38.45 (current/tiled 0.426)  [f16 block-major]    16.16 (0.986x)  [K q8_0. V q8_0]    17.43 (1.064x)  [K q8_0. V q4_0]    17.50 (1.068x)
+tinyllama 32/4/64      ctx  2048  current    30.79  tiled    99.46 (current/tiled 0.310)  [f16 block-major]    29.43 (0.956x)  [K q8_0. V q8_0]    28.51 (0.926x)  [K q8_0. V q4_0]    27.13 (0.881x)
+qwen2.5-3b 16/2/128    ctx    64  current     6.46  tiled     7.18 (current/tiled 0.900)  [f16 block-major]     6.90 (1.068x)  [K q8_0. V q8_0]     6.62 (1.024x)  [K q8_0. V q4_0]     6.63 (1.025x)
+qwen2.5-3b 16/2/128    ctx   256  current    10.48  tiled    12.53 (current/tiled 0.836)  [f16 block-major]    10.18 (0.972x)  [K q8_0. V q8_0]     8.87 (0.847x)  [K q8_0. V q4_0]     8.60 (0.821x)
+qwen2.5-3b 16/2/128    ctx   576  current    13.11  tiled    21.45 (current/tiled 0.611)  [f16 block-major]    15.73 (1.200x)  [K q8_0. V q8_0]    15.20 (1.159x)  [K q8_0. V q4_0]    11.76 (0.897x)
+qwen2.5-3b 16/2/128    ctx  1024  current    15.64  tiled    31.20 (current/tiled 0.501)  [f16 block-major]    26.72 (1.709x)  [K q8_0. V q8_0]    18.46 (1.181x)  [K q8_0. V q4_0]    17.64 (1.128x)
+qwen2.5-3b 16/2/128    ctx  2048  current    32.28  tiled    71.53 (current/tiled 0.451)  [f16 block-major]    50.98 (1.580x)  [K q8_0. V q8_0]    28.90 (0.895x)  [K q8_0. V q4_0]    27.00 (0.837x)
+phi-3.5-mini 32/32/96  ctx    64  current     6.24  tiled     7.97 (current/tiled 0.783)  [f16 block-major]     7.66 (1.228x)  [K q8_0. V q8_0]     7.82 (1.255x)  [K q8_0. V q4_0]     7.74 (1.241x)
+phi-3.5-mini 32/32/96  ctx   256  current    22.62  tiled    29.37 (current/tiled 0.770)  [f16 block-major]    25.95 (1.147x)  [K q8_0. V q8_0]    11.83 (0.523x)  [K q8_0. V q4_0]    11.30 (0.500x)
+phi-3.5-mini 32/32/96  ctx   576  current    38.16  tiled    59.22 (current/tiled 0.644)  [f16 block-major]    46.86 (1.228x)  [K q8_0. V q8_0]    30.96 (0.811x)  [K q8_0. V q4_0]    25.75 (0.675x)
+phi-3.5-mini 32/32/96  ctx  1024  current    66.59  tiled    96.34 (current/tiled 0.691)  [f16 block-major]    76.47 (1.148x)  [K q8_0. V q8_0]    46.94 (0.705x)  [K q8_0. V q4_0]    37.94 (0.570x)
+phi-3.5-mini 32/32/96  ctx  2048  current   126.60  tiled   184.61 (current/tiled 0.686)  [f16 block-major]   145.36 (1.148x)  [K q8_0. V q8_0]    82.07 (0.648x)  [K q8_0. V q4_0]    71.41 (0.564x)
+mistral-7b 32/8/128    ctx    64  current     6.48  tiled     8.69 (current/tiled 0.746)  [f16 block-major]     8.52 (1.314x)  [K q8_0. V q8_0]     8.17 (1.261x)  [K q8_0. V q4_0]     8.16 (1.259x)
+mistral-7b 32/8/128    ctx   256  current    12.11  tiled    17.55 (current/tiled 0.690)  [f16 block-major]    15.18 (1.253x)  [K q8_0. V q8_0]    11.45 (0.945x)  [K q8_0. V q4_0]    11.33 (0.935x)
+mistral-7b 32/8/128    ctx   576  current    20.51  tiled    40.34 (current/tiled 0.509)  [f16 block-major]    28.87 (1.407x)  [K q8_0. V q8_0]    16.39 (0.799x)  [K q8_0. V q4_0]    18.11 (0.883x)
+mistral-7b 32/8/128    ctx  1024  current    32.18  tiled    63.13 (current/tiled 0.510)  [f16 block-major]    48.33 (1.502x)  [K q8_0. V q8_0]    30.45 (0.946x)  [K q8_0. V q4_0]    25.70 (0.799x)
+mistral-7b 32/8/128    ctx  2048  current    57.91  tiled   115.32 (current/tiled 0.502)  [f16 block-major]    88.24 (1.524x)  [K q8_0. V q8_0]    50.60 (0.874x)  [K q8_0. V q4_0]    49.81 (0.860x)
+
+## summary (means of the two runs a tree)
+model        ctx | q8_0/q8_0 us: before (2 runs)  after (2 runs)  after/before | q8_0/q4_0 after/before | FP16 us before after | q8_0/q8_0 over FP16 before after
+tinyllama      64 |   37.81   17.16     30.73   25.89   1.030 | 1.865 |    5.98    7.94 | 4.596 3.568
+tinyllama     256 |    8.10    8.97      8.04    8.08   0.944 | 0.815 |    7.26    7.29 | 1.176 1.105
+tinyllama     576 |   13.79   13.69     12.37   13.30   0.934 | 0.783 |   11.22   12.68 | 1.224 1.012
+tinyllama    1024 |   18.68   20.58     18.68   17.43   0.920 | 0.901 |   16.48   16.88 | 1.191 1.070
+tinyllama    2048 |   37.31   38.45     30.58   28.51   0.780 | 0.724 |   30.55   30.32 | 1.240 0.974
+qwen2.5-3b     64 |    6.96    7.03      6.56    6.62   0.942 | 0.938 |    6.78    6.77 | 1.032 0.973
+qwen2.5-3b    256 |    9.86    9.91      8.83    8.87   0.895 | 0.839 |    9.39   10.11 | 1.052 0.875
+qwen2.5-3b    576 |   14.63   14.75     13.35   15.20   0.972 | 0.763 |   13.50   13.50 | 1.089 1.058
+qwen2.5-3b   1024 |   22.07   21.42     17.62   18.46   0.830 | 0.702 |   18.46   16.35 | 1.178 1.103
+qwen2.5-3b   2048 |   39.42   38.99     28.77   28.90   0.735 | 0.660 |   36.28   32.16 | 1.081 0.897
+phi-3.5-mini   64 |    8.94   10.21      7.80    7.82   0.816 | 0.990 |    6.23    6.22 | 1.536 1.255
+phi-3.5-mini  256 |   11.78   10.98     11.81   11.83   1.039 | 1.001 |   21.77   21.93 | 0.523 0.539
+phi-3.5-mini  576 |   32.41   27.50     29.09   30.96   1.002 | 0.984 |   40.69   38.86 | 0.736 0.773
+phi-3.5-mini 1024 |   43.27   43.26     48.28   46.94   1.100 | 0.950 |   64.95   66.20 | 0.666 0.719
+phi-3.5-mini 2048 |   82.83   82.95     81.59   82.07   0.987 | 1.007 |  126.96  125.64 | 0.653 0.651
+mistral-7b     64 |    9.98   11.22      8.14    8.17   0.769 | 0.765 |    6.47    6.46 | 1.637 1.261
+mistral-7b    256 |   14.47   13.32     11.42   11.45   0.823 | 0.883 |   11.29   12.12 | 1.231 0.943
+mistral-7b    576 |   19.05   19.47     20.15   16.39   0.949 | 0.946 |   20.84   20.37 | 0.924 0.897
+mistral-7b   1024 |   31.81   35.33     30.88   30.45   0.913 | 0.821 |   28.96   31.74 | 1.159 0.966
+mistral-7b   2048 |   56.78   55.88     52.54   50.60   0.915 | 0.832 |   56.36   57.28 | 1.000 0.900

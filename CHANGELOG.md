@@ -1,5 +1,25 @@
 ## Status 
 
+**Session 149** - FP16 decode on the GPU is faster at long context: decode attention runs a wider block
+
+- **Decode attention on 256 threads.** With GPU attention and the default `f16` KV, a decoded token's attention now runs
+  on 256-thread blocks (64 slots), where it ran on 128, at head widths up to 128 (every Llama-family, Mistral, Qwen2
+  and Phi-3 model tested). A decode launch has one block per head, so with few heads the old block left the GPU mostly
+  idle. Each key's values are loaded as whole 8-byte words before they are used. At 2,048 keys the attention launch
+  takes 0.30x (TinyLlama) to 0.68x (Phi-3.5-mini) of its old time, and less at every context measured from 64 keys.
+- **Decode speed.** At a 2,048-token context, clocks pinned: TinyLlama 1.28x, Qwen2.5-3B 1.09x, Phi-3.5-mini 1.09x,
+  Mistral 7B 1.07x the previous build's decode rate. Prefill and 256-wide heads are unchanged.
+- **`q8_0` KV against `f16`.** Part of the quantized copy's decode lead was this same block, which `f16` now has too:
+  decode with `q8_0` read 0.94x (Qwen2.5-3B) to 0.98x the faster `f16` rate, clocks pinned (it read 1.03x to 1.23x
+  against the old one).
+- **Quantized decode attention.** The `q8_0`/`q4_0` decode loop now loads each key's K and V blocks before using them,
+  unpacks quantized bytes into floats without conversion instructions, and has no branch per block. At 2,048 keys its
+  launch takes 0.74x (Qwen2.5-3B) to 0.99x (Phi-3.5-mini) of its previous time and 0.65x to 0.97x of the `f16` launch's;
+  decode with `q8_0` reads 0.97x to 0.98x the `f16` rate, unpinned. Over the configurations tested, outputs are unchanged
+  bit for bit except with `q4_0` keys and `f16` values, within 2 ulp.
+- **Outputs.** The attention adds the same values in a different order, so greedy text can differ from the previous
+  build after many tokens; it stays within the same tolerance of the CPU attention.
+
 **Session 148** - A quantized GPU KV copy no longer costs prefill time: the host copy takes the blocks the GPU encoded
 
 - **No second encode.** When a prefill window runs a whole layer on the GPU, the host copy of the KV now takes the

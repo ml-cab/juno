@@ -883,13 +883,24 @@ GPU FFI (node module — Panama project, JEP 454):
         tiles registers; a row of one would still be served, by the 32-key tiles); _d256 keeps
         it. The launcher refuses a quantized format at a head width that is not a multiple of 32
         (DeviceKvFormat's rule). Decode rows (rowsPerBlock 1) at
-        head widths up to 128 take gqa_decode_kv_d64/_d128 instead: one block per row and head of
-        256 threads, 64 slots of 4 lanes (the same per-slot loop at a 64-key stride, the same
-        merge over 64 slots, about 120 registers), since a decode launch's one block per head
-        leaves a 128-thread block one warp per scheduler; a row's result depends on its own cache
-        and length, so a batched row stays bit for bit its single decode. GqaAttentionKernel.launch
-        and launchBounded take the formats and route here; FP16 runs gqa_attention.ptx, whose code
-        the shared header leaves unchanged (its PTX differs only in internal symbol names).
+        head widths up to 128 take gqa_decode_kv_d64/_d128 instead (GqaAttentionKernel.wideDecode):
+        gqa_decode_wide.cuh's block per row and head of 256 threads, 64 slots of 4 lanes (the same
+        per-slot keys at a 64-key stride, the same merge over 64 slots), since a decode launch's one
+        block per head leaves a 128-thread block one warp per scheduler; here each lane holds a
+        contiguous chunk of the head (a block at _d128, half a block at _d64) so it reads whole
+        blocks. gqa_decode_kv_wide loads each key's K and V chunks up front (GqaChunk: the scale and
+        quant words, no branch between them; a slot outside the window loads row lo, a lane past the
+        head the head's first block, both discarded), turns quant bytes into floats by a byte permute
+        under the exponent of 2^23 and one subtraction (gqa_quad_floats: exact, no conversion
+        instruction), and has no per-quad branch (with a head width a multiple of 32 a lane's chunk
+        is wholly in the head or wholly past it); the running sum is one written-out fused
+        multiply-add. Arithmetic in gqa_decode_kv's order: 45 of 50 decode configurations bit for
+        bit that loop's, K q4_0 with V f16 within 2 ulp (that loop's sum was fused by the compiler
+        for the other four pairs only). __launch_bounds__(256, 2): 128 registers, two blocks a
+        multiprocessor (144 uncapped ran 32-head launches in two waves). A row's result depends on
+        its own cache and length, so a batched row stays bit for bit its single decode.
+        GqaAttentionKernel.launch and launchBounded take the formats and route here; FP16 runs
+        gqa_attention.ptx.
   GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx: a tiled,
         online-softmax kernel (running max, running sum, rescaled accumulator) that streams K/V
         through shared memory in 32-key tiles (16 for heads over 128), converted from FP16 to FP32
@@ -901,8 +912,19 @@ GPU FFI (node module — Panama project, JEP 454):
         the end; such a row shares its keys with no other row, so each slot reads its keys straight
         from global memory, with no staging and no barrier per tile (same keys, order and arithmetic
         as a 32-key tile, so bit-identical to it; 3.6x to 18x faster at decode than staging, and the
-        path that gives 256-wide heads a key per slot at decode). GqaAttentionDecodeBench (test
-        scope, opt-in) times one decode row per launch on device events. launchBounded splits a
+        path that gives 256-wide heads a key per slot at decode). Decode rows at head widths up to
+        128 (wideDecode: rowsPerBlock 1, headDim <= 128) run gqa_decode_d64/_d128 instead, the wide
+        block of gqa_decode_wide.cuh (shared with gqa_attention_kv.cu): grid B x numHeads, 256
+        threads = 64 slots of 4 lanes, each slot the loop above at a 64-key stride, merged over 64
+        slots; lanes keep the interleaved quads, and each key's K and V quads are loaded up front,
+        one 8-byte read-only load a quad with no branch between them (a slot outside the window
+        reads row lo and discards it), so a key's loads are in flight together; 128 and 78
+        registers. Launched through a reused KernelParams block (no allocation per launch). At
+        2,048 keys 0.30x (TinyLlama) to 0.68x (Phi-3.5-mini) the tiled kernel's decode time, under
+        1.0 from 64 keys; 256-wide heads and prefill tiles keep the tiled entries, whose PTX the
+        wide entries left unchanged. GqaAttentionDecodeBench (test scope, opt-in) times one decode
+        row per launch on device events: the shipped launch, the tiled entry at one row a block,
+        the quantized module's wide decode over the same FP16 rows, and the quantized formats. launchBounded splits a
         prefill window into launches of bounded work between whole blocks (BoundedLaunches), given
         the rows' sequence lengths on the host; registerWidth(headDim) is the entry's head width.
         A per-launch attention window (0 = none) restricts row b to its last `window`
@@ -910,7 +932,10 @@ GPU FFI (node module — Panama project, JEP 454):
         (supportsHeadDim: a multiple of 4, <= 256; otherwise the caller stays on GqaMath). Fixed reduction
         order, so output is bit-identical launch to launch (GqaAttentionReproducibilityTest);
         held to GqaMath from 1 key to MAX_SEQ_LEN, at head widths 64/80/96/128/256 and with the
-        window, by GqaAttentionTiledTest.
+        window, by GqaAttentionTiledTest; the wide decode block on either side of a 64-key stride,
+        with windows whose first key is off it, and a batched row bit for bit its own launch, by
+        GqaAttentionWideDecodeTest (and over the quantized formats, each pair, head widths 32 to 256,
+        by GqaAttentionWideDecodeKvTest); which launches take it by GqaAttentionDecodeRouteTest.
   CudaGqaAttention — handler-facing attendBatched(...); real dispatch against DeviceKvCache,
         grow-and-keep-max scratch taken from a DeviceScratchPool (runs outside the context lock,
         so concurrent callers each hold an entry; the pool is sized by concurrent calls, not by

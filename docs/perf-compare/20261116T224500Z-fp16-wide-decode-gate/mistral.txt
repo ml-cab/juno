@@ -1,0 +1,18 @@
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=34.962 reps=[35.205010436053655, 34.962010008150145, 34.73134104585669]
+[A1] CLOCK start=65 C after 115s loaded_samples=74 below_lock=0 above_lock=74 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:14 0x0000000000000004:1 0x0000000000000000:59 
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=37.695 reps=[37.695171576851834, 37.75944258566869, 37.1833130381243]
+[B1] CLOCK start=65 C after 50s loaded_samples=71 below_lock=0 above_lock=71 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:12 0x0000000000000004:1 0x0000000000000000:58 
+[C1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=36.243 reps=[36.67646825796487, 36.24332005243495, 35.98802785490113]
+[C1] CLOCK start=65 C after 45s loaded_samples=69 below_lock=0 above_lock=69 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:19 0x0000000000000000:50 
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=34.910 reps=[35.119728389113, 34.90983038181254, 34.48863638742691]
+[A2] CLOCK start=65 C after 45s loaded_samples=74 below_lock=0 above_lock=74 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:18 0x0000000000000004:1 0x0000000000000000:55 
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=37.192 reps=[37.515593942803484, 37.192218274727345, 36.7922016279611]
+[B2] CLOCK start=65 C after 45s loaded_samples=73 below_lock=0 above_lock=73 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:19 0x0000000000000004:4 0x0000000000000000:50 
+[C2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=36.457 reps=[36.58906420766415, 36.456740654694265, 36.232980965111864]
+[C2] CLOCK start=65 C after 45s loaded_samples=70 below_lock=0 above_lock=70 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:15 0x0000000000000000:55 
+[A3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=34.894 reps=[35.07775257217452, 34.89359435296855, 34.447342734120994]
+[A3] CLOCK start=65 C after 45s loaded_samples=74 below_lock=0 above_lock=74 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:14 0x0000000000000000:60 
+[B3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=37.245 reps=[37.51642013840517, 37.24537703927718, 36.95549255063033]
+[B3] CLOCK start=65 C after 45s loaded_samples=72 below_lock=0 above_lock=72 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:12 0x0000000000000000:60 
+[C3] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=36.368 reps=[36.44356150451497, 36.36826719089001, 36.077626815827614]
+[C3] CLOCK start=65 C after 45s loaded_samples=70 below_lock=0 above_lock=70 lock NOT applied (clock recorded, not fixed) hottest=83C reasons=0x0000000000000020:12 0x0000000000000000:58 

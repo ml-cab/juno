@@ -43,7 +43,11 @@ import org.junit.jupiter.api.Test;
  * repetitions of 100 launches; asserts nothing.
  *
  * <p>Lanes: {@code current}, the shipped kernel through
- * {@link GqaAttentionKernel#launch}; and, when
+ * {@link GqaAttentionKernel#launch} (decode rows at head widths up to 128 run the wide
+ * decode block); {@code tiled}, the 128-thread tiled entry of the same module at one
+ * row a block, which every FP16 decode row ran before the wide block (its PTX is
+ * unchanged); {@code [f16 block-major]}, the quantized module's wide decode over the
+ * same FP16 rows (each lane a contiguous chunk of the head); the quantized lanes; and, when
  * {@code -Djuno.attentionBench.oldPtx=<path>} names the PTX of the earlier
  * full-materialization kernel (entry {@code gqa_attention}, with its scores
  * scratch argument), {@code materializing}.
@@ -98,8 +102,10 @@ class GqaAttentionDecodeBench {
 
 		try (GpuContext ctx = GpuContext.init(0); Arena arena = Arena.ofConfined()) {
 			MemorySegment oldFn = oldPtx == null ? null : loadOld(arena, Files.readAllBytes(Path.of(oldPtx)));
-			System.out.printf("attention decode bench: lanes current%s; us per launch, median of %d x %d%n",
-					oldFn == null ? "" : ", materializing", REPS, LAUNCHES);
+			MemorySegment[] tiledFns = loadTiled(arena);
+			GqaAttentionKvKernel kvKernel = GqaAttentionKvKernel.tryLoad();
+			System.out.printf("attention decode bench: lanes current, tiled, [f16 block-major], quantized%s; us per launch, "
+					+ "median of %d x %d%n", oldFn == null ? "" : ", materializing", REPS, LAUNCHES);
 			for (Shape shape : SHAPES) {
 				Random rng = new Random(shape.name().hashCode());
 				float[][] kRows = rows(rng, maxLen, shape.kvDim());
@@ -131,7 +137,17 @@ class GqaAttentionDecodeBench {
 									"cudaMemcpy");
 							double current = time(cuda, arena, dLen, dBusy, len -> kernel.launch(dQ, dK, dV, len, dOut, 1,
 									shape.numHeads(), shape.gqaRatio(), shape.headDim(), shape.kvDim(), 1, 0, null));
-							String line = String.format("%-22s ctx %5d  current %8.2f", shape.name(), seqLen, current);
+							MemorySegment tiledFn = tiledFns[GqaAttentionKernel.registerWidth(shape.headDim()) / 64 - 1];
+							double tiled = time(cuda, arena, dLen, dBusy, len -> launchTiled(arena, tiledFn, dQ, dK, dV, len,
+									dOut, shape));
+							String line = String.format("%-22s ctx %5d  current %8.2f  tiled %8.2f (current/tiled %.3f)",
+									shape.name(), seqLen, current, tiled, current / tiled);
+							if (kvKernel != null && shape.headDim() % DeviceKvFormat.BLOCK == 0) {
+								double blockMajor = time(cuda, arena, dLen, dBusy, len -> kvKernel.launch(dQ, dK, dV, len,
+										dOut, 1, shape.numHeads(), shape.gqaRatio(), shape.headDim(), shape.kvDim(), 1, 0,
+										DeviceKvFormats.F16, null));
+								line += String.format("  [f16 block-major] %8.2f (%.3fx)", blockMajor, blockMajor / current);
+							}
 							for (int l = 0; l < lanes.length; l++) {
 								DeviceKvFormats f = lanes[l];
 								MemorySegment qk = qPtrs[l][0];
@@ -204,6 +220,54 @@ class GqaAttentionDecodeBench {
 		MemorySegment host = arena.allocateFrom(JAVA_INT, value);
 		CudaBindings.check(CudaBindings.callInt(cuda.cudaMemcpy, d, host, (long) Integer.BYTES, H2D), "cudaMemcpy");
 		return d;
+	}
+
+	/**
+	 * The tiled entries of the shipped {@code gqa_attention.ptx} ({@code gqa_attention_d64}, {@code _d128},
+	 * {@code _d256}), loaded as a module of their own, so a decode row can be launched through them at one row a block.
+	 */
+	private static MemorySegment[] loadTiled(Arena arena) throws IOException {
+		byte[] ptxBytes;
+		try (var in = GqaAttentionDecodeBench.class.getResourceAsStream("/cab/ml/juno/node/gqa_attention.ptx")) {
+			if (in == null)
+				throw new IOException("missing gqa_attention.ptx");
+			ptxBytes = in.readAllBytes();
+		}
+		CudaDriverBindings drv = CudaDriverBindings.instance();
+		MemorySegment ptx = arena.allocate(ptxBytes.length + 1L);
+		MemorySegment.copy(MemorySegment.ofArray(ptxBytes), 0, ptx, 0, ptxBytes.length);
+		ptx.set(JAVA_BYTE, ptxBytes.length, (byte) 0);
+		MemorySegment moduleSlot = arena.allocate(ADDRESS);
+		CudaDriverBindings.check(CudaDriverBindings.callInt(drv.cuModuleLoadData, moduleSlot, ptx), "cuModuleLoadData");
+		MemorySegment[] fns = new MemorySegment[4];
+		String[] entries = { "gqa_attention_d64", "gqa_attention_d128", null, "gqa_attention_d256" };
+		for (int i = 0; i < entries.length; i++) {
+			if (entries[i] == null)
+				continue;
+			MemorySegment fnSlot = arena.allocate(ADDRESS);
+			CudaDriverBindings.check(CudaDriverBindings.callInt(drv.cuModuleGetFunction, fnSlot, moduleSlot.get(ADDRESS, 0),
+					arena.allocateFrom(entries[i])), "cuModuleGetFunction(" + entries[i] + ")");
+			fns[i] = fnSlot.get(ADDRESS, 0);
+		}
+		return fns;
+	}
+
+	/** One decode row through a tiled entry at one row a block (the arguments of {@code GQA_ARGS}). */
+	private static void launchTiled(Arena arena, MemorySegment fn, MemorySegment q, MemorySegment k, MemorySegment v,
+			MemorySegment len, MemorySegment out, Shape shape) {
+		MemorySegment params = arena.allocate(ADDRESS, 12);
+		MemorySegment[] ptrs = { q, k, v, len, out };
+		for (int i = 0; i < ptrs.length; i++) {
+			MemorySegment slot = arena.allocate(ADDRESS);
+			slot.set(ADDRESS, 0, ptrs[i]);
+			params.setAtIndex(ADDRESS, i, slot);
+		}
+		int[] ints = { 1, shape.numHeads(), shape.gqaRatio(), shape.headDim(), shape.kvDim(), 1, 0 };
+		for (int i = 0; i < ints.length; i++)
+			params.setAtIndex(ADDRESS, 5 + i, arena.allocateFrom(JAVA_INT, ints[i]));
+		CudaDriverBindings drv = CudaDriverBindings.instance();
+		CudaDriverBindings.check(CudaDriverBindings.callInt(drv.cuLaunchKernel, fn, 1, shape.numHeads(), 1, THREADS, 1, 1,
+				0, MemorySegment.NULL, params, MemorySegment.NULL), "cuLaunchKernel(gqa_attention, tiled)");
 	}
 
 	private static MemorySegment loadOld(Arena arena, byte[] ptxBytes) {

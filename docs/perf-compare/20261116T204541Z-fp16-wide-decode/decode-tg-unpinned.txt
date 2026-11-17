@@ -1,0 +1,82 @@
+# DeviceKvDecodeTgLiveTest, unpinned, 2,048-token context, 128 decode steps, one warm-up and three measured repetitions per JVM.
+# A = f16, baseline tree (git archive 637751b0); B = f16, this tree; C = q8_0 keys and values, this tree. Order per model: A1 B1 C1 A2 B2.
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=119.689
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=118.987
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=121.766
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=119.689 reps=[119.68934764469337, 118.98710770690772, 121.7663796328683]
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=155.487
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=158.452
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=160.705
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=158.452 reps=[155.48691475027456, 158.45205336926603, 160.70496244996724]
+[C1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=147.940
+[C1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=152.160
+[C1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=154.194
+[C1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=152.160 reps=[147.93967819722002, 152.16038250191073, 154.19359538350156]
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=116.951
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=121.784
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=122.276
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=121.784 reps=[116.95121703333295, 121.78406334336981, 122.27588213334415]
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=155.938
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=159.108
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=154.570
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=155.938 reps=[155.9381539583997, 159.10814059858842, 154.57000854021032]
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=56.067
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=56.961
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=57.232
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=56.961 reps=[56.066507917357235, 56.960532504936616, 57.231772143009636]
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=60.951
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=62.525
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=62.621
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.525 reps=[60.95070602697933, 62.525075394506636, 62.620819747361224]
+[C1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=58.259
+[C1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=58.595
+[C1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=58.531
+[C1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=58.531 reps=[58.259258798427844, 58.59480330453304, 58.5310946138335]
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=55.417
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=55.966
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=55.274
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=55.417 reps=[55.41680378483227, 55.966454315918234, 55.27357971569204]
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=60.036
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=60.626
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=59.406
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=60.036 reps=[60.0355122624968, 60.6263669368932, 59.40570135377202]
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=43.265
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=43.667
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=41.991
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=43.265 reps=[43.264932304604294, 43.66676529681219, 41.99129662404055]
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=45.267
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=44.942
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=44.653
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=44.942 reps=[45.267181327806014, 44.94181027799904, 44.65320813089611]
+[C1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=43.859
+[C1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=43.554
+[C1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=42.737
+[C1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=43.554 reps=[43.85853199562229, 43.5544866062597, 42.73728110584809]
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=41.280
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=40.113
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=40.513
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=40.513 reps=[41.280241492921554, 40.11315912159913, 40.512623596149446]
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=44.463
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=43.546
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=44.293
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=44.293 reps=[44.46289628394769, 43.5459546979914, 44.29281992526401]
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=33.125
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=32.942
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=32.723
+[A1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=32.942 reps=[33.12532565446188, 32.942185788883066, 32.72272352035702]
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=36.123
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=36.244
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=36.055
+[B1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=36.123 reps=[36.122735482645126, 36.243571563365556, 36.054932200659074]
+[C1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=35.143
+[C1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=35.225
+[C1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=35.493
+[C1] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=35.225 reps=[35.143456531295556, 35.22537767950944, 35.49274955775757]
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=33.419
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=33.975
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=33.979
+[A2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=33.975 reps=[33.4191657959216, 33.975022791653, 33.979334955102395]
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=35.910
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=36.012
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=36.464
+[B2] DEVICE-KV-TG mistral-7b-instruct-v0.1-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=36.012 reps=[35.91012007119841, 36.01207788598349, 36.46440909383187]

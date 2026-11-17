@@ -1,0 +1,18 @@
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=57.125 reps=[55.126181080798354, 57.126077836650005, 57.124805780736864]
+[A1] CLOCK start=62 C after 5s loaded_samples=44 below_lock=0 above_lock=44 lock NOT applied (clock recorded, not fixed) hottest=75C reasons=0x0000000000000000:44 
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.121 reps=[61.30940770483297, 62.1212443164588, 62.589195991564324]
+[B1] CLOCK start=64 C after 5s loaded_samples=41 below_lock=0 above_lock=41 lock NOT applied (clock recorded, not fixed) hottest=77C reasons=0x0000000000000000:41 
+[C1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=58.286 reps=[58.285535304886345, 58.07707185334895, 58.55012425203182]
+[C1] CLOCK start=64 C after 10s loaded_samples=44 below_lock=0 above_lock=44 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:44 
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=56.512 reps=[55.394549925758255, 56.65296692439791, 56.51185757336315]
+[A2] CLOCK start=65 C after 10s loaded_samples=44 below_lock=0 above_lock=44 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:44 
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.238 reps=[60.799833590855464, 62.23828621347484, 62.54346627373656]
+[B2] CLOCK start=65 C after 15s loaded_samples=43 below_lock=0 above_lock=43 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:43 
+[C2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=58.388 reps=[58.14009336241571, 58.38792921743372, 58.481645871255886]
+[C2] CLOCK start=65 C after 15s loaded_samples=45 below_lock=0 above_lock=45 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:45 
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=57.104 reps=[55.70288598997928, 57.19004145465281, 57.10351040238923]
+[A3] CLOCK start=65 C after 20s loaded_samples=43 below_lock=0 above_lock=43 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:43 
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.213 reps=[60.95027543962786, 62.21262772164985, 62.386247937344926]
+[B3] CLOCK start=65 C after 15s loaded_samples=43 below_lock=0 above_lock=43 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:43 
+[C3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=58.371 reps=[57.91915609892712, 58.371055072845124, 58.5403656010385]
+[C3] CLOCK start=65 C after 20s loaded_samples=44 below_lock=0 above_lock=44 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:44 

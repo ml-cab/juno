@@ -49,7 +49,7 @@ widths it scores). Owner decisions 7 (a) and 8 (a), 2026-11-15. Decision 7 (a) i
 writes the host KV from the device copy's stored rows (no CPU encode; a quarter of the bytes over the bus), host bytes
 unchanged; prefill `q8_0` over FP16, unpinned, 0.90x to 0.99x in one window and 0.90x to 0.97x in 128-row windows, every
 sweep model; kit probe `gpu.kv-prefill.<model>` in. The owner's pinned prefill gate (decision 8 (a)), 2026-11-16: 0.877x to
-0.961x at both widths, 8 of 8 under 1.10x. Next: decisions 5 (a) and 4 (a) (out-of-tier follow-ups); then item 6; then step 7.
+0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned; the owner's gate (`dist/quant-decode-loads`) owed. Next: the gate; then decision 4 (a); then item 6; then step 7.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -390,7 +390,7 @@ in `models/`.)*
       decision, put in the 2026-11-13 entry.)*
 - [ ] Real FP16 dense KV storage meets its threshold (greedy agreement >= 99%, NLL <= 1.005x, Phi-3.5-mini
       live heap at 2048 tokens <= 0.60x the pre-tier reading).
-- [x] Quantized device KV (item 7): `--cache-type-k`/`-v` reach the GPU's KV copy on every handler with
+- [ ] Quantized device KV (item 7): `--cache-type-k`/`-v` reach the GPU's KV copy on every handler with
       a GPU attention path, or the handler keeps FP16 and says so at startup; bytes per position, session
       capacity, decode tg and greedy-agreement thresholds met.
       *(2026-11-13: implemented on the three handlers with a GPU attention path (Llama family, Phi-3, Qwen3); a head width that
@@ -412,7 +412,18 @@ in `models/`.)*
       window and 128-row windows, every sweep model, pinned. 2026-11-16, met: the owner's gate
       ([`20261116T163811Z-device-kv-prefill-gate`](../perf-compare/20261116T163811Z-device-kv-prefill-gate/INDEX.md)), CPU
       pinned, GPU clock recorded and matched within 25 MHz per model, read TinyLlama 0.961x / 0.961x, Qwen2.5-3B 0.944x /
-      0.912x, Phi-3.5-mini 0.877x / 0.877x and Mistral 7B 0.953x / 0.952x (one window / 128-row windows), 8 of 8.)*
+      0.912x, Phi-3.5-mini 0.877x / 0.877x and Mistral 7B 0.953x / 0.952x (one window / 128-row windows), 8 of 8.
+      2026-11-16, the decode bar's denominator moved: decision 5 (a) gave the FP16 decode attention the wide decode block,
+      and against the faster FP16 decode `q8_0` reads 0.955x to 0.977x, unpinned
+      ([`20261116T204541Z-fp16-wide-decode`](../perf-compare/20261116T204541Z-fp16-wide-decode/INDEX.md)). Ticked on the
+      pinned evidence above until the owner's gate (`dist/fp16-wide-decode`, lane C, bar 0.95) re-scores it; a miss there
+      reopens it. 2026-11-16, reopened: the owner's gate
+      ([`20261116T224500Z-fp16-wide-decode-gate`](../perf-compare/20261116T224500Z-fp16-wide-decode-gate/INDEX.md)), CPU
+      pinned, GPU clock recorded and matched per model, read `q8_0` over the new FP16 decode at TinyLlama 0.963x, Qwen2.5-3B
+      **0.938x** (0.938x in each of three cycles), Phi-3.5-mini 0.975x and Mistral 7B 0.977x. Open for decode tg on
+      Qwen2.5-3B; decision 9 (a). 2026-11-17: the quantized decode loop reworked (decision 9 (a),
+      [`20261117T024602Z-quant-decode-loads`](../perf-compare/20261117T024602Z-quant-decode-loads/INDEX.md)): `q8_0` over
+      FP16 0.971x to 0.983x unpinned (Qwen2.5-3B 0.971x); the owner's gate (`dist/quant-decode-loads`) scores it.)*
 - [ ] Disk-backed session save/restore round-trips correctly across a process restart.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
@@ -2333,3 +2344,218 @@ every FP16 JVM on every model at both widths (the slowest `q8_0` over the fastes
 **Next for the executor:** decisions 5 (a) and 4 (a), the out-of-tier follow-ups under README rule 9 (the FP16 decode
 attention taking the wide decode block; the FFN gate and up GEMVs reading the q8_1 input once for two rows), each with its
 own A/B and gates; then item 6 (exact host KV growth and real FP16 host storage, exit criterion 6); then step 7.
+
+### 2026-11-16, latest: decision 5 (a): the FP16 decode attention on the wide decode block; FP16 decode 1.07x to 1.30x, unpinned; the owner's gate owed
+
+**Plan against code.** No drift. Every FP16 decode row (the decode region's `ResidentQkvPath.attend`, the decode batch's
+`ResidentBatchDecode`, `CudaGqaAttention` for `--parallel` streams) reaches `GqaAttentionKernel.launch` at
+`rowsPerBlock` 1, which ran the 128-thread tiled entries' decode loop: 32 slots, one block per head and row (Qwen2.5-3B:
+16 blocks on the GTX 1080's 20 multiprocessors). The quantized module's wide decode (`gqa_decode_kv_d64/_d128`, 2026-11-14
+entry) was the template.
+
+**What changed** ([`20261116T204541Z-fp16-wide-decode`](../perf-compare/20261116T204541Z-fp16-wide-decode/INDEX.md)):
+- `gqa_decode_wide.cuh` (new): the wide decode body moved out of `gqa_attention_kv.cu`, with an FP16 variant: 256
+  threads, 64 slots of 4 lanes, each slot the tiled kernel's FP16 decode loop at a 64-key stride, merged over 64 slots.
+  The FP16 variant keeps the interleaved lanes (every lane of a 96- or 80-wide head has work; the quantized variant's
+  contiguous chunks leave a quarter of a 96-wide head's lanes idle), and loads each key's K and V quads up front, one
+  8-byte read-only load a quad with no branch between them (a slot outside the window reads row `lo` and discards it).
+- `gqa_attention.cu`: entries `gqa_decode_d64/_d128`. `GqaAttentionKernel.wideDecode(rowsPerBlock, headDim)` (rows of
+  one at head widths up to 128) routes both launchers; the FP16 decode launch goes through a reused `KernelParams` block.
+  256-wide heads and prefill tiles keep the tiled entries.
+- PTX: the tiled entries of `gqa_attention.ptx` byte for byte the committed ones (the diff only adds lines);
+  `gqa_attention_kv.ptx` byte for byte the committed one apart from the shared-variable names (the new template argument).
+  New entries 128 and 78 registers, no spills.
+- The first version read each quad as two 4-byte generic loads, each behind its own branch: 1.04x to 1.05x the tiled
+  kernel at 2,048 keys on Phi-3.5-mini and Mistral 7B. The up-front 8-byte loads changed no output bit (SHA-256 of 80
+  decode outputs over five shapes and two windows, equal before and after; scratch test, removed).
+
+**Tests first.** `GqaAttentionWideDecodeTest` (GPU, 3): rows on either side of a 64-key stride (contexts 1, 2, 63, 64,
+65, 127, 128, 129, 191, 1,000 over their own caches, one launch) at head widths 64, 80, 96, 128 and 256 against the CPU
+oracle; sliding windows 1, 63, 64, 65, 100 and 128 whose first key is off the stride; a row among four others bit for bit
+the row alone. `GqaAttentionDecodeRouteTest` (1): which launches take the wide block. Shown able to fail, each defect put
+in, rebuilt, run and taken out (checksums of the source, launcher and PTX equal afterwards):
+
+| Defect | Caught by |
+|---|---|
+| D1: the merge drops slot 63 | `GqaAttentionWideDecodeTest` (2), `GqaAttentionTiledTest` (2), `GqaAttentionKernelParityTest` (2) |
+| D2: the loop strides 32 keys over 64 slots | the same six |
+| D3: the merge stores the FP16 accumulator block-major | the same, plus `GqaAttentionTiledTest.decodeAtMaxSeqLen`, `unalignedWindows` |
+| D4: the FP16 decode ignores the window | `GqaAttentionWideDecodeTest.slidingWindowsMatchTheOracle` only |
+| D5: the route takes 256-wide heads | `GqaAttentionDecodeRouteTest`, `GqaAttentionWideDecodeTest.rowsAroundTheKeyStride`, `GqaAttentionTiledTest.decodeRow...` |
+
+**Readings, unpinned** (one JVM at a time; baseline = `git archive` of `637751b0` in scratch, run from its test classes):
+- Kernel (`GqaAttentionDecodeBench`, now with a `tiled` lane: the unchanged tiled entry at one row a block): at 2,048 keys
+  0.295x (TinyLlama), 0.434x (Qwen2.5-3B), 0.684x (Phi-3.5-mini), 0.499x (Mistral 7B) the old decode time; under 1.0 at
+  every context from 64 keys (64-key launches of 6 to 10 us vary by over 10% run to run).
+- Decode tg at a 2,048-token context (`DeviceKvDecodeTgLiveTest`, A1 B1 C1 A2 B2): FP16 after over before **1.302**
+  (TinyLlama), **1.091** (Qwen2.5-3B), **1.065** (Phi-3.5-mini), **1.078** (Mistral 7B); every new JVM faster than every
+  old one.
+- Item 7's decode ratio moves with its denominator: `q8_0` over the new FP16 decode 0.968, 0.955, 0.977, 0.976 (the
+  2026-11-15 gate read 1.03x to 1.23x against the old one). The quantized decode launch is now 1.22x, 1.37x, 0.68x and
+  1.05x the FP16 one at 2,048 keys (its loop still loads block words behind per-block branches). Exit criterion 7's note
+  records it; decision 9 below.
+- Hot-path gate, `compare-lora.sh --gpu --skip-build --reps 3` from each tree: train 1.000x, playback 0.998x, recall equal
+  (bars 1.25x and 0.80x). LoRA attends on the CPU, so the gate holds that nothing else moved.
+
+**Cross-surface rows**, against the 2026-11-14 entry: 2 CUDA, single decode (the decode region), the decode batch
+(continuous's running set, `ResidentBatchDecodeTest` 22 of 22 bit for bit against single decodes) and `--parallel`
+streams (`CudaGqaAttention`, `BoundedLaunchParityTest`) all reach the routed launch; vision's text backbone runs the same
+handler. ROCm, `--gpu-attention off`, the CPU backend, LoRA training and `--lora-play` attend on the CPU, unchanged. No
+flag added.
+
+**Docs.** `docs/agent-arch.txt` (`GqaAttentionKernel`'s decode entries, `gqa_decode_wide.cuh`, the new tests),
+`docs/howto.md` (`--gpu-attention`: the wide block's figures; `--cache-type-k`: the decode ratio against the faster FP16),
+`docs/performance.md`, `CHANGELOG.md` (Session 149), `docs/perf-compare/README.md`. The howto's greedy divergence counts
+against `--gpu-attention off` were measured on the old kernel; the wide block sums the same values in another order, held
+to the same tolerance of the CPU oracle; not re-measured.
+
+**Kit probes.** None added: no flag, threshold or surface. The `gpu.kv-quality`, `gpu.consistency` and `gpu.kv-prefill`
+probes run this decode path; their catalog costs were measured on the old kernel and can only fall.
+
+**Out-of-tier changes (README rule 9):** this change, uncommitted on HEAD `637751b0`: the FP16 GPU decode attention
+(`gqa_attention.cu`, `gqa_decode_wide.cuh`, `GqaAttentionKernel`, `GqaAttentionKvKernel`'s route). A measurement boundary
+for GPU decode: every published GPU decode tg reading before it (FP16 and the `q8_0`-over-FP16 ratios, including
+`20261115T200324Z-device-kv-tg-gate-rerun`) was taken on the old FP16 decode kernel. GPU prefill is unchanged (tiled
+PTX byte for byte).
+
+**Tests run.** The suites on the final tree (`mvn -o test -pl node,coordinator -am -Dgroups='gpu | !gpu'
+-Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 51 min): `api` (no tests), `registry` 93, `lora` 116, `kvcache` 228,
+`health` 23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 417 (1 skipped) and its integer-kernel execution 1
+pass; `node` 1,626 run, 59 skipped, **2 failures**, both `DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix`
+(Q5_K 512x2048 round 1, row 252: -13.71 right after the upload against -82.77 once the device was idle; and Q6_K), the
+upload race recorded in the entries above; alone straight after: 4 of 4 pass. No class on its path is in this change.
+The attention and resident-path classes (141 tests) also pass alone on the final kernel. `check-plan-thresholds.sh`:
+passes.
+
+**Exit criteria:** 6 of 15, unchanged. Criterion 7 stays ticked on its pinned evidence; the owner's gate re-scores its
+decode bar against the faster FP16 decode (lane C), and a miss reopens it.
+
+**Owed to the owner: the gate.** In a terminal left open: `bash dist/fp16-wide-decode/wait-and-run.sh` (it waits for
+`READY`, which is written). Per model nine JVMs, A B C three times (A f16 from `dist/fp16-wide-decode/baseline-tree`, the
+`git archive` of `637751b0`, compiled before `READY`; B f16 and C `q8_0` from this tree), `DeviceKvDecodeTgLiveTest` at
+2,048 tokens, cooled to 65 C before each JVM, a CLOCK line per JVM. Two RESULT lines per model: FP16 after over before
+(bar >= 1.00, decision 5's A/B) and `q8_0` over FP16 after (bar >= 0.95, criterion 7's decode bar). About 90 minutes.
+
+**Decisions for the owner.**
+9. **The quantized decode loop's loads.** The FP16 decode now loads each key's quads up front; the quantized loop
+   (`gqa_decode_kv`) still loads block words behind per-block branches, and its launch reads 1.05x to 1.37x the new FP16
+   one at 2,048 keys on three sweep models (Phi-3.5-mini 0.68x). (a) Recommended: a follow-up inside item 7 giving it
+   up-front loads the same way, measured by the bench and the decode gate's `q8_0`-over-FP16 ratio, parity and quality
+   tests unchanged; run it before decision 4 if the gate's lane C misses on any model, else after decision 4. (b) Leave
+   it: `q8_0` keeps its memory savings and decodes at about 0.96x to 0.98x the FP16 rate.
+
+The gate's bars are the executor's reading of decision 5's "own A/B": FP16 decode no slower on any sweep model (>= 1.00),
+and criterion 7's existing 0.95. Say so if you want others; the script reads them from `BAR_AB` and `BAR_CB`.
+
+**Next for the executor:** after the owner's gate, record it (and decision 9); then decision 4 (a) (the FFN gate and up
+GEMVs reading the q8_1 input once for two rows), or decision 9 first if lane C misses; then item 6; then step 7.
+
+### 2026-11-16, latest: the owner's gate: decision 5 (a) passes on every sweep model; `q8_0` misses item 7's decode bar on Qwen2.5-3B (criterion 7 reopened); decision 9 (a)
+
+**The gate** ([`20261116T224500Z-fp16-wide-decode-gate`](../perf-compare/20261116T224500Z-fp16-wide-decode-gate/INDEX.md);
+owner run 2026-11-16T22:45Z to 2026-11-17T00:02Z, `dist/fp16-wide-decode/run-gate.sh`): CPU pinned, GPU clock recorded and
+not fixed (the lock accepted and not applied, every CLOCK line), cooled to 65 C before each JVM, three sides at the same
+median loaded clock per model (Qwen2.5-3B's two candidate sides 13 MHz below the baseline side). The tree hash after the
+run still matched `READY` (`diff 6c54ee645662eb41`).
+
+| Model | FP16 after over before (bar 1.00) | `q8_0` over FP16 after (bar 0.95) |
+|---|---|---|
+| TinyLlama 1.1B | 1.2813 pass | 0.9633 pass |
+| Qwen2.5-3B | 1.0895 pass | **0.9382 fail** (0.938 in each cycle) |
+| Phi-3.5-mini | 1.0859 pass | 0.9749 pass |
+| Mistral 7B | 1.0669 pass | 0.9765 pass |
+
+Every FP16 JVM of this tree is faster than every one of `637751b0`; a 2,048-token prefill's time is unchanged (0.996x to
+1.004x, from the logs). Both sides of lane C agree with the 2026-11-15 re-run within 0.6%: the `q8_0` decode did not move,
+the FP16 decode it is scored against did. Qwen2.5-3B needs 1.3% more `q8_0` decode rate (about 6 us a layer).
+
+**Exit criteria:** 5 of 15. Criterion 7 unticked: its decode bar misses on Qwen2.5-3B against the faster FP16 decode. Its
+other bars (bytes, capacity, agreement, prefill) stand. Decision 5 (a)'s own A/B is met; the standing gate's GPU lane is a
+tier-close gate and is not re-run here.
+
+**Docs.** `docs/howto.md` (`--gpu-attention`, `--cache-type-k`), `docs/performance.md`, `CHANGELOG.md` (Session 149)
+carry the pinned figures; `docs/perf-compare/README.md` has the row.
+
+**Owner decision 9 (a)**, 2026-11-16: the quantized decode loop (`gqa_decode_kv`) takes up-front loads the way the FP16
+decode does, inside item 7, measured by the bench and a decode gate's `q8_0`-over-FP16 ratio, parity and quality tests
+unchanged. Lane C missed, so it runs before decision 4.
+
+**Next for the executor:** decision 9 (a); then decision 4 (a); then item 6; then step 7.
+
+### 2026-11-17: decision 9 (a): the quantized decode loop with up-front loads; `q8_0` decode 0.97x to 0.98x FP16, unpinned; the owner's gate owed
+
+**Plan against code.** No drift. Quantized decode rows at head widths up to 128 run `gqa_decode_kv_d64/_d128`
+(`GqaAttentionKernel.wideDecode`), whose loop was `gqa_decode_kv` (shared with the 256-wide tiled entry): K chunk loaded
+behind per-block branches, V loaded after the softmax update.
+
+**What changed** ([`20261117T024602Z-quant-decode-loads`](../perf-compare/20261117T024602Z-quant-decode-loads/INDEX.md)):
+- `gqa_decode_wide.cuh`: `gqa_decode_kv_wide`, the wide block's own quantized loop (`gqa_decode_kv` stays for the
+  256-wide tiled entry, whose PTX is unchanged). Each key's K and V chunks are loaded before the dot product
+  (`GqaChunk`: scale and quant words, no branch between them; a slot outside the window loads row `lo`, a lane past the
+  head the head's first block, both discarded). `gqa_quad_floats` turns quant bytes into floats by a byte permute under
+  the exponent of 2^23 and one subtraction, exact, where the old loop shifted and converted each value. No branch per
+  block or quad (with a head width a multiple of 32 a lane's chunk is wholly in the head or wholly past it), so the
+  old loop's divergence regions are gone. `runSum = fmaf(runSum, corr, w)` written out.
+- `gqa_attention_kv.cu`: decode entries `__launch_bounds__(256, 2)`. Uncapped, the up-front loads took 144 registers at
+  the 128-wide entry, one block a multiprocessor: Mistral 7B and Phi-3.5-mini read 1.46x and 1.35x slower at 2,048 keys
+  (32 heads on 20 multiprocessors in two waves). Capped at 128, no spills.
+- PTX: `gqa_attention_kv.ptx`'s tiled entries byte for byte the committed ones; `gqa_attention.ptx` unchanged.
+- Outputs (scratch digest test, removed): 45 of 50 decode configurations (5 shapes, 5 format pairs, windows 0 and 100)
+  bit for bit the old loop's. K `q4_0` with V `f16` at window 0 differs by at most 2 ulp (119 of 2,048 values of a
+  1,000-key row): the old loop's compiler fused the running sum for four pairs and not for that one (shown by forcing
+  each form: unfused matched that pair and broke the other four).
+
+**Tests first.** `GqaAttentionWideDecodeKvTest` (GPU, 3, new), passing on the old loop before any change: rows on either
+side of a 64-key stride at head widths 32, 64, 96, 128 and 256 for the five format pairs (`q8_0`, `q8_0`/`q4_0`, `q4_0`,
+`f16`/`q8_0`, `q4_0`/`f16`), each cache sized to its context; sliding windows 1 to 128 off the stride; a row among four
+others bit for bit the row alone. Shown able to fail, each defect put in, rebuilt, run and taken out (source and PTX
+checksums equal afterwards):
+
+| Defect | Caught by |
+|---|---|
+| E1: every slot reads row `lo` | `GqaAttentionWideDecodeKvTest` (2), `DeviceKvQuantParityTest` (4) |
+| E2: the window ignored in a slot's validity | `GqaAttentionWideDecodeKvTest.slidingWindows...`, `DeviceKvQuantParityTest.slidingWindow...` only |
+| E3: the second half of a block read as the first (64-wide heads) | `GqaAttentionWideDecodeKvTest` (2), `DeviceKvQuantParityTest` (2) |
+| E4: a quad's fourth byte read as its third | `GqaAttentionWideDecodeKvTest` (2), `DeviceKvQuantParityTest` (3) |
+| E5: a lane past the head adds its dot product | none: that lane's query quads are zero, so it adds +0 either way; the guard stays as a second line |
+
+**Readings, unpinned** (before = this tree without the change, copied to scratch):
+- Kernel (`GqaAttentionDecodeBench`, four runs alternating trees): `q8_0`/`q8_0` at 2,048 keys after over before 0.780
+  (TinyLlama), 0.735 (Qwen2.5-3B), 0.987 (Phi-3.5-mini), 0.915 (Mistral 7B); over the FP16 launch 0.974, 0.897, 0.651,
+  0.900 (before 1.240, 1.081, 0.653, 1.000). Phi-3.5-mini at 1,024 keys read 1.10 (its idle fourth lane now runs).
+- Decode tg at a 2,048-token context (A `q8_0` before, B `q8_0` after, F `f16`, x2): B over A 1.045, 1.012, 0.961 (0.994
+  over three more pairs; a cool card's first JVM reads high), 1.024; **B over F 0.983, 0.971, 0.975, 0.976**, where A over
+  F read 0.941, 0.959, 1.014, 0.953.
+- Hot-path gate, `compare-lora.sh --gpu --skip-build --reps 3` from each tree: train 1.000x, playback 0.975x, recall equal
+  (bars 1.25x and 0.80x). LoRA attends on the CPU, so the gate holds that nothing else moved.
+
+**Cross-surface rows**, against the 2026-11-16 entry: unchanged. Every quantized decode row on CUDA (the decode region,
+the decode batch, `--parallel` streams) reaches the routed launch; ROCm, the CPU backend, LoRA training and `--lora-play`
+attend on the CPU. No flag added.
+
+**Docs.** `docs/agent-arch.txt` (the wide block's quantized loop, the new test), `docs/howto.md` (`--cache-type-k`),
+`docs/performance.md`, `CHANGELOG.md` (Session 149, a bullet), `docs/perf-compare/README.md`.
+
+**Kit probes.** None added: no flag, threshold or surface; `gpu.kv-quality`, `gpu.consistency` and `gpu.kv-prefill`
+run this path.
+
+**Tests run.** The suites on the final tree (`mvn -o test -pl node,coordinator -am -Dgroups='gpu | !gpu'
+-Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 56 min): `api` (no tests), `registry` 93, `lora` 116,
+`kvcache` 228, `health` 23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 417 (1 skipped) and its
+integer-kernel execution 1 pass; `node` 1,629 run, 59 skipped, **3 failures**: `DeviceUploadOrderingTest` (2, the upload
+race of the entries above; alone straight after, 4 of 4 pass, twice) and
+`PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance` (free bytes reported with the device
+full 106,364,928 against the 67,108,864 allowance). The latter fails alone too, twice, and in the tree before this change
+(99,221,504): the driver's free-memory reading with the device full, on the desktop's shared card today; it passed in the
+2026-11-16 suite, and no class on its path is in this change. The 62 attention and device-KV GPU tests also pass alone on
+the final kernel. `check-plan-thresholds.sh`: passes.
+
+**Exit criteria:** 5 of 15, unchanged; criterion 7's decode bar waits on the owner's gate.
+
+**Owed to the owner: the gate.** In a terminal left open: `bash dist/quant-decode-loads/wait-and-run.sh` (it waits for
+`READY`, which is written). Per model six JVMs, A B three times (A `f16`, B `q8_0` keys and values, both this tree),
+`DeviceKvDecodeTgLiveTest` at 2,048 tokens, cooled to 65 C before each JVM, a CLOCK line per JVM; one RESULT line per
+model, `q8_0` over `f16`, bar >= 0.95 (criterion 7's decode bar). About 60 minutes.
+
+**Next for the executor:** record the gate (a pass on every model ticks criterion 7 again); then decision 4 (a) (the FFN
+gate and up GEMVs reading the q8_1 input once for two rows); then item 6; then step 7.

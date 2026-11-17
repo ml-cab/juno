@@ -41,6 +41,10 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * query rows of one head; see {@link #rowsPerBlock} and {@code gqa_attention.cu}.
  * Three entries bound the head width held in registers ({@code gqa_attention_d64},
  * {@code gqa_attention_d128}, {@code gqa_attention_d256}); {@link #supportsHeadDim} says which widths run.
+ * Decode rows at head widths up to 128 ({@link #wideDecode}) run a wider block instead
+ * ({@code gqa_decode_d64/_d128}: 256 threads, 64 slots of 4 lanes, the same per-slot loop at a 64-key
+ * stride, merged over 64 slots), since a decode launch has one block per head and row and few heads leave a
+ * 128-thread block short of warps.
  */
 final class GqaAttentionKernel {
 
@@ -49,7 +53,15 @@ final class GqaAttentionKernel {
 	private static final String ENTRY_D64 = "gqa_attention_d64";
 	private static final String ENTRY_D128 = "gqa_attention_d128";
 	private static final String ENTRY_D256 = "gqa_attention_d256";
+	private static final String ENTRY_DECODE_D64 = "gqa_decode_d64";
+	private static final String ENTRY_DECODE_D128 = "gqa_decode_d128";
 	private static final int GQA_THREADS = 128;
+	/** Threads of a wide decode block: {@code GQD_THREADS}, 64 slots of 4 lanes. */
+	static final int DECODE_THREADS = 256;
+	/** Widest head a wide decode block holds in registers. */
+	private static final int DECODE_MAX_HEAD_DIM = 128;
+	/** One parameter block per launching thread for the wide decode entries (eleven arguments). */
+	private static final ThreadLocal<KernelParams> DECODE_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(11));
 	/** Query rows a block can take: the kernel's 32 slots of 4 lanes. */
 	static final int MAX_ROWS_PER_BLOCK = 32;
 	/** Widest head the kernel holds in registers. */
@@ -61,14 +73,18 @@ final class GqaAttentionKernel {
 	private final MemorySegment fnD64;  // CUfunction, headDim <= 64
 	private final MemorySegment fnD128; // CUfunction, headDim <= 128
 	private final MemorySegment fnD256; // CUfunction, headDim <= 256
+	private final MemorySegment fnDecodeD64;  // CUfunction, decode rows, headDim <= 64
+	private final MemorySegment fnDecodeD128; // CUfunction, decode rows, headDim <= 128
 	private final Arena moduleArena;    // keeps module/function slots alive
 
 	private GqaAttentionKernel(MemorySegment module, MemorySegment fnD64, MemorySegment fnD128, MemorySegment fnD256,
-			Arena moduleArena) {
+			MemorySegment fnDecodeD64, MemorySegment fnDecodeD128, Arena moduleArena) {
 		this.module = module;
 		this.fnD64 = fnD64;
 		this.fnD128 = fnD128;
 		this.fnD256 = fnD256;
+		this.fnDecodeD64 = fnDecodeD64;
+		this.fnDecodeD128 = fnDecodeD128;
 		this.moduleArena = moduleArena;
 	}
 
@@ -80,6 +96,15 @@ final class GqaAttentionKernel {
 	/** The head width the entry that runs {@code headDim} holds in registers: 64, 128 or 256. */
 	static int registerWidth(int headDim) {
 		return headDim <= 64 ? 64 : headDim <= 128 ? 128 : MAX_HEAD_DIM;
+	}
+
+	/**
+	 * Whether a launch of {@code rowsPerBlock} rows a block at {@code headDim} runs the wide decode block: rows of one
+	 * (each over its own cache) at head widths up to 128, FP16 or quantized. Prefill tiles and 256-wide heads run the
+	 * 128-thread tiled entries.
+	 */
+	static boolean wideDecode(int rowsPerBlock, int headDim) {
+		return rowsPerBlock == 1 && headDim <= DECODE_MAX_HEAD_DIM;
 	}
 
 	/**
@@ -144,7 +169,8 @@ final class GqaAttentionKernel {
 
 		return new GqaAttentionKernel(module, function(drv, arena, module, ENTRY_D64),
 				function(drv, arena, module, ENTRY_D128),
-				function(drv, arena, module, ENTRY_D256), arena);
+				function(drv, arena, module, ENTRY_D256), function(drv, arena, module, ENTRY_DECODE_D64),
+				function(drv, arena, module, ENTRY_DECODE_D128), arena);
 	}
 
 	private static MemorySegment function(CudaDriverBindings drv, Arena arena, MemorySegment module, String entry) {
@@ -188,8 +214,15 @@ final class GqaAttentionKernel {
 		if (window < 0)
 			throw new IllegalArgumentException("window must be >= 0 (got " + window + ")");
 
-		CudaDriverBindings drv = CudaDriverBindings.instance();
 		int width = registerWidth(headDim);
+		if (wideDecode(rowsPerBlock, headDim)) {
+			DECODE_PARAMS.get().pointer(0, qBatch).pointer(1, kPtrs).pointer(2, vPtrs).pointer(3, seqLens)
+					.pointer(4, outBatch).i32(5, batch).i32(6, numHeads).i32(7, gqaRatio).i32(8, headDim).i32(9, kvDim)
+					.i32(10, window).launch(width == 64 ? fnDecodeD64 : fnDecodeD128, batch, numHeads, DECODE_THREADS,
+							stream, "cuLaunchKernel(gqa_decode)");
+			return;
+		}
+		CudaDriverBindings drv = CudaDriverBindings.instance();
 		MemorySegment fn = width == 64 ? fnD64 : width == 128 ? fnD128 : fnD256;
 		int gridX = (batch + rowsPerBlock - 1) / rowsPerBlock;
 

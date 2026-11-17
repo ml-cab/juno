@@ -21,8 +21,11 @@
  *   rowsPerBlock = 32, splits = 1:  a prefill window, every row of the tile
  *                                   reading each staged key once.
  *   rowsPerBlock = 1,  splits = 32: a decode row (or --parallel streams, one
- *                                   block per row), the keys spread over the
- *                                   32 slots and merged at the end. No other
+ *                                   block per row) at 256-wide heads, the keys
+ *                                   spread over the 32 slots and merged at the
+ *                                   end (narrower heads run gqa_decode_d64/_d128,
+ *                                   below; the tiled entries keep this case for
+ *                                   a direct launch). No other
  *                                   row shares a key, so this case reads its
  *                                   keys straight from global memory instead
  *                                   of staging tiles between barriers (same
@@ -52,11 +55,21 @@
  * tiles, so the tiles fit the 48 KB of static shared memory). headDim must be a
  * multiple of 4.
  *
+ * Entries gqa_decode_d64 and _d128 run decode rows (one row a block, each over
+ * its own cache) at head widths up to 128 through gqa_decode_wide.cuh's wide
+ * block: 256 threads, 64 slots of 4 lanes, each slot the loop above at a stride
+ * of 64 keys, merged over the 64 slots. A decode launch has one block per head
+ * and row, so with few heads a 128-thread block leaves each warp scheduler one
+ * warp. Arguments as the tiled entries without rowsPerBlock (always 1). A row's
+ * result depends on its own cache and length only, so a row decoded in a batch
+ * is bit for bit the row decoded alone.
+ *
  * Compile (Pascal+ reference SKU - sm_61, matching q4k_gemv.cu):
  *   nvcc -ptx -arch=compute_61 -O3 \
  *     -o ../resources/cab/ml/juno/node/gqa_attention.ptx gqa_attention.cu
  */
 #include "gqa_attention.cuh"
+#include "gqa_decode_wide.cuh"
 
 #define GQA_ARGS \
         const float* __restrict__ qBatch,      /* [B][numHeads*headDim] */            \
@@ -83,4 +96,22 @@ extern "C" __global__ void __launch_bounds__(GQA_THREADS)
 gqa_attention_d256(GQA_ARGS) {
     gqa_attention_tiled<256, 16, false>(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim,
             kvDim, rowsPerBlock, window, KV_F16, KV_F16);
+}
+
+#define GQD_ARGS \
+        const float* __restrict__ qBatch, const half* const* __restrict__ kPtrs,                \
+        const half* const* __restrict__ vPtrs, const int* __restrict__ seqLens,                 \
+        float* __restrict__ outBatch, int batch, int numHeads, int gqaRatio, int headDim,       \
+        int kvDim, int window
+
+extern "C" __global__ void __launch_bounds__(GQD_THREADS, 1)
+gqa_decode_d64(GQD_ARGS) {
+    gqa_decode_wide<64, true>(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim, kvDim,
+            window, KV_F16, KV_F16);
+}
+
+extern "C" __global__ void __launch_bounds__(GQD_THREADS, 1)
+gqa_decode_d128(GQD_ARGS) {
+    gqa_decode_wide<128, true>(qBatch, kPtrs, vPtrs, seqLens, outBatch, batch, numHeads, gqaRatio, headDim, kvDim,
+            window, KV_F16, KV_F16);
 }

@@ -1,0 +1,33 @@
+# run 20261116T224500Z
+# model      JVM  prefill ms (median of measured requests)
+tinyllama   A1     994.7
+tinyllama   B1     993.0
+tinyllama   C1     973.4
+tinyllama   A2    1000.5
+tinyllama   B2     996.0
+tinyllama   C2     948.0
+tinyllama   A3     998.2
+tinyllama   B3    1000.3
+tinyllama   C3     949.1
+tinyllama   f16 before 998.2 ms, f16 after 996.0 ms (B over A 0.998x), q8_0 after 949.1 ms (C over B 0.953x)
+qwen25      A1    2420.5
+qwen25      B1    2429.2
+qwen25      C1    2269.4
+qwen25      A2    2435.6
+qwen25      B2    2436.2
+qwen25      C2    2275.8
+qwen25      A3    2425.3
+qwen25      B3    2434.0
+qwen25      C3    2293.4
+qwen25      f16 before 2425.3 ms, f16 after 2434.0 ms (B over A 1.004x), q8_0 after 2275.8 ms (C over B 0.935x)
+mistral     A1    4990.3
+mistral     B1    4938.5
+mistral     C1    4706.1
+mistral     A2    4954.4
+mistral     B2    4930.8
+mistral     C2    4708.5
+mistral     A3    4957.6
+mistral     B3    4980.6
+mistral     C3    4688.0
+mistral     f16 before 4957.6 ms, f16 after 4938.5 ms (B over A 0.996x), q8_0 after 4706.1 ms (C over B 0.953x)
+
