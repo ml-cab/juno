@@ -1,0 +1,36 @@
+[A1] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=5242224640 session_bytes=75497472 sessions=69 fp16_session_bytes=75497472 fp16_sessions=69
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=61.650
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=63.033
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=62.797
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.797 reps=[61.65032944014296, 63.03251068429987, 62.796708129445875]
+[A1] CLOCK start=62 C after 0s loaded_samples=43 below_lock=0 above_lock=43 lock NOT applied (clock recorded, not fixed) hottest=74C reasons=0x0000000000000000:43 
+[B1] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5061148672 session_bytes=40108032 sessions=126 fp16_session_bytes=75497472 fp16_sessions=67
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=59.948
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=60.069
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=60.302
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=60.069 reps=[59.94751731614245, 60.0690623019645, 60.3016101678472]
+[B1] CLOCK start=65 C after 5s loaded_samples=41 below_lock=0 above_lock=41 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:41 
+[A2] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=5289934848 session_bytes=75497472 sessions=70 fp16_session_bytes=75497472 fp16_sessions=70
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=61.256
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=62.663
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=62.527
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.527 reps=[61.25573070690582, 62.6626777884036, 62.52709816966223]
+[A2] CLOCK start=65 C after 20s loaded_samples=44 below_lock=0 above_lock=44 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:44 
+[B2] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5290524672 session_bytes=40108032 sessions=131 fp16_session_bytes=75497472 fp16_sessions=70
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=59.342
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=57.752
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=58.495
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=58.495 reps=[59.34189262495472, 57.752105945996526, 58.49471863592714]
+[B2] CLOCK start=65 C after 15s loaded_samples=45 below_lock=0 above_lock=45 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:45 
+[A3] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 free_after_load=5050531840 session_bytes=75497472 sessions=66 fp16_session_bytes=75497472 fp16_sessions=66
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=61.480
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=62.688
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=62.856
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.688 reps=[61.48030344735389, 62.68819270936573, 62.85591631653617]
+[A3] CLOCK start=65 C after 15s loaded_samples=42 below_lock=0 above_lock=42 lock NOT applied (clock recorded, not fixed) hottest=80C reasons=0x0000000000000000:42 
+[B3] DEVICE-KV-CAPACITY qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=5240258560 session_bytes=40108032 sessions=130 fp16_session_bytes=75497472 fp16_sessions=69
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=59.516
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=60.049
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=60.169
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=60.049 reps=[59.516189990155766, 60.049374246863565, 60.16862032092884]
+[B3] CLOCK start=65 C after 25s loaded_samples=42 below_lock=0 above_lock=42 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:42 

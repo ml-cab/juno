@@ -1,0 +1,1 @@
+pinned: cpu performance, turbo off, gpu lock requested at 1300 MHz (the driver can accept it and not apply it: each CLOCK line says whether it held), cool to 65 C before each run

@@ -1,0 +1,24 @@
+[A1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=63.073 reps=[57.76087957574288, 63.073389714728386, 63.096592453736264]
+[A1] CLOCK start=65 C after 35s loaded_samples=45 below_lock=0 above_lock=45 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:45 
+[B1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=63.786 reps=[63.78624266909323, 64.86937846964419, 57.640113694709974]
+[B1] CLOCK start=65 C after 15s loaded_samples=42 below_lock=0 above_lock=42 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:42 
+[C1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=59.156 reps=[56.20466827025816, 59.15597183695098, 59.5616311873114]
+[C1] CLOCK start=65 C after 10s loaded_samples=44 below_lock=0 above_lock=44 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:44 
+[D1] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=64.130 reps=[64.1304202399903, 64.51567443088278, 62.501829765481155]
+[D1] CLOCK start=65 C after 15s loaded_samples=41 below_lock=0 above_lock=41 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:41 
+[A2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.759 reps=[62.010061231263315, 62.758911367900275, 63.455665246935396]
+[A2] CLOCK start=65 C after 15s loaded_samples=44 below_lock=0 above_lock=44 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:44 
+[B2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=62.907 reps=[60.596715112102395, 62.907011590201606, 64.72693686839149]
+[B2] CLOCK start=65 C after 15s loaded_samples=44 below_lock=0 above_lock=44 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:44 
+[C2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=58.099 reps=[58.022755575520705, 58.42566758473231, 58.09896683678474]
+[C2] CLOCK start=64 C after 60s loaded_samples=46 below_lock=0 above_lock=46 lock NOT applied (clock recorded, not fixed) hottest=77C reasons=0x0000000000000000:46 
+[D2] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=60.685 reps=[63.75371582555779, 60.31272472895244, 60.68536986194225]
+[D2] CLOCK start=65 C after 10s loaded_samples=40 below_lock=0 above_lock=40 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:40 
+[A3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=59.921 reps=[58.50272429224864, 59.92146602780197, 60.9976278889824]
+[A3] CLOCK start=65 C after 20s loaded_samples=48 below_lock=0 above_lock=48 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:48 
+[B3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=65.522 reps=[61.04086090107428, 65.5215757762885, 65.90421690258292]
+[B3] CLOCK start=65 C after 20s loaded_samples=43 below_lock=0 above_lock=43 lock NOT applied (clock recorded, not fixed) hottest=79C reasons=0x0000000000000000:43 
+[C3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=56.787 reps=[55.9661809555517, 56.78706135910302, 57.44691146341023]
+[C3] CLOCK start=65 C after 60s loaded_samples=47 below_lock=0 above_lock=47 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:47 
+[D3] DEVICE-KV-TG qwen2.5-3b-instruct-q4_k_m.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=59.672 reps=[59.42170014085394, 59.67169584893937, 60.61846178861179]
+[D3] CLOCK start=65 C after 15s loaded_samples=46 below_lock=0 above_lock=46 lock NOT applied (clock recorded, not fixed) hottest=78C reasons=0x0000000000000000:46 

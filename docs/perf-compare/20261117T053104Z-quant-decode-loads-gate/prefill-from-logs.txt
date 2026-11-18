@@ -1,0 +1,26 @@
+# run 20261117T053104Z
+# model      JVM  prefill ms (median of measured requests; summed per-layer [prefill] records, warm-up request excluded)
+tinyllama   A1     985.2
+tinyllama   B1     938.3
+tinyllama   A2    1039.4
+tinyllama   B2     939.0
+tinyllama   A3     995.9
+tinyllama   B3     954.7
+qwen25      A1    2404.7
+qwen25      B1    2253.5
+qwen25      A2    2414.8
+qwen25      B2    2262.8
+qwen25      A3    2420.6
+qwen25      B3    2269.7
+phi35       A1      none
+phi35       B1      none
+phi35       A2      none
+phi35       B2      none
+phi35       A3      none
+phi35       B3      none
+mistral     A1    4929.3
+mistral     B1    4827.2
+mistral     A2    5058.7
+mistral     B2    4634.4
+mistral     A3    4941.7
+mistral     B3    4642.0

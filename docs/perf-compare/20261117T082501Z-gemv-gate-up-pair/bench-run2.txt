@@ -1,0 +1,40 @@
+GEMV-PAIR tinyllama 5632x2048 offset=0x0 two_us=106.56 pair_us=67.40 ratio=0.6325
+GEMV-PAIR tinyllama 5632x2048 offset=0x200 two_us=98.06 pair_us=72.13 ratio=0.7356
+GEMV-PAIR tinyllama 5632x2048 offset=0x400 two_us=85.79 pair_us=68.67 ratio=0.8004
+GEMV-PAIR tinyllama 5632x2048 offset=0x800 two_us=94.02 pair_us=68.67 ratio=0.7303
+GEMV-PAIR tinyllama 5632x2048 offset=0xe00 two_us=93.12 pair_us=76.02 ratio=0.8164
+GEMV-PAIR tinyllama 5632x2048 offset=0x1000 two_us=90.99 pair_us=76.96 ratio=0.8458
+GEMV-PAIR tinyllama 5632x2048 offset=0x1800 two_us=92.98 pair_us=78.89 ratio=0.8485
+GEMV-PAIR tinyllama 5632x2048 offset=0x4800 two_us=83.01 pair_us=71.02 ratio=0.8557
+GEMV-PAIR tinyllama 5632x2048 offset=0xbe00 two_us=88.60 pair_us=68.65 ratio=0.7748
+GEMV-PAIR-SPREAD tinyllama two max/min=1.2837 pair max/min=1.1705 worst ratio=0.8557
+GEMV-PAIR qwen25 11008x2048 offset=0x0 two_us=175.96 pair_us=132.75 ratio=0.7544
+GEMV-PAIR qwen25 11008x2048 offset=0x200 two_us=171.52 pair_us=134.80 ratio=0.7859
+GEMV-PAIR qwen25 11008x2048 offset=0x400 two_us=171.34 pair_us=127.77 ratio=0.7458
+GEMV-PAIR qwen25 11008x2048 offset=0x800 two_us=160.43 pair_us=137.13 ratio=0.8548
+GEMV-PAIR qwen25 11008x2048 offset=0xe00 two_us=169.96 pair_us=136.72 ratio=0.8044
+GEMV-PAIR qwen25 11008x2048 offset=0x1000 two_us=159.68 pair_us=134.74 ratio=0.8438
+GEMV-PAIR qwen25 11008x2048 offset=0x1800 two_us=170.78 pair_us=139.82 ratio=0.8187
+GEMV-PAIR qwen25 11008x2048 offset=0x4800 two_us=152.00 pair_us=134.37 ratio=0.8840
+GEMV-PAIR qwen25 11008x2048 offset=0xbe00 two_us=173.67 pair_us=135.05 ratio=0.7776
+GEMV-PAIR-SPREAD qwen25 two max/min=1.1576 pair max/min=1.0942 worst ratio=0.8840
+GEMV-PAIR phi35 8192x3072 offset=0x0 two_us=172.69 pair_us=160.93 ratio=0.9319
+GEMV-PAIR phi35 8192x3072 offset=0x200 two_us=171.36 pair_us=158.02 ratio=0.9222
+GEMV-PAIR phi35 8192x3072 offset=0x400 two_us=169.47 pair_us=159.13 ratio=0.9390
+GEMV-PAIR phi35 8192x3072 offset=0x800 two_us=166.40 pair_us=159.70 ratio=0.9598
+GEMV-PAIR phi35 8192x3072 offset=0xe00 two_us=166.91 pair_us=157.41 ratio=0.9431
+GEMV-PAIR phi35 8192x3072 offset=0x1000 two_us=169.27 pair_us=159.27 ratio=0.9410
+GEMV-PAIR phi35 8192x3072 offset=0x1800 two_us=171.87 pair_us=157.14 ratio=0.9143
+GEMV-PAIR phi35 8192x3072 offset=0x4800 two_us=168.86 pair_us=159.19 ratio=0.9428
+GEMV-PAIR phi35 8192x3072 offset=0xbe00 two_us=171.81 pair_us=150.53 ratio=0.8761
+GEMV-PAIR-SPREAD phi35 two max/min=1.0378 pair max/min=1.0691 worst ratio=0.9598
+GEMV-PAIR mistral 14336x4096 offset=0x0 two_us=354.20 pair_us=338.96 ratio=0.9570
+GEMV-PAIR mistral 14336x4096 offset=0x200 two_us=358.79 pair_us=340.75 ratio=0.9497
+GEMV-PAIR mistral 14336x4096 offset=0x400 two_us=355.29 pair_us=338.47 ratio=0.9527
+GEMV-PAIR mistral 14336x4096 offset=0x800 two_us=351.15 pair_us=337.43 ratio=0.9609
+GEMV-PAIR mistral 14336x4096 offset=0xe00 two_us=350.68 pair_us=338.19 ratio=0.9644
+GEMV-PAIR mistral 14336x4096 offset=0x1000 two_us=354.12 pair_us=338.33 ratio=0.9554
+GEMV-PAIR mistral 14336x4096 offset=0x1800 two_us=362.15 pair_us=340.89 ratio=0.9413
+GEMV-PAIR mistral 14336x4096 offset=0x4800 two_us=354.24 pair_us=336.36 ratio=0.9495
+GEMV-PAIR mistral 14336x4096 offset=0xbe00 two_us=354.30 pair_us=335.91 ratio=0.9481
+GEMV-PAIR-SPREAD mistral two max/min=1.0327 pair max/min=1.0148 worst ratio=0.9644

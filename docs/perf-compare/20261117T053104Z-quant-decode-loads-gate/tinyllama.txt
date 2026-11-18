@@ -1,0 +1,36 @@
+[A1] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=6785662976 session_bytes=46137344 sessions=147 fp16_session_bytes=46137344 fp16_sessions=147
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=155.207
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=161.454
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=161.956
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=161.454 reps=[155.20718204162105, 161.4538326303703, 161.95640462055448]
+[A1] CLOCK start=40 C after 0s loaded_samples=18 below_lock=0 above_lock=18 lock NOT applied (clock recorded, not fixed) hottest=56C reasons=0x0000000000000000:18 
+[B1] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=6832324608 session_bytes=24510464 sessions=278 fp16_session_bytes=46137344 fp16_sessions=148
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=148.895
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=158.579
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=158.470
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=158.470 reps=[148.89530651958876, 158.57853904374537, 158.46966439356376]
+[B1] CLOCK start=49 C after 0s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=61C reasons=0x0000000000000000:17 
+[A2] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=6565330944 session_bytes=46137344 sessions=142 fp16_session_bytes=46137344 fp16_sessions=142
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=145.336
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=148.117
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=148.673
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=148.117 reps=[145.336026732373, 148.1168934264561, 148.67284783865645]
+[A2] CLOCK start=54 C after 0s loaded_samples=19 below_lock=0 above_lock=19 lock NOT applied (clock recorded, not fixed) hottest=62C reasons=0x0000000000000000:19 
+[B2] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=6281297920 session_bytes=24510464 sessions=256 fp16_session_bytes=46137344 fp16_sessions=136
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=150.868
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=158.281
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=159.592
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=158.281 reps=[150.86760037956637, 158.28090358779008, 159.591893206611]
+[B2] CLOCK start=56 C after 0s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=65C reasons=0x0000000000000000:17 
+[A3] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 free_after_load=6739525632 session_bytes=46137344 sessions=146 fp16_session_bytes=46137344 fp16_sessions=146
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=0 tg=153.269
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=1 tg=160.742
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 rep=2 tg=160.645
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=160.645 reps=[153.26932125546816, 160.74154373963387, 160.64472975112997]
+[A3] CLOCK start=59 C after 0s loaded_samples=18 below_lock=0 above_lock=18 lock NOT applied (clock recorded, not fixed) hottest=68C reasons=0x0000000000000000:18 
+[B3] DEVICE-KV-CAPACITY tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 free_after_load=6715146240 session_bytes=24510464 sessions=273 fp16_session_bytes=46137344 fp16_sessions=145
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=0 tg=148.553
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=1 tg=154.752
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 rep=2 tg=157.246
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=154.752 reps=[148.55261272507366, 154.75195516975134, 157.24558491129153]
+[B3] CLOCK start=61 C after 0s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=68C reasons=0x0000000000000000:17 

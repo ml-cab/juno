@@ -1,5 +1,20 @@
 ## Status 
 
+**Session 150** - GPU decode: the FFN gate and up projections run as one launch
+
+- **One launch for two projections.** In the GPU decode region, a layer's FFN gate and up projections now run as one
+  kernel launch where both are Q4_K matrices of the same shape (every Q4_K_M model tested): each thread reads its slice
+  of the quantized input once for both matrices, and where a row has at most 8 super-blocks (hidden width up to 2,048)
+  the warps one row leaves idle compute the next row. Other weight types keep two launches.
+- **Kernel time.** On each tested model's gate and up shape, the launch takes 0.63x to 0.94x (TinyLlama), 0.75x to 0.88x
+  (Qwen2.5-3B), 0.88x to 0.97x (Phi-3.5-mini) and 0.94x to 0.97x (Mistral 7B) of the two launches' time, wherever the
+  input lands in device memory.
+- **Decode speed.** At a 2,048-token context, clocks pinned, with `f16` / `q8_0` GPU KV: TinyLlama 1.075x / 1.027x,
+  Qwen2.5-3B 1.016x / 1.045x, Phi-3.5-mini 1.029x / 1.015x and Mistral 7B 1.014x / 1.019x the previous build's decode
+  rate, faster in every measured cycle on every model. `q8_0` decode stays at or above 0.95x the `f16` rate.
+- **Outputs.** Every row is the single-matrix kernel's arithmetic with the same roundings, so outputs are unchanged bit
+  for bit. Prefill, batched decode, the CPU path and LoRA are unchanged.
+
 **Session 149** - FP16 decode on the GPU is faster at long context: decode attention runs a wider block
 
 - **Decode attention on 256 threads.** With GPU attention and the default `f16` KV, a decoded token's attention now runs
@@ -11,12 +26,12 @@
   Mistral 7B 1.07x the previous build's decode rate. Prefill and 256-wide heads are unchanged.
 - **`q8_0` KV against `f16`.** Part of the quantized copy's decode lead was this same block, which `f16` now has too:
   decode with `q8_0` read 0.94x (Qwen2.5-3B) to 0.98x the faster `f16` rate, clocks pinned (it read 1.03x to 1.23x
-  against the old one).
+  against the old one), until the quantized loop below caught up.
 - **Quantized decode attention.** The `q8_0`/`q4_0` decode loop now loads each key's K and V blocks before using them,
   unpacks quantized bytes into floats without conversion instructions, and has no branch per block. At 2,048 keys its
   launch takes 0.74x (Qwen2.5-3B) to 0.99x (Phi-3.5-mini) of its previous time and 0.65x to 0.97x of the `f16` launch's;
-  decode with `q8_0` reads 0.97x to 0.98x the `f16` rate, unpinned. Over the configurations tested, outputs are unchanged
-  bit for bit except with `q4_0` keys and `f16` values, within 2 ulp.
+  decode with `q8_0` reads 0.96x (Qwen2.5-3B) to 0.99x (TinyLlama) the `f16` rate, clocks pinned. Over the configurations
+  tested, outputs are unchanged bit for bit except with `q4_0` keys and `f16` values, within 2 ulp.
 - **Outputs.** The attention adds the same values in a different order, so greedy text can differ from the previous
   build after many tokens; it stays within the same tolerance of the CPU attention.
 

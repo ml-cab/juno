@@ -1,0 +1,24 @@
+[A1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=151.900 reps=[151.70427743804362, 158.6421967076903, 151.89962352307268]
+[A1] CLOCK start=43 C after 0s loaded_samples=19 below_lock=0 above_lock=19 lock NOT applied (clock recorded, not fixed) hottest=59C reasons=0x0000000000000000:19 
+[B1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=165.124 reps=[159.53252185121937, 165.1235251874633, 166.5437987622759]
+[B1] CLOCK start=52 C after 0s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=61C reasons=0x0000000000000000:17 
+[C1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=155.697 reps=[143.1452603971312, 155.69716918595816, 158.91604991244236]
+[C1] CLOCK start=55 C after 0s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=65C reasons=0x0000000000000000:17 
+[D1] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=165.145 reps=[158.23515290222647, 165.14507328947403, 166.21431980593718]
+[D1] CLOCK start=59 C after 0s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=66C reasons=0x0000000000000000:17 
+[A2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=160.108 reps=[153.345787646921, 160.1083020587616, 161.78172969199196]
+[A2] CLOCK start=59 C after 0s loaded_samples=18 below_lock=0 above_lock=18 lock NOT applied (clock recorded, not fixed) hottest=68C reasons=0x0000000000000000:18 
+[B2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=167.552 reps=[160.95096691790062, 167.55184458879452, 168.09599589362494]
+[B2] CLOCK start=62 C after 0s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=69C reasons=0x0000000000000000:17 
+[C2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=154.124 reps=[136.18351282449768, 154.12423230704837, 159.80181598509026]
+[C2] CLOCK start=63 C after 0s loaded_samples=18 below_lock=0 above_lock=18 lock NOT applied (clock recorded, not fixed) hottest=71C reasons=0x0000000000000000:18 
+[D2] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=158.229 reps=[153.62938057435505, 159.5328000190881, 158.22863419808252]
+[D2] CLOCK start=65 C after 0s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=71C reasons=0x0000000000000000:17 
+[A3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=154.740 reps=[147.15661217523615, 157.35229953378197, 154.7399840700989]
+[A3] CLOCK start=65 C after 0s loaded_samples=18 below_lock=0 above_lock=18 lock NOT applied (clock recorded, not fixed) hottest=73C reasons=0x0000000000000000:18 
+[B3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=166.349 reps=[163.53313459952116, 166.3490100194179, 167.83393221572183]
+[B3] CLOCK start=62 C after 5s loaded_samples=16 below_lock=0 above_lock=16 lock NOT applied (clock recorded, not fixed) hottest=72C reasons=0x0000000000000000:16 
+[C3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=148.766 reps=[145.69142414771662, 152.09689675976705, 148.76647620540243]
+[C3] CLOCK start=64 C after 5s loaded_samples=20 below_lock=0 above_lock=20 lock NOT applied (clock recorded, not fixed) hottest=73C reasons=0x0000000000000000:20 
+[D3] DEVICE-KV-TG tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=151.484 reps=[151.4843608125798, 157.2088171901396, 141.5024020187511]
+[D3] CLOCK start=65 C after 10s loaded_samples=17 below_lock=0 above_lock=17 lock NOT applied (clock recorded, not fixed) hottest=75C reasons=0x0000000000000000:17 

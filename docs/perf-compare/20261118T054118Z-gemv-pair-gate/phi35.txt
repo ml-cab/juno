@@ -1,0 +1,24 @@
+[A1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=47.055 reps=[47.16842006442602, 47.05474687567794, 44.24060158682487]
+[A1] CLOCK start=65 C after 15s loaded_samples=339 below_lock=0 above_lock=339 lock NOT applied (clock recorded, not fixed) hottest=93C reasons=0x0000000000000020:258 0x0000000000000000:81 
+[B1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=47.949 reps=[47.58367404322016, 47.94909754372308, 48.07531265145777]
+[B1] CLOCK start=65 C after 155s loaded_samples=326 below_lock=0 above_lock=326 lock NOT applied (clock recorded, not fixed) hottest=93C reasons=0x0000000000000020:251 0x0000000000000000:75 
+[C1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=45.355 reps=[45.155839671332316, 45.47833650312838, 45.35487929913967]
+[C1] CLOCK start=65 C after 105s loaded_samples=357 below_lock=0 above_lock=357 lock NOT applied (clock recorded, not fixed) hottest=93C reasons=0x0000000000000020:271 0x0000000000000000:86 
+[D1] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=46.091 reps=[46.09081119710319, 46.009877321383875, 46.358584154759725]
+[D1] CLOCK start=65 C after 110s loaded_samples=349 below_lock=0 above_lock=349 lock NOT applied (clock recorded, not fixed) hottest=91C reasons=0x0000000000000020:266 0x0000000000000000:83 
+[A2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=46.442 reps=[46.48027100214522, 46.44194994580172, 45.45843500803374]
+[A2] CLOCK start=66 C after 100s loaded_samples=336 below_lock=0 above_lock=336 lock NOT applied (clock recorded, not fixed) hottest=94C reasons=0x0000000000000020:272 0x0000000000000000:64 
+[B2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=47.846 reps=[47.68565310496813, 47.84556398689129, 48.107427186279146]
+[B2] CLOCK start=65 C after 110s loaded_samples=327 below_lock=0 above_lock=327 lock NOT applied (clock recorded, not fixed) hottest=93C reasons=0x0000000000000020:258 0x0000000000000000:69 
+[C2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=45.769 reps=[45.47768364727862, 45.76907063799553, 45.942028158009755]
+[C2] CLOCK start=65 C after 110s loaded_samples=352 below_lock=0 above_lock=352 lock NOT applied (clock recorded, not fixed) hottest=93C reasons=0x0000000000000020:276 0x0000000000000000:76 
+[D2] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=46.354 reps=[46.03893636074119, 46.415168298881866, 46.353728931934604]
+[D2] CLOCK start=65 C after 110s loaded_samples=350 below_lock=0 above_lock=350 lock NOT applied (clock recorded, not fixed) hottest=91C reasons=0x0000000000000020:264 0x0000000000000000:86 
+[A3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=46.483 reps=[46.48287593420199, 46.96053163193116, 45.46555128246151]
+[A3] CLOCK start=65 C after 105s loaded_samples=333 below_lock=0 above_lock=333 lock NOT applied (clock recorded, not fixed) hottest=94C reasons=0x0000000000000020:260 0x0000000000000000:73 
+[B3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=f16 device=K f16, V f16 context=2048 decode=128 median_tg=47.764 reps=[47.54216790095717, 47.81134811618457, 47.763741227396906]
+[B3] CLOCK start=65 C after 115s loaded_samples=327 below_lock=0 above_lock=327 lock NOT applied (clock recorded, not fixed) hottest=93C reasons=0x0000000000000020:244 0x0000000000000000:83 
+[C3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=45.397 reps=[44.99307369066175, 45.39698322441413, 45.56351021708446]
+[C3] CLOCK start=65 C after 110s loaded_samples=355 below_lock=0 above_lock=355 lock NOT applied (clock recorded, not fixed) hottest=93C reasons=0x0000000000000020:285 0x0000000000000000:70 
+[D3] DEVICE-KV-TG Phi-3.5-mini-instruct-Q4_K_M.gguf type=q8_0 device=K q8_0, V q8_0 context=2048 decode=128 median_tg=45.795 reps=[45.79490714129292, 46.10625105879134, 45.28780187930594]
+[D3] CLOCK start=65 C after 110s loaded_samples=351 below_lock=0 above_lock=351 lock NOT applied (clock recorded, not fixed) hottest=91C reasons=0x0000000000000020:270 0x0000000000000000:81 

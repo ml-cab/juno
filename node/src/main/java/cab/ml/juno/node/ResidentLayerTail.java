@@ -32,7 +32,9 @@ import java.lang.foreign.MemorySegment;
  *
  * <p>Each step is the kernel the op-at-a-time path runs, fed the same bits: the
  * projections are the K-quant MMQ GEMVs of {@link CudaMatVec#sgemv(DeviceQ4KMatrix, float[])}
- * (gate and up share one Q8_1 quantization, as {@link CudaMatVec#sgemvSameX} does),
+ * (gate and up share one Q8_1 quantization, as {@link CudaMatVec#sgemvSameX} does, and
+ * run as one launch, {@link Q4KGemvPairKernel}, where both are Q4_K of one shape: its
+ * rows are the single-matrix kernel's bit for bit, the input read once for both),
  * the norm is the RMS-norm kernel of {@link CudaRmsNorm}, and SwiGLU and the adds
  * round each operation separately exactly as the host loops do. So the layer
  * output matches that path bit for bit.
@@ -48,6 +50,8 @@ final class ResidentLayerTail implements AutoCloseable {
 	}
 
 	private final Q4KMmqKernel mmq;
+	/** Gate and up in one launch; null when its module does not load (two launches then). */
+	private final Q4KGemvPairKernel pair;
 	private final CudaRmsNorm norm;
 	private final PrefillWindowKernels kernels;
 	private final int hidden;
@@ -63,6 +67,7 @@ final class ResidentLayerTail implements AutoCloseable {
 	private ResidentLayerTail(Q4KMmqKernel mmq, CudaRmsNorm norm, PrefillWindowKernels kernels, LlamaConfig cfg,
 			Weights w, DeviceFloatMatrix[] ffnNormWeight) {
 		this.mmq = mmq;
+		this.pair = Q4KGemvPairKernel.tryLoad();
 		this.norm = norm;
 		this.kernels = kernels;
 		this.hidden = cfg.hiddenDim();
@@ -155,8 +160,7 @@ final class ResidentLayerTail implements AutoCloseable {
 			throw new IllegalStateException("RMS-norm kernel failed to load after the path was built");
 		DeviceSpanTally.compute(DeviceComputeEvent.RMS_NORM, 1, -1L);
 		mmq.quantizeX(xn.devicePointer(), q8, hidden, stream);
-		packed(wGate[li], q8, gateUp, stream);
-		packed(wUp[li], q8, gateUp.asSlice(iBytes), stream);
+		gateAndUp(wGate[li], wUp[li], q8, gateUp, gateUp.asSlice(iBytes), stream);
 		kernels.swiglu(gateUp, swiglu, 1, inter, stream);
 		DeviceSpanTally.compute(DeviceComputeEvent.SWIGLU, 1, -1L);
 		project(wDown[li], swiglu, out, q8, stream);
@@ -168,6 +172,18 @@ final class ResidentLayerTail implements AutoCloseable {
 			MemorySegment stream) {
 		mmq.quantizeX(x, q8, w.cols(), stream);
 		packed(w, q8, y, stream);
+	}
+
+	/** The gate and up projections of the quantized row in {@code q8}: one launch where they pair, else two. */
+	private void gateAndUp(DeviceQ4KMatrix gate, DeviceQ4KMatrix up, MemorySegment q8, MemorySegment yGate,
+			MemorySegment yUp, MemorySegment stream) {
+		if (pair == null || !Q4KGemvPairKernel.pairs(gate, up)) {
+			packed(gate, q8, yGate, stream);
+			packed(up, q8, yUp, stream);
+			return;
+		}
+		pair.launch(gate.devicePointer(), up.devicePointer(), q8, yGate, yUp, gate.rows(), gate.cols(), stream);
+		DeviceSpanTally.compute(DeviceComputeEvent.MMQ_PACKED, 1, -1L);
 	}
 
 	private void packed(DeviceQ4KMatrix w, MemorySegment q8, MemorySegment y, MemorySegment stream) {

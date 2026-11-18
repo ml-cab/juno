@@ -1104,7 +1104,9 @@ GPU FFI (node module — Panama project, JEP 454):
         (CudaRmsNorm.normalizeResident, FFN norm weight uploaded once per layer), gate and up
         projections sharing one Q8_1 quantization, SwiGLU (PrefillWindowKernels.swiglu), down
         projection, second residual add (residualAddBoth). Projections are Q4KMmqKernel.quantizeX plus
-        launchPacked, the kernels CudaMatVec.sgemv / sgemvSameX run, so the layer output is
+        launchPacked, the kernels CudaMatVec.sgemv / sgemvSameX run; gate and up run as one
+        Q4KGemvPairKernel launch where both are Q4_K of one shape (rows bit for bit launchPacked's),
+        else two. So the layer output is
         bit-identical to the GPU op-at-a-time path (ResidentQkvPathTest whole-layer cases: single
         layer at positions 0 to 4096, a 40-token decode over four layers in leases with one layer
         leaving the region after attention, concurrent leases, a declined layer between two region
@@ -1310,7 +1312,14 @@ GPU FFI (node module — Panama project, JEP 454):
         is a view of a row range sharing the matrix's device memory (rows are stored one after
         another, Q6_K in padded slots): it owns nothing, frees nothing on close and is retired when
         its matrix closes (DeviceQ4KMatrixRowSliceTest: each part's product equals its rows of the
-        fused product, Q4_K, Q5_K and Q6_K).
+        fused product, Q4_K, Q5_K and Q6_K). Shared helpers in kquant_gemv.cuh.
+  Q4KGemvPairKernel — PTX q4k_gemv_pair.ptx: the decode region's FFN gate and up projections in
+        one launch (ResidentLayerTail), two Q4_K matrices of one shape against one Q8_1 input. A lane
+        loads its input slice once for both rows; rows of at most 8 super-blocks run two row indices
+        a block (the warps one row leaves idle take the second). Each row's arithmetic is q4k_gemv's,
+        its roundings written out as that kernel's machine code has them, so both outputs equal two
+        launchPacked calls bit for bit (Q4KGemvPairTest; Q4KGemvPairBench: device time at nine
+        placements of the input vector). Launch parameters reused per thread (KernelParams).
   KQuantGemmKernel — PTX tiled matmul over packed Q4_K / Q5_K / Q6_K weights for batches of
         activation rows (classpath kquant_gemm.ptx, kquant_gemm.cu): the batch is quantized to
         Q8_1 once (Q4KMmqKernel.quantizeX over batch * cols), then each 256-thread block unpacks

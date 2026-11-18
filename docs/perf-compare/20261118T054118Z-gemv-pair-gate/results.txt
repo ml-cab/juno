@@ -1,0 +1,8 @@
+RESULT tinyllama fp16-after-over-before B_tg=166.349 A_tg=154.740 ratio=1.0750 bar>=1.00 PASS
+RESULT tinyllama q8_0-after-over-before D_tg=158.229 C_tg=154.124 ratio=1.0266 bar>=1.00 PASS
+RESULT qwen25 fp16-after-over-before B_tg=63.786 A_tg=62.759 ratio=1.0164 bar>=1.00 PASS
+RESULT qwen25 q8_0-after-over-before D_tg=60.685 C_tg=58.099 ratio=1.0445 bar>=1.00 PASS
+RESULT phi35 fp16-after-over-before B_tg=47.846 A_tg=46.483 ratio=1.0293 bar>=1.00 PASS
+RESULT phi35 q8_0-after-over-before D_tg=46.091 C_tg=45.397 ratio=1.0153 bar>=1.00 PASS
+RESULT mistral fp16-after-over-before B_tg=37.975 A_tg=37.467 ratio=1.0136 bar>=1.00 PASS
+RESULT mistral q8_0-after-over-before D_tg=37.156 C_tg=36.470 ratio=1.0188 bar>=1.00 PASS

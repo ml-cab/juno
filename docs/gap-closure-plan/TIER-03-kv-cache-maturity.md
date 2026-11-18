@@ -49,7 +49,7 @@ widths it scores). Owner decisions 7 (a) and 8 (a), 2026-11-15. Decision 7 (a) i
 writes the host KV from the device copy's stored rows (no CPU encode; a quarter of the bytes over the bus), host bytes
 unchanged; prefill `q8_0` over FP16, unpinned, 0.90x to 0.99x in one window and 0.90x to 0.97x in 128-row windows, every
 sweep model; kit probe `gpu.kv-prefill.<model>` in. The owner's pinned prefill gate (decision 8 (a)), 2026-11-16: 0.877x to
-0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned; the owner's gate (`dist/quant-decode-loads`) owed. Next: the gate; then decision 4 (a); then item 6; then step 7.
+0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned. The owner's gate, 2026-11-17, pinned: `q8_0` decode 0.958x (Qwen2.5-3B) to 0.985x FP16, 4 of 4 at or above 0.95x; exit criterion 7 ticked again (6 of 15). Decision 4 (a) in 2026-11-17 (out of tier): gate and up in one launch (`q4k_gemv_pair`), bit for bit the two launches, 0.63x to 0.97x their device time at nine placements of the input vector, unpinned; LoRA gate and suites pass. The owner's gate, 2026-11-18, pinned: decode after over before, FP16 1.014x (Mistral 7B) to 1.075x (TinyLlama) and `q8_0` 1.015x (Phi-3.5-mini) to 1.045x (Qwen2.5-3B), 8 of 8 over 1.00, no cycle under; `q8_0` over FP16 read 0.951x to 0.978x and bounded at 0.956x or above, so criterion 7 stays met (6 of 15). Next: item 6, on a commit that holds decision 4 (a); then step 7.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -390,7 +390,7 @@ in `models/`.)*
       decision, put in the 2026-11-13 entry.)*
 - [ ] Real FP16 dense KV storage meets its threshold (greedy agreement >= 99%, NLL <= 1.005x, Phi-3.5-mini
       live heap at 2048 tokens <= 0.60x the pre-tier reading).
-- [ ] Quantized device KV (item 7): `--cache-type-k`/`-v` reach the GPU's KV copy on every handler with
+- [x] Quantized device KV (item 7): `--cache-type-k`/`-v` reach the GPU's KV copy on every handler with
       a GPU attention path, or the handler keeps FP16 and says so at startup; bytes per position, session
       capacity, decode tg and greedy-agreement thresholds met.
       *(2026-11-13: implemented on the three handlers with a GPU attention path (Llama family, Phi-3, Qwen3); a head width that
@@ -423,7 +423,12 @@ in `models/`.)*
       **0.938x** (0.938x in each of three cycles), Phi-3.5-mini 0.975x and Mistral 7B 0.977x. Open for decode tg on
       Qwen2.5-3B; decision 9 (a). 2026-11-17: the quantized decode loop reworked (decision 9 (a),
       [`20261117T024602Z-quant-decode-loads`](../perf-compare/20261117T024602Z-quant-decode-loads/INDEX.md)): `q8_0` over
-      FP16 0.971x to 0.983x unpinned (Qwen2.5-3B 0.971x); the owner's gate (`dist/quant-decode-loads`) scores it.)*
+      FP16 0.971x to 0.983x unpinned (Qwen2.5-3B 0.971x); the owner's gate (`dist/quant-decode-loads`) scores it.
+      2026-11-17, met again: the owner's gate
+      ([`20261117T053104Z-quant-decode-loads-gate`](../perf-compare/20261117T053104Z-quant-decode-loads-gate/INDEX.md)), CPU
+      pinned, GPU clock recorded and matched per model, read `q8_0` over FP16 at TinyLlama 0.985x, Qwen2.5-3B 0.958x,
+      Phi-3.5-mini 0.974x and Mistral 7B 0.972x, 4 of 4 at or above 0.95x, on the tree committed as `9c33ab93` (tree hash
+      checked). Every bar of this criterion is met.)*
 - [ ] Disk-backed session save/restore round-trips correctly across a process restart.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
@@ -2559,3 +2564,227 @@ model, `q8_0` over `f16`, bar >= 0.95 (criterion 7's decode bar). About 60 minut
 
 **Next for the executor:** record the gate (a pass on every model ticks criterion 7 again); then decision 4 (a) (the FFN
 gate and up GEMVs reading the q8_1 input once for two rows); then item 6; then step 7.
+
+### 2026-11-17, later: the owner's gate: `q8_0` decode 0.958x to 0.985x FP16, pinned, on every sweep model; criterion 7 met again
+
+**The gate** ([`20261117T053104Z-quant-decode-loads-gate`](../perf-compare/20261117T053104Z-quant-decode-loads-gate/INDEX.md);
+owner run 2026-11-17T05:31Z to 06:24Z, `dist/quant-decode-loads/run-gate.sh`): CPU pinned, GPU clock recorded and not fixed
+(the lock accepted and not applied, every CLOCK line), cooled to 65 C before each JVM, both sides at the same median loaded
+clock per model (Qwen2.5-3B's `q8_0` side 13 MHz below its FP16 side). The tree it ran (`head 637751b0`, `diff
+c6b66b809fac35e7`, recorded in `READY` and in the run's `tree.txt`) is the commit `9c33ab93` the owner made afterwards: the
+hash rebuilt from `git diff 637751b0 9c33ab93` the way `tree-hash.sh` reads a tree is `c6b66b809fac35e7`.
+
+| Model | `f16`, tok/s | `q8_0`, tok/s | `q8_0` over `f16` (bar 0.95) |
+|---|---|---|---|
+| TinyLlama 1.1B | 160.645 | 158.281 | 0.9853 pass |
+| Qwen2.5-3B | 62.688 | 60.049 | 0.9579 pass |
+| Phi-3.5-mini | 46.784 | 45.566 | 0.9740 pass |
+| Mistral 7B | 37.478 | 36.428 | 0.9720 pass |
+
+- **Per cycle**, two single cycles sit under the bar: Qwen2.5-3B 0.957, 0.936, 0.958 (its second `q8_0` JVM 58.495 against
+  60.069 and 60.049), Phi-3.5-mini 0.917, 0.975, 0.976 (its first `q8_0` JVM, the slowest of either side, with the card
+  throttling for heat on about 80% of loaded samples). The bar scores medians of three, as every pinned gate of this tier
+  has; every row's repetitions agree within 15% of their median (largest spread 8.3%). Qwen2.5-3B's margin is 0.8%.
+- **Against the 2026-11-16 gate**, which ran the same FP16 decode code: FP16 within 1.0% on every model; `q8_0` +3.3%
+  (TinyLlama), +2.9% (Qwen2.5-3B), -0.3% (Phi-3.5-mini), +0.2% (Mistral 7B), the shape the unpinned bench showed (the loop
+  change matters where the old loop's launch was slowest against FP16).
+- **Prefill, not a bar:** a 2,048-token prefill with `q8_0` 0.937x to 0.943x the FP16 time, within 1.4% of the 2026-11-16
+  gate's `q8_0` readings; the prefill tiles' PTX is the committed one.
+
+**Exit criteria:** 6 of 15. Criterion 7 ticked again: every bar of it is met (bytes per position, session capacity, greedy
+agreement and the prefill bar on their earlier evidence, decode tg on this gate).
+
+**Docs.** `docs/howto.md` (`--cache-type-k`: the pinned decode ratio), `docs/performance.md`, `CHANGELOG.md` (Session 149),
+`docs/perf-compare/README.md`.
+
+**Tests.** No code changed, so none was run. `check-plan-thresholds.sh` passes after these edits.
+
+**Out-of-tier changes:** none.
+
+**Next for the executor:** decision 4 (a) (the FFN gate and up GEMVs reading the q8_1 input once for two rows, outside item 7,
+README rule 9); then item 6; then step 7.
+
+### 2026-11-17, latest: decision 4 (a) begun: the FFN gate and up projections in one launch; thresholds set before implementation
+
+**Plan against code.** No drift. Every sweep model's decode region issues its FFN through `ResidentLayerTail.issue`:
+one Q8_1 quantization of the normed row, then two `q4k_gemv` launches over it, gate and up (Phi-3 passes the two halves of
+its fused `ffn_up` as row slices). `q4k_gemv` runs one row a block, 4 warps, 16 super-block slots; at hidden width 2,048
+(TinyLlama, Qwen2.5-3B: 8 super-blocks a row) warps 2 and 3 have no work, and every block reads the whole 2,304-byte Q8_1
+vector. The decode batch (`ResidentBatchDecode`) runs its own batched kernels and is not in this change.
+
+**Design.** One launch for both projections (`q4k_gemv_pair`): a lane loads its slice of the Q8_1 vector once and dots it
+with the gate row and the up row; a row's arithmetic is the single-row kernel's, so both outputs equal two `q4k_gemv`
+launches bit for bit. Where a row has at most 8 super-blocks, warps 2 and 3 take the next row index, so each block computes
+two gate and two up rows. Gate and up of another type than Q4_K, or of unequal shapes, keep the two launches.
+
+**Thresholds** (the executor's reading of decision 4 (a)'s "GEMV gates of its own"; set before any kernel code was written):
+- Parity (unit test, GPU): the paired launch's gate and up outputs bit for bit equal to two `q4k_gemv` launches over the
+  same Q8_1 input, at odd and even row counts and 1 to 17 super-blocks a row.
+- Kernel (bench, unpinned): on each sweep model's gate/up shape (TinyLlama 5,632 x 2,048; Qwen2.5-3B 11,008 x 2,048;
+  Phi-3.5-mini 8,192 x 3,072; Mistral 7B 14,336 x 4,096), at each of nine placements of the Q8_1 vector within 64 KiB
+  (0x0, 0x200, 0x400, 0x800, 0xe00, 0x1000, 0x1800, 0x4800, 0xbe00), the paired launch's device time **<= 1.00x** the two
+  launches' at the same placement; each side's slowest-over-fastest spread across placements reported.
+- Decode tg (the owner's gate, pinned, same hour): at a 2,048-token context, FP16 and `q8_0` device KV each **>= 1.00x**
+  the build before (`9c33ab93`) on every sweep model.
+
+**What changed** (uncommitted on HEAD `9c33ab93`):
+- `q4k_gemv_pair.cu` (new) and `Q4KGemvPairKernel` (new): the paired launch described above, 48 registers, no spills,
+  launch parameters reused per thread (`KernelParams`).
+- `kquant_gemv.cuh` (new): `q4k_gemv.cu`'s helpers moved out so both kernels share them; `q4k_gemv.ptx` rebuilt from the
+  moved source is byte for byte the committed one.
+- `ResidentLayerTail.issue`: gate and up through one paired launch where `Q4KGemvPairKernel.pairs` (both Q4_K, one shape),
+  else the two launches as before.
+- Left to the compiler, the paired kernel's per-block term differed from `q4k_gemv`'s by an ulp: it contracted other
+  products into FMAs. The term is now written with explicit roundings in the form `q4k_gemv`'s machine code (SASS, not
+  its PTX: `ptxas` fuses `d * (...)` into the subtraction) has them.
+
+**Tests first.** `Q4KGemvPairTest` (GPU, 1): gate and up bit for bit two `q4k_gemv` launches over the same Q8_1 input at
+10 shapes (1 to 1,000 rows, odd and even; 1, 3, 5, 8, 9, 12, 16 and 17 super-blocks), and the row past the last never
+written. Seen failing for the right reason twice before passing: an ulp on `1 x 256` and then on `2 x 256` until the term
+matched `q4k_gemv`'s machine code. Shown able to fail, each defect put in, rebuilt, run and taken out (source and PTX
+checksums equal afterwards):
+
+| Defect | Caught by |
+|---|---|
+| F1: the second row index overlaps the first (`blockIdx.x + group`) | `Q4KGemvPairTest` (gate row 4 of 6 x 1,280) |
+| F2: the up row dotted with the low half's input for both halves | `Q4KGemvPairTest` (up row 0 of 1 x 256) |
+| F3: the second row index reduces into the first's slots | `Q4KGemvPairTest` (gate row 1 of 2 x 256) |
+
+Existing tests on the routed tail, GPU, all pass: `ResidentQkvPathTest` (19, whole layers bit for bit the op-at-a-time
+path, Q4_K gate and up, so the paired route ran), `ResidentQkvPathQwen2Test`, `-Phi3Test`, `-Qwen3Test` (5 each),
+`ResidentQkvPathDeviceFullTest` (1), `ResidentBatchDecodeTest` (22), `BatchDecodeRegionHandlerTest` (11),
+`SgemvSameXParityTest` (1), `Q4KMmqParityTest` (2), `KQuantMmqParityTest` (3).
+
+**Readings, unpinned** ([`20261117T082501Z-gemv-gate-up-pair`](../perf-compare/20261117T082501Z-gemv-gate-up-pair/INDEX.md)):
+the kernel bar is met. Paired over two launches, across two runs and all nine offsets: TinyLlama 0.632x to 0.943x,
+Qwen2.5-3B 0.746x to 0.884x, Phi-3.5-mini 0.876x to 0.973x, Mistral 7B 0.935x to 0.969x. Placement still moves the
+paired launch (1.009x to 1.209x slowest over fastest); on Phi-3.5-mini its spread is wider than the two launches'.
+
+**Out-of-tier changes (README rule 9):** this change (decision 4 (a), outside item 7): the decode region's FFN gate and up
+GEMVs (`q4k_gemv_pair.cu`, `Q4KGemvPairKernel`, `ResidentLayerTail`). A measurement boundary for GPU decode on every
+handler with a decode region (Llama family, Qwen2, Phi-3, Qwen3) once its gate passes and it is committed; outputs are
+unchanged bit for bit, so no quality reading moves. GPU prefill, the decode batch, the CPU path and LoRA are unchanged.
+
+**Still owed for decision 4 (a)** (the session stopped here for context; `docs/infra-plan/PROMPT-gemv-gate-up-pair.md`
+has the commands): an unpinned decode tg A/B against `9c33ab93` (FP16 and `q8_0`, 2,048 tokens, four sweep models);
+the hot-path gate `compare-lora.sh --gpu` from each tree; the node and coordinator suites with the GPU groups; the
+owner's pinned gate prepared under `dist/gemv-pair/`; docs (`docs/performance.md`, `CHANGELOG.md`).
+
+**Exit criteria:** 6 of 15, unchanged (decision 4 (a) is outside them).
+
+**Next for the executor:** finish decision 4 (a) as listed; then item 6; then step 7.
+
+### 2026-11-17, latest: decision 4 (a): decode 1.005x to 1.077x the build before, unpinned; LoRA gate and suites; the owner's gate prepared
+
+**Plan against code.** No drift. The uncommitted change the previous entry describes is on disk as recorded
+(`q4k_gemv_pair.cu`, `kquant_gemv.cuh`, `q4k_gemv_pair.ptx`, `Q4KGemvPairKernel`, `ResidentLayerTail.gateAndUp`,
+`Q4KGemvPairTest`, `Q4KGemvPairBench`); no code changed in this session. `check-plan-thresholds.sh` passes.
+
+**Baseline.** `git archive 9c33ab93` in `dist/gemv-pair/baseline-tree` (git-ignored, `.archive-commit` written, `models/`
+linked), built there with `mvn -o package -DskipTests`; this tree rebuilt the same way (its shaded jar predated the change).
+The same baseline tree serves the owner's gate.
+
+**Readings, unpinned** ([`20261117T082501Z-gemv-gate-up-pair`](../perf-compare/20261117T082501Z-gemv-gate-up-pair/INDEX.md),
+sections 2 and 3, added to the kernel bench's entry):
+- Decode tg at a 2,048-token context (`DeviceKvDecodeTgLiveTest`, A the baseline tree, B this tree, A B x2, Mistral 7B x4,
+  cooled to 65 C before each JVM), B over A, means, `f16` / `q8_0` device KV: TinyLlama **1.060 / 1.077**, Qwen2.5-3B
+  **1.045 / 1.041**, Phi-3.5-mini **1.028 / 1.011**, Mistral 7B **1.008 / 1.005** (medians 1.012 / 1.008). Every B JVM
+  is faster than every A JVM on TinyLlama, Phi-3.5-mini and Qwen2.5-3B `f16` (Qwen2.5-3B `q8_0`: the slowest B 0.999x the
+  fastest A). Mistral 7B's sides overlap: one pair of each type reads under 1.0 (0.969, 0.995), so two more pairs were run
+  after the first two read 1.003 and 1.004. The gain follows the kernel bench: largest at width 2,048, where the idle warps
+  take a second row, smallest at 4,096, where the gate and up launches save 3% to 6.5% of their own time.
+- Hot-path gate, `compare-lora.sh --gpu --skip-build --no-publish --reps 3` from each tree: train 0.976x, playback 0.993x,
+  recall equal (bars 1.25x and 0.80x). LoRA does not run the decode region, so the gate holds that nothing else moved.
+
+**Cross-surface rows**, against the 2026-11-17 entries: unchanged. The paired launch runs only inside the CUDA decode
+region's layer tail (Llama family, Qwen2, Phi-3, Qwen3, single decode rows); gate and up of another type than Q4_K, or of
+unequal shapes, keep two launches, as does a run where the paired module does not load (warning logged). The decode
+batch, prefill, ROCm, the CPU backend, LoRA training and `--lora-play` do not reach it. Outputs are bit for bit the two
+launches', so no quality, parity or grammar reading moves. No flag added.
+
+**Docs.** `docs/agent-arch.txt` (previous entry), `docs/performance.md` (the pairing, kernel and decode figures),
+`CHANGELOG.md` (Session 150), `docs/perf-compare/README.md` (the entry's row extended).
+
+**Kit probes.** None added: no flag, threshold or surface. `gpu.consistency`, `gpu.kv-quality` and the GPU live probes run
+the decode region and so this launch.
+
+**Tests run.** The suites on the final tree (`mvn -o test -pl node,coordinator -am -Dgroups='gpu | !gpu'
+-Dmaven.test.failure.ignore=true`, GPU groups on the GTX 1080, 53 min): `api` (no tests), `registry` 93, `lora` 116,
+`kvcache` 228, `health` 23, `tokenizer` 109 (2 skipped), `sampler` 90, `coordinator` 417 (1 skipped) and its
+integer-kernel execution 1 pass; `node` 1,630 run (`Q4KGemvPairTest` among them, pass), 59 skipped, **3 failures**, the
+same three as the previous entry's suite: `DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix` 2 of 4
+(Q4_K row 226 and Q5_K row 186, 512x2048, round 1: the upload race of the entries above; alone straight after, 4 of 4
+pass, in this tree and in the tree before this change) and
+`PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance` (free bytes reported with the device full
+88,539,136 against the 67,108,864 allowance; alone straight after, 78,905,344 in this tree and 78,905,344 in the tree
+before this change, both failing: the driver's free-memory reading on the desktop's shared card, and no class on either
+test's path is in this change). Downstream (`mvn -o test -pl vision,metrics,juno-player -am`, filtered to those modules'
+packages, 16 min): `vision` 98, `metrics` 86, `juno-player` 158 (2 skipped), all pass. `check-plan-thresholds.sh`:
+passes.
+
+**Out-of-tier changes (README rule 9):** this change, as the previous entry records (decision 4 (a), outside item 7). It
+becomes a measurement boundary for GPU decode on every handler with a decode region once the owner's gate passes and it
+is committed.
+
+**Exit criteria:** 6 of 15, unchanged (decision 4 (a) is outside them).
+
+**Owed to the owner: the gate.** In a terminal left open: `bash dist/gemv-pair/wait-and-run.sh` (it waits for `READY`,
+which is written last, checks the tree hash, and waits for any Maven or test process to end). Per model twelve JVMs, A B C D
+three times (A `f16` the baseline tree, B `f16` this tree, C `q8_0` the baseline tree, D `q8_0` this tree),
+`DeviceKvDecodeTgLiveTest` at 2,048 tokens, CPU pinned, the card cooled to 65 C before each JVM, a CLOCK line per JVM; two
+RESULT lines per model, B over A and D over C, each bar >= 1.00. About 1 hour 45 minutes. Mistral 7B's margin is expected
+to be about 1%, inside the unpinned spread; a miss there is the owner's call (keep the change, since outputs are
+identical and the other models gain, or drop it).
+
+**Next for the executor:** record the gate; then item 6 (exact host KV growth, real FP16 host storage); then step 7.
+
+### 2026-11-18: the owner's gate: decision 4 (a) passes, decode 1.014x to 1.075x the build before, pinned, FP16 and `q8_0`, every sweep model
+
+**The gate** ([`20261118T054118Z-gemv-pair-gate`](../perf-compare/20261118T054118Z-gemv-pair-gate/INDEX.md); owner run
+2026-11-18T05:41Z to 07:26Z, `dist/gemv-pair/run-gate.sh`): CPU pinned, GPU clock recorded and not fixed (the lock accepted
+and not applied, every CLOCK line), cooled to 65 C before each JVM. Per model twelve JVMs, A B C D three times (A `f16` before,
+B `f16` after, C `q8_0` before, D `q8_0` after), `DeviceKvDecodeTgLiveTest` at 2,048 tokens. After: the tree `READY` recorded
+(`head 9c33ab93`, `diff 2213b73c2a755981`, checked by `wait-and-run.sh`); before: `git archive 9c33ab93`. The two sides ran
+at the same median loaded clock per model, except TinyLlama's FP16 after side (13 MHz above its before side) and Qwen2.5-3B's
+two after sides (13 MHz below theirs). Only this record's documents changed after the gate: no file outside `docs/` is newer
+than `READY`.
+
+| Model | B over A (`f16`, bar 1.00) | D over C (`q8_0`, bar 1.00) |
+|---|---|---|
+| TinyLlama 1.1B | 166.349 / 154.740 = 1.0750 pass | 158.229 / 154.124 = 1.0266 pass |
+| Qwen2.5-3B | 63.786 / 62.759 = 1.0164 pass | 60.685 / 58.099 = 1.0445 pass |
+| Phi-3.5-mini | 47.846 / 46.483 = 1.0293 pass | 46.091 / 45.397 = 1.0153 pass |
+| Mistral 7B | 37.975 / 37.467 = 1.0136 pass | 37.156 / 36.470 = 1.0188 pass |
+
+- **Per cycle** every after JVM reads over the before JVM of its cycle (1.002x to 1.094x). On Phi-3.5-mini and Mistral 7B,
+  both types, every after JVM is faster than every before JVM; Mistral 7B, the expected thin margin (1.008x and 1.005x
+  unpinned, sides overlapping), reads 1.012x to 1.019x per cycle, its readings within 0.5% per side.
+- **Scorable:** a side's three JVM readings agree within 8.6% of their median (TinyLlama D). One JVM's own repetitions spread
+  15.3% (TinyLlama C2, a before JVM); its reading is the C side's median, and against the fastest C JVM D over C reads 1.016.
+- **The before side** reproduces the 2026-11-17 gate's readings of the same bytes within 0.6% on Qwen2.5-3B `f16`,
+  Phi-3.5-mini and Mistral 7B; TinyLlama read 3.7% (`f16`) and 2.6% (`q8_0`) lower and Qwen2.5-3B `q8_0` 3.2% lower.
+- **Criterion 7's ratio, read, not scored:** `q8_0` over FP16 on the after side reads 0.951 (TinyLlama), 0.951 (Qwen2.5-3B),
+  0.963 (Phi-3.5-mini), 0.978 (Mistral 7B). On the before side, the code the 2026-11-17 gate scored at 0.958 to 0.985, this
+  run reads 0.926 on Qwen2.5-3B: in its order the `q8_0` JVMs of TinyLlama and Qwen2.5-3B slowed across the three cycles on
+  both sides while the `f16` JVMs did not, so a cross-type ratio from this run moves by up to 3.4% on unchanged code. The
+  paired launch reads no KV, so it saves the same time per token with either type; from the 2026-11-17 gate's rates and the
+  largest saving measured per model, `q8_0` over FP16 can fall at most to 0.984, 0.956, 0.973 and 0.971. Both readings are at
+  or above 0.95 on every model: criterion 7 stays met, its decode margin now about 0.6% on Qwen2.5-3B.
+- **Prefill, not a bar:** after over before 0.978x to 1.021x (TinyLlama, Qwen2.5-3B, Mistral 7B, both types); the paired
+  launch does not run in prefill.
+
+**Exit criteria:** 6 of 15, unchanged (decision 4 (a) is outside them; criterion 7 stays met, above).
+
+**Docs.** `docs/performance.md` (the pinned figures), `CHANGELOG.md` (Session 150's decode line, now pinned),
+`docs/perf-compare/README.md` (the gate's row). `docs/howto.md` unchanged: its `q8_0` over FP16 figures (0.96x to 0.99x,
+pinned) were measured on the build before, and the bound above keeps them within 0.2%.
+
+**Tests.** No code changed after the suites of the previous entry, so none was run. `check-plan-thresholds.sh` passes after
+these edits.
+
+**Out-of-tier changes (README rule 9):** decision 4 (a), complete with this gate. It is the measurement boundary for GPU
+decode on every handler with a decode region once committed.
+
+**Next for the executor:** item 6 (exact host KV growth, real FP16 host storage, exit criterion 6), then step 7. Item 6
+changes the KV paths, so its A/B and hot-path gate need a baseline build of the tree before it (`git archive` of a commit):
+decision 4 (a) is committed first.
