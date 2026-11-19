@@ -1,0 +1,24 @@
+# Raw result lines. Phi-3.5-mini-instruct-Q4_K_M.gguf, CUDA (GTX 1080), 2,048 prompt tokens + 64 decoded.
+# JVM: -Xms12g -Xmx12g -XX:+UseG1GC (G1 regions of 4 MiB), unless noted.
+
+## Pre-tier build e16748ad (kit jar 73b212a1412661b7), heap-probe/HeapProbeMain.java (no reservation: the
+## build has none), three runs (the first at -Xmx12g only):
+HEAP-PROBE model=Phi-3.5-mini-instruct-Q4_K_M.gguf backend=gpu prompt=2048 generated=64 secs=7,4 base_mb=4 loaded_mb=3446 peak_after_gc_during_mb=5638 live_with_session_mb=7103 live_after_evict_mb=7103 gpuAttention=true
+HISTO after load:    [B 2258556416 bytes (20160 arrays)   [F 788805088 bytes (70 arrays)
+HISTO with session:  [F 4085997584 bytes (2201 arrays)    [B 2258585200 bytes (20719 arrays)
+
+## HEAD c607e926 before item 6 (jar built 2026-11-17 from the same tree), the same probe, three runs:
+HEAP-PROBE model=Phi-3.5-mini-instruct-Q4_K_M.gguf backend=gpu prompt=2048 generated=64 secs=7,1 base_mb=13 loaded_mb=3446 peak_after_gc_during_mb=5636 live_with_session_mb=7103 live_after_evict_mb=7103 gpuAttention=true
+HEAP-PROBE model=Phi-3.5-mini-instruct-Q4_K_M.gguf backend=gpu prompt=2048 generated=64 secs=7,3 base_mb=12 loaded_mb=3446 peak_after_gc_during_mb=5635 live_with_session_mb=7103 live_after_evict_mb=7104 gpuAttention=true
+HEAP-PROBE model=Phi-3.5-mini-instruct-Q4_K_M.gguf backend=gpu prompt=2048 generated=64 secs=7,4 base_mb=12 loaded_mb=3446 peak_after_gc_during_mb=5638 live_with_session_mb=7103 live_after_evict_mb=7103 gpuAttention=true
+
+## This tree (c607e926 + item 6, kit jar c6a1f07b024be5ad), KvFootprintRunMain (the handler told 2,112 positions),
+## three runs (the first at -Xmx12g only):
+JUNO-KIT-KV-FOOTPRINT {"positions":2112,"hostKvBytes":830472192,"hostKvBytesPerPosition":393216,"liveHeapAfterLoadBytes":3613841536,"liveHeapWithRequestBytes":4764205472,"maxHeapBytes":12884901888,"kv":"cache-type-k=f16 cache-type-v=f16","gpuAttention":true}
+after(reserved) kv=830472192 load=3613844800 with=4764206064
+after(reserved) kv=830472192 load=3613844848 with=4764206000
+
+## This tree, heap-probe/HeapProbeMain.java (not told the length: f16 halves, doubling to 4,096 positions):
+HEAP-PROBE model=Phi-3.5-mini-instruct-Q4_K_M.gguf backend=gpu prompt=2048 generated=64 secs=5,2 base_mb=12 loaded_mb=3446 peak_after_gc_during_mb=5566 live_with_session_mb=5567 live_after_evict_mb=5567 gpuAttention=true
+HISTO after load:    [B 2258561512 bytes (20200 arrays)   [F 788805088 bytes (70 arrays)
+HISTO with session:  [B 3869205592 bytes (20857 arrays)   [F 864771088 bytes (2137 arrays)

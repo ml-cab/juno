@@ -19,6 +19,7 @@ import java.util.Objects;
 import java.util.function.BooleanSupplier;
 
 import cab.ml.juno.kvcache.CacheTypeOptions;
+import cab.ml.juno.kvcache.KvElementType;
 
 /**
  * The formats of a request's device KV: one for the keys, one for the values. Chosen once per handler from
@@ -56,12 +57,17 @@ record DeviceKvFormats(DeviceKvFormat k, DeviceKvFormat v) {
 	}
 
 	/**
-	 * Whether the device rows carry the values the host KV of {@code types} carries: each side's format is that side's
-	 * type ({@code f16} counts, the device holding the FP16 rounding of the host's FP32 rows as it always has). A
-	 * device copy rebuilt from host rows (a shared prefix, a context shift) then equals the one the request writes.
+	 * Whether a device copy rebuilt from the host rows of {@code types} (a shared prefix, a context shift) equals the
+	 * one the request writes itself: each side's format is that side's type, or FP16 beside an {@code f32} host side
+	 * (FP16 of the host's floats either way). FP16 beside a quantized host side is not: it would hold the decoded
+	 * blocks rounded, not the request's own values.
 	 */
 	boolean holds(CacheTypeOptions types) {
-		return k.hostType() == types.typeK() && v.hostType() == types.typeV();
+		return holds(k, types.typeK()) && holds(v, types.typeV());
+	}
+
+	private static boolean holds(DeviceKvFormat format, KvElementType type) {
+		return format.hostType() == type || (format == DeviceKvFormat.F16 && type == KvElementType.F32);
 	}
 
 	/** Device bytes of one position, K and V. */

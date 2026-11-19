@@ -73,6 +73,12 @@ public final class PagedKvTensor implements SessionKvTensor {
 		return table;
 	}
 
+	/** Its pages' bytes, counted whole, shared pages included. */
+	@Override
+	public long heapBytes() {
+		return (long) table.pageCount() * table.pageSize() * KvRowCodec.rowBytes(type(), kvDim());
+	}
+
 	@Override
 	public void ensureCapacity(int pos) {
 		if (pos < 0)

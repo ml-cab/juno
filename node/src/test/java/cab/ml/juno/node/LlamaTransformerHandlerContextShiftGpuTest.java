@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 
+import cab.ml.juno.kvcache.CacheTypeOptions;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
 /**
@@ -67,7 +68,21 @@ class LlamaTransformerHandlerContextShiftGpuTest {
 					cfg.numHeads());
 		}
 		CudaMatVec backend = new CudaMatVec(gpu);
-		LlamaTransformerHandler h = LlamaTransformerHandler.load(MODEL, shard, backend);
+		// f32 host rows: the oracle is injected and attended in full precision, so the control below measures what
+		// the FP16 device copy rounds and the bar holds the device shift to that rounding. With f16 host rows the
+		// host and device read the same halves, the control reads zero, and the oracle's own rounding to FP16 is all
+		// that is left to compare.
+		String prevK = System.getProperty(CacheTypeOptions.ENV_K);
+		String prevV = System.getProperty(CacheTypeOptions.ENV_V);
+		System.setProperty(CacheTypeOptions.ENV_K, "f32");
+		System.setProperty(CacheTypeOptions.ENV_V, "f32");
+		LlamaTransformerHandler h;
+		try {
+			h = LlamaTransformerHandler.load(MODEL, shard, backend);
+		} finally {
+			restoreProp(CacheTypeOptions.ENV_K, prevK);
+			restoreProp(CacheTypeOptions.ENV_V, prevV);
+		}
 		try {
 			assumeTrue(h.gpuAttentionActive(), "GPU attention not active on this host");
 			int[] all = new int[N + 1];
@@ -126,6 +141,13 @@ class LlamaTransformerHandlerContextShiftGpuTest {
 			h.releaseGpuResources();
 			backend.releaseScratch();
 		}
+	}
+
+	private static void restoreProp(String key, String prev) {
+		if (prev == null)
+			System.clearProperty(key);
+		else
+			System.setProperty(key, prev);
 	}
 
 	private static double maxAbsDiff(float[] a, float[] b) {

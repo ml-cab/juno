@@ -24,10 +24,10 @@ import java.time.Instant;
  *
  * <p>Payload layout depends on {@link #kType()} / {@link #vType()}:
  * <ul>
- * <li>{@link KvElementType#F16}: float32 LE — K then V, each {@code seqLen * kvDim}
+ * <li>{@link KvElementType#F32} for both: float32 LE — K then V, each {@code seqLen * kvDim}
  * floats (legacy adapter format).</li>
  * <li>Otherwise: opaque bytes produced by {@code NodeKVCacheAdapter} for the
- * declared element types (per-token Q8_0 or Q4_0 blocks).</li>
+ * declared element types (per-token F16 halves, Q8_0 or Q4_0 blocks).</li>
  * </ul>
  */
 public record KVBlock(KVKey key, byte[] data, // serialized keys + values
@@ -43,16 +43,16 @@ public record KVBlock(KVKey key, byte[] data, // serialized keys + values
 		if (sequenceLen < 1)
 			throw new IllegalArgumentException("sequenceLen must be >= 1");
 		if (kType == null)
-			kType = KvElementType.F16;
+			kType = KvElementType.F32;
 		if (vType == null)
-			vType = KvElementType.F16;
+			vType = KvElementType.F32;
 	}
 
 	/** Legacy ctor: float32 K/V payload. */
 	public KVBlock(KVKey key, byte[] data, int sequenceLen, int layerIndex,
 			Instant createdAt, Instant lastAccessedAt) {
 		this(key, data, sequenceLen, layerIndex, createdAt, lastAccessedAt,
-				KvElementType.F16, KvElementType.F16);
+				KvElementType.F32, KvElementType.F32);
 	}
 
 	/** Size of this block in bytes. */

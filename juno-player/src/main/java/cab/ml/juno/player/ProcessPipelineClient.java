@@ -2,7 +2,9 @@ package cab.ml.juno.player;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
@@ -38,7 +40,7 @@ import io.grpc.ManagedChannelBuilder;
  * negligible accuracy loss (recommended for LAN) INT8 → 4× reduction, ~1%
  * relative error (for bandwidth-constrained nodes)
  *
- * Thread-safe — channels and dtype are immutable after construction.
+ * Thread-safe — channels and dtype are immutable after construction; pending KV reservations sit in a concurrent map.
  */
 public final class ProcessPipelineClient implements InferencePipeline {
 
@@ -47,6 +49,11 @@ public final class ProcessPipelineClient implements InferencePipeline {
 	private final List<NodeStub> stubs;
 	private final int vocabSize;
 	private final ActivationDtype activationDtype;
+	/**
+	 * {@link #reserveKv} positions waiting for the request's next forward pass, which carries them to every node
+	 * ({@code kv_reserve_positions}); taken by that pass.
+	 */
+	private final Map<String, Integer> pendingKvReserve = new ConcurrentHashMap<>();
 
 	/**
 	 * Construct with FLOAT32 (no compression) — preserves backward compatibility.
@@ -76,13 +83,14 @@ public final class ProcessPipelineClient implements InferencePipeline {
 		// First node receives raw token IDs as a byte payload; dtype is set for the
 		// response
 		byte[] activation = intsToBytes(tokens);
+		Integer reserve = pendingKvReserve.remove(requestId);
 
 		for (int i = 0; i < stubs.size(); i++) {
 			NodeStub stub = stubs.get(i);
 
 			ForwardRequest req = ForwardRequest.newBuilder().setRequestId(requestId).setModelId("stub-model")
 					.setSequencePos(startPos).setActivation(ByteString.copyFrom(activation))
-					.setDtype(toProto(activationDtype)).build();
+					.setDtype(toProto(activationDtype)).setKvReservePositions(reserve == null ? 0 : reserve).build();
 
 			ForwardResponse response = stub.blockingStub.forwardPass(req);
 
@@ -105,6 +113,19 @@ public final class ProcessPipelineClient implements InferencePipeline {
 		}
 
 		throw new IllegalStateException("Pipeline completed without a last-node response");
+	}
+
+	/** Sent with {@code requestId}'s next forward pass, to every node. */
+	@Override
+	public void reserveKv(String requestId, int positions) {
+		if (positions > 0)
+			pendingKvReserve.put(requestId, positions);
+	}
+
+	/** Drops a reservation no forward pass carried. The nodes keep their KV as before. */
+	@Override
+	public void evict(String requestId) {
+		pendingKvReserve.remove(requestId);
 	}
 
 	@Override

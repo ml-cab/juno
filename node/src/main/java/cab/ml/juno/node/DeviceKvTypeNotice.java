@@ -26,7 +26,8 @@ import cab.ml.juno.kvcache.CacheTypeOptions;
  * which is stored in the selected types ({@link DeviceKvFormats#select}): the host codecs' blocks, so the layers
  * attending on the GPU read the values the host KV holds. Nothing is said then. The device copy stays FP16 for a side
  * whose rows it cannot store as blocks (a head width that is not a multiple of 32) or when the attention kernel for
- * quantized rows does not load; that launch is told, since the quantized type then sets the host rows only. Where
+ * quantized rows does not load; that launch is told, since the quantized type then sets the host rows only. The device
+ * copy has no float32 rows, so an {@code f32} side is held in FP16 there, and that launch is told too. Where
  * attention reads the host rows (the CPU backend, a GPU backend without the kernel, LoRA, the Phi-2 and Qwen3-MoE
  * handlers, {@code --gpu-attention off}) the type applies in full and nothing is said.
  *
@@ -55,9 +56,12 @@ public final class DeviceKvTypeNotice {
 	 */
 	public static String consoleNotice(String architecture, int headDim, boolean lora, boolean cpu, boolean cudaBackend,
 			CacheTypeOptions types) {
-		if (!types.usesQuantized() || lora || cpu || !cudaBackend
-				|| !GpuAttentionSupport.handlerRunsKernel(architecture)
+		if (lora || cpu || !cudaBackend || !GpuAttentionSupport.handlerRunsKernel(architecture)
 				|| GpuAttentionOptions.fromEnv().mode() == GpuAttentionOptions.Mode.OFF)
+			return null;
+		if (types.usesF32())
+			return f32Text(types);
+		if (!types.usesQuantized())
 			return null;
 		if (headDim < 1
 				|| (DeviceKvFormat.canHold(types.typeK(), headDim) && DeviceKvFormat.canHold(types.typeV(), headDim)))
@@ -70,6 +74,11 @@ public final class DeviceKvTypeNotice {
 	 * {@code types}, and an INFO line naming the device formats when it stores them.
 	 */
 	static void announce(String handler, CacheTypeOptions types, DeviceKvFormats formats, int kvDim, int headDim) {
+		if (types.usesF32()) {
+			if (ANNOUNCED.compareAndSet(false, true))
+				log.warning(handler + ": " + f32Text(types));
+			return;
+		}
 		if (!types.usesQuantized() || !ANNOUNCED.compareAndSet(false, true))
 			return;
 		if (formats.holds(types)) {
@@ -87,6 +96,12 @@ public final class DeviceKvTypeNotice {
 
 	static void resetForTest() {
 		ANNOUNCED.set(false);
+	}
+
+	private static String f32Text(CacheTypeOptions types) {
+		return types.policySummary() + ": GPU attention's own copy of each request's KV holds the f32 side in FP16, as"
+				+ " the device copy stores no float32 rows, so layers attending on the GPU read FP16 values; the f32 host"
+				+ " rows serve CPU attention and session save and restore";
 	}
 
 	private static String text(CacheTypeOptions types, String why) {

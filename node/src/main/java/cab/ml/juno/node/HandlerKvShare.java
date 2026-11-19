@@ -41,9 +41,10 @@ final class HandlerKvShare {
 	/**
 	 * Whether a handler may share. A shared prefix's device rows are rebuilt from the host rows
 	 * ({@link #uploadMirrors}), so they equal the rows the request would write itself only when the device KV holds the
-	 * host types' values ({@link DeviceKvFormats#holds}): FP16 of an {@code f16} host KV's FP32 rows, or the
-	 * {@code q8_0} / {@code q4_0} blocks of a host KV of the same type (re-encoding a decoded block gives back its
-	 * values). A device KV kept in FP16 beside a quantized host KV would differ, and sharing is refused.
+	 * host types' values ({@link DeviceKvFormats#holds}): an {@code f16} host KV's halves, FP16 of an {@code f32} host
+	 * KV's floats, or the {@code q8_0} / {@code q4_0} blocks of a host KV of the same type (re-encoding a decoded
+	 * block gives back its values). A device KV kept in FP16 beside a quantized host KV would differ, and sharing is
+	 * refused.
 	 *
 	 * @param deviceFormats the handler's device KV formats, or {@code null} without GPU attention
 	 */
@@ -65,7 +66,7 @@ final class HandlerKvShare {
 	}
 
 	private static long bytes(KvElementType type, int kvDim) {
-		return cab.ml.juno.kvcache.KvRowCodec.rowBytes(type, kvDim); // f16 is held as floats on the host
+		return cab.ml.juno.kvcache.KvRowCodec.rowBytes(type, kvDim);
 	}
 
 	/**

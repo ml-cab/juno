@@ -189,7 +189,7 @@ final class GqaMath {
 	static void scoreKeys(float[] q, int qBase, KvRows k, int kBase, int lo, int seqLen, int headDim,
 			int kvDim, float scale, float[] scores) {
 		int per = k.rowsPerPage();
-		if (k.type() == KvElementType.F16) {
+		if (k.type().storesFloats()) {
 			for (int t = lo; t < seqLen;) {
 				int page = t / per;
 				int slot = t - page * per;
@@ -231,7 +231,7 @@ final class GqaMath {
 	static void addValues(KvRows v, int kBase, int lo, int seqLen, float[] out, int outBase, int headDim, int kvDim,
 			float[] scores) {
 		int per = v.rowsPerPage();
-		if (v.type() == KvElementType.F16) {
+		if (v.type().storesFloats()) {
 			for (int t = lo; t < seqLen;) {
 				int page = t / per;
 				int slot = t - page * per;

@@ -43,14 +43,14 @@ class KvWriteEncodedRowsTest {
 	private static final int START = 21;
 
 	@ParameterizedTest
-	@EnumSource(value = KvElementType.class, names = { "Q8_0", "Q4_0" })
+	@EnumSource(value = KvElementType.class, names = { "F16", "Q8_0", "Q4_0" })
 	@DisplayName("dense: the stored bytes of a float write, positions before the window zero")
 	void dense(KvElementType type) {
 		check(new DenseKvTensor(type, KV_DIM), new DenseKvTensor(type, KV_DIM), START);
 	}
 
 	@ParameterizedTest
-	@EnumSource(value = KvElementType.class, names = { "Q8_0", "Q4_0" })
+	@EnumSource(value = KvElementType.class, names = { "F16", "Q8_0", "Q4_0" })
 	@DisplayName("paged: the stored bytes of a float write, across pages and past a gap")
 	void paged(KvElementType type) {
 		PagedKvArena arena = new PagedKvArena(PAGE, KV_DIM, type, type);
@@ -60,7 +60,7 @@ class KvWriteEncodedRowsTest {
 	}
 
 	@ParameterizedTest
-	@EnumSource(value = KvElementType.class, names = { "Q8_0", "Q4_0" })
+	@EnumSource(value = KvElementType.class, names = { "F16", "Q8_0", "Q4_0" })
 	@DisplayName("dense: a reused tensor reads zero before the window, as after a float write")
 	void denseReused(KvElementType type) {
 		SessionKvLayout layout = SessionKvLayout.of(ServeScheduleOptions.defaults(), KvPageSizeOptions.defaults(),
@@ -79,7 +79,7 @@ class KvWriteEncodedRowsTest {
 	}
 
 	@ParameterizedTest
-	@EnumSource(value = KvElementType.class, names = { "Q8_0", "Q4_0" })
+	@EnumSource(value = KvElementType.class, names = { "F16", "Q8_0", "Q4_0" })
 	@DisplayName("paged: a window over pages shared with another table writes copies, the other table unchanged")
 	void pagedSharedPages(KvElementType type) {
 		PagedKvArena arena = new PagedKvArena(PAGE, KV_DIM, type, type);
@@ -106,16 +106,16 @@ class KvWriteEncodedRowsTest {
 	}
 
 	@Test
-	@DisplayName("f16 tensors hold floats: refused, nothing written")
-	void f16Refused() {
-		DenseKvTensor dense = new DenseKvTensor(KvElementType.F16, KV_DIM);
-		PagedKvTensor paged = new PagedKvArena(PAGE, KV_DIM, KvElementType.F16, KvElementType.F16).newK();
+	@DisplayName("f32 tensors hold floats: refused, nothing written")
+	void f32Refused() {
+		DenseKvTensor dense = new DenseKvTensor(KvElementType.F32, KV_DIM);
+		PagedKvTensor paged = new PagedKvArena(PAGE, KV_DIM, KvElementType.F32, KvElementType.F32).newK();
 		try (Arena arena = Arena.ofConfined()) {
 			MemorySegment src = arena.allocate((long) ROWS * KV_DIM * Float.BYTES);
 			assertThatThrownBy(() -> dense.writeEncodedRows(0, ROWS, src, 0))
-					.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("f16");
+					.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("f32");
 			assertThatThrownBy(() -> paged.writeEncodedRows(0, ROWS, src, 0))
-					.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("f16");
+					.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("f32");
 		}
 		assertThat(dense.writtenTokens()).isZero();
 		assertThat(paged.seqLen()).isZero();

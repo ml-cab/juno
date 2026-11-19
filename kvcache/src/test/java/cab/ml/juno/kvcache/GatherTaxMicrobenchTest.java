@@ -55,9 +55,9 @@ class GatherTaxMicrobenchTest {
 	@DisplayName("attention reading the pages in place gives the dense rows' output bits")
 	void paged_equals_dense() {
 		int seq = 70; // 4 full pages of 16 and a partial one
-		DenseKvTensor dk = new DenseKvTensor(KvElementType.F16, GatherTaxMicrobench.KV_DIM);
-		DenseKvTensor dv = new DenseKvTensor(KvElementType.F16, GatherTaxMicrobench.KV_DIM);
-		PagedKvArena arena = new PagedKvArena(16, GatherTaxMicrobench.KV_DIM, KvElementType.F16, KvElementType.F16);
+		DenseKvTensor dk = new DenseKvTensor(KvElementType.F32, GatherTaxMicrobench.KV_DIM);
+		DenseKvTensor dv = new DenseKvTensor(KvElementType.F32, GatherTaxMicrobench.KV_DIM);
+		PagedKvArena arena = new PagedKvArena(16, GatherTaxMicrobench.KV_DIM, KvElementType.F32, KvElementType.F32);
 		PagedKvTensor pk = arena.newK();
 		PagedKvTensor pv = arena.newV();
 		float[] tok = new float[GatherTaxMicrobench.KV_DIM];

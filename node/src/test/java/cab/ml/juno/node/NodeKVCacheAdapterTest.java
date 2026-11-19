@@ -216,7 +216,7 @@ class NodeKVCacheAdapterTest {
     void flush_paged_q8_round_trips_via_tryRestorePaged() {
         var arena = new cab.ml.juno.kvcache.PagedKvArena(4, KV_DIM,
                 cab.ml.juno.kvcache.KvElementType.Q8_0,
-                cab.ml.juno.kvcache.KvElementType.F16);
+                cab.ml.juno.kvcache.KvElementType.F32);
         manager = new KVCacheManager(
                 new GpuKVCache(1024 * 1024L),
                 new CpuKVCache(64),

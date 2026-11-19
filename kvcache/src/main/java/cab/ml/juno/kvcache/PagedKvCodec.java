@@ -21,9 +21,9 @@ import java.nio.ByteOrder;
 /**
  * Serialize / restore paged (or dense-equivalent) K/V into {@link KVBlock} payloads.
  *
- * <p>Layout matches {@code NodeKVCacheAdapter}: F16+F16 is legacy float32 LE
+ * <p>Layout matches {@code NodeKVCacheAdapter}: F32+F32 is the headerless float32 LE layout
  * (K then V); otherwise {@code 'K''V' ver=1} + type nibble + packed payloads.
- * q8_0 and q4_0 rows are their GGUF blocks ({@link KvRowCodec}).
+ * f16 rows are their halves, q8_0 and q4_0 rows their GGUF blocks ({@link KvRowCodec}).
  */
 public final class PagedKvCodec {
 
@@ -46,7 +46,7 @@ public final class PagedKvCodec {
 
 	public static byte[] encodeFloats(float[] k, float[] v, int seqLen, int kvDim,
 			KvElementType kType, KvElementType vType) {
-		if (kType == KvElementType.F16 && vType == KvElementType.F16) {
+		if (kType.storesFloats() && vType.storesFloats()) {
 			int floatsPerSeq = seqLen * kvDim;
 			byte[] data = new byte[floatsPerSeq * Float.BYTES * 2];
 			ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
@@ -103,13 +103,13 @@ public final class PagedKvCodec {
 	private static void encodePayload(float[] src, int seqLen, int kvDim, KvElementType type,
 			byte[] dst, int dstOff) {
 		switch (type) {
-		case F16 -> {
+		case F32 -> {
 			ByteBuffer bb = ByteBuffer.wrap(dst, dstOff, seqLen * kvDim * Float.BYTES)
 					.order(ByteOrder.LITTLE_ENDIAN);
 			for (int i = 0; i < seqLen * kvDim; i++)
 				bb.putFloat(src[i]);
 		}
-		case Q8_0, Q4_0 -> {
+		case F16, Q8_0, Q4_0 -> {
 			int bpt = KvRowCodec.rowBytes(type, kvDim);
 			for (int p = 0; p < seqLen; p++)
 				KvRowCodec.encode(type, src, p * kvDim, kvDim, dst, dstOff + p * bpt);
@@ -120,13 +120,13 @@ public final class PagedKvCodec {
 	private static float[] decodePayload(byte[] data, int off, int seqLen, int kvDim, KvElementType type) {
 		float[] out = new float[seqLen * kvDim];
 		switch (type) {
-		case F16 -> {
+		case F32 -> {
 			ByteBuffer bb = ByteBuffer.wrap(data, off, seqLen * kvDim * Float.BYTES)
 					.order(ByteOrder.LITTLE_ENDIAN);
 			for (int i = 0; i < out.length; i++)
 				out[i] = bb.getFloat();
 		}
-		case Q8_0, Q4_0 -> {
+		case F16, Q8_0, Q4_0 -> {
 			int bpt = KvRowCodec.rowBytes(type, kvDim);
 			for (int p = 0; p < seqLen; p++)
 				KvRowCodec.decode(type, data, off + p * bpt, out, p * kvDim, kvDim);

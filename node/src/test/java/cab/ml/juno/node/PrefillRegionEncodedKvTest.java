@@ -77,6 +77,7 @@ class PrefillRegionEncodedKvTest {
 			HEADS, KV_HEADS, HEAD_DIM, HEADS / KV_HEADS, 1e-5f);
 
 	private static final KvElementType F16 = KvElementType.F16;
+	private static final KvElementType F32 = KvElementType.F32;
 	private static final KvElementType Q8 = KvElementType.Q8_0;
 	private static final KvElementType Q4 = KvElementType.Q4_0;
 
@@ -144,11 +145,11 @@ class PrefillRegionEncodedKvTest {
 		}
 
 		boolean encodedK() {
-			return formats.k().quantized() && formats.k().hostType() == hostK;
+			return formats.k().hostType() == hostK;
 		}
 
 		boolean encodedV() {
-			return formats.v().quantized() && formats.v().hostType() == hostV;
+			return formats.v().hostType() == hostV;
 		}
 	}
 
@@ -160,7 +161,11 @@ class PrefillRegionEncodedKvTest {
 				new Case(formats(DeviceKvFormat.Q4_0, DeviceKvFormat.F16), Q4, F16),
 				// A quantized host KV the device holds as FP16 (as for a head width not a multiple of 32).
 				new Case(DeviceKvFormats.F16, Q8, Q4),
-				new Case(DeviceKvFormats.F16, F16, F16));
+				// FP16 device rows are an f16 host's rows: taken as they are.
+				new Case(DeviceKvFormats.F16, F16, F16),
+				// An f32 host holds floats the device does not: FP32 rows come down.
+				new Case(DeviceKvFormats.F16, F32, F32),
+				new Case(formats(DeviceKvFormat.F16, DeviceKvFormat.Q8_0), F32, Q8));
 	}
 
 	private static DeviceKvFormats formats(DeviceKvFormat k, DeviceKvFormat v) {
@@ -237,7 +242,7 @@ class PrefillRegionEncodedKvTest {
 		mirror.markWritten(startPos, w);
 	}
 
-	/** The stored bytes of positions {@code [0, len)}: the blocks, or the floats' bits for {@code f16}. */
+	/** The stored bytes of positions {@code [0, len)}: the encoded rows, or the floats' bits for {@code f32}. */
 	private static byte[] stored(SessionKvTensor t, int len) {
 		KvRows view = t.attentionRows(len);
 		int bpr = view.bytesPerRow();
@@ -245,7 +250,7 @@ class PrefillRegionEncodedKvTest {
 		for (int p = 0; p < len; p++) {
 			int page = p / view.rowsPerPage();
 			int slot = p % view.rowsPerPage();
-			if (t.type() == KvElementType.F16)
+			if (t.type().storesFloats())
 				for (int i = 0; i < KV_DIM; i++)
 					out.putInt(Float.floatToRawIntBits(view.floatPage(page)[slot * KV_DIM + i]));
 			else

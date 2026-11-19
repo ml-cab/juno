@@ -194,7 +194,7 @@ class KvBlockPoolReclaimTest {
 			int page = pos / rows.rowsPerPage();
 			int slot = pos % rows.rowsPerPage();
 			float[] got = new float[KV_DIM];
-			if (rows.type() == KvElementType.F16)
+			if (rows.type().storesFloats())
 				System.arraycopy(rows.floatPage(page), slot * KV_DIM, got, 0, KV_DIM);
 			else
 				rows.decodeRange(rows.bytePage(page), slot * rows.bytesPerRow(), 0, KV_DIM, got, 0);

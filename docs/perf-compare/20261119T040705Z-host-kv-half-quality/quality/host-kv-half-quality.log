@@ -1,0 +1,28 @@
+Running cab.ml.juno.node.HostKvHalfQualityLiveTest
+INFO: Loading GGUF shard: layers 0–22  embd=true  outProj=true  backend=CpuMatVec  file=models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+INFO: schedule=static cache-type-k=f32 cache-type-v=f32 kv-page-size ignored (dense)
+INFO: CPU quantized matmul: integer-dot kernels for Q4_K, Q5_K, Q6_K, Q8_0
+INFO: CPU matmul threads: 12
+INFO: Loading GGUF shard: layers 0–22  embd=true  outProj=true  backend=CpuMatVec  file=models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+HOST-KV-HALF tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf nll_f16=2.45529 nll_f32=2.45609 ratio=0.99967 greedy_agree=510/512 (99.61%) first_disagree=19 text_argmax_agree_first512=509 (99.4%) s_f32=300.2 s_f16=151.9
+INFO: Loading GGUF shard: layers 0–36  embd=true  outProj=true  backend=CpuMatVec  file=models/qwen2.5-3b-instruct-q4_k_m.gguf
+INFO: schedule=static cache-type-k=f32 cache-type-v=f32 kv-page-size ignored (dense)
+INFO: Loading GGUF shard: layers 0–36  embd=true  outProj=true  backend=CpuMatVec  file=models/qwen2.5-3b-instruct-q4_k_m.gguf
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+HOST-KV-HALF qwen2.5-3b-instruct-q4_k_m.gguf nll_f16=1.69746 nll_f32=1.69656 ratio=1.00053 greedy_agree=507/512 (99.02%) first_disagree=1 text_argmax_agree_first512=511 (99.8%) s_f32=882.6 s_f16=454.6
+INFO: Loading Phi-3 GGUF shard: layers 0–32  embd=true  outProj=true  backend=CpuMatVec  file=models/Phi-3.5-mini-instruct-Q4_K_M.gguf
+INFO: schedule=static cache-type-k=f32 cache-type-v=f32 kv-page-size ignored (dense)
+INFO: Loading Phi-3 GGUF shard: layers 0–32  embd=true  outProj=true  backend=CpuMatVec  file=models/Phi-3.5-mini-instruct-Q4_K_M.gguf
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+HOST-KV-HALF Phi-3.5-mini-instruct-Q4_K_M.gguf nll_f16=1.36087 nll_f32=1.36110 ratio=0.99983 greedy_agree=510/512 (99.61%) first_disagree=4 text_argmax_agree_first512=511 (99.8%) s_f32=3253.9 s_f16=2456.6
+INFO: Loading GGUF shard: layers 0–32  embd=true  outProj=true  backend=CpuMatVec  file=models/mistral-7b-instruct-v0.1-q4_k_m.gguf
+INFO: schedule=static cache-type-k=f32 cache-type-v=f32 kv-page-size ignored (dense)
+INFO: Loading GGUF shard: layers 0–32  embd=true  outProj=true  backend=CpuMatVec  file=models/mistral-7b-instruct-v0.1-q4_k_m.gguf
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+HOST-KV-HALF mistral-7b-instruct-v0.1-q4_k_m.gguf nll_f16=1.52983 nll_f32=1.53013 ratio=0.99980 greedy_agree=511/512 (99.80%) first_disagree=35 text_argmax_agree_first512=512 (100.0%) s_f32=1724.8 s_f16=784.8
+Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 10011 s -- in cab.ml.juno.node.HostKvHalfQualityLiveTest
+Tests run: 4, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+Total time:  02:47 h
+Finished at: 2026-11-19T00:54:15-06:00

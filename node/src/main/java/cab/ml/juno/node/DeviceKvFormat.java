@@ -29,8 +29,9 @@ import cab.ml.juno.kvcache.KvRowCodec;
  * they compute, so a row's address is defined once on each side of the launch.
  *
  * <ul>
- * <li>{@link #F16}: IEEE FP16, 2 bytes per value. The host's {@code f16} KV holds FP32, so this is the one format
- * whose device values differ from the host's: they are the host values rounded to FP16.</li>
+ * <li>{@link #F16}: IEEE FP16, 2 bytes per value: the host {@code f16} KV's rows byte for byte ({@code F16KvCodec};
+ * both round to nearest even). It also serves an {@code f32} host KV, whose values it holds rounded to FP16, and any
+ * type the device cannot store.</li>
  * <li>{@link #Q8_0} and {@link #Q4_0}: the host codecs' blocks byte for byte ({@code Q8_0KvCodec},
  * {@code Q4_0KvCodec}: 34 and 18 bytes per 32 values), so the device holds exactly the values the host KV of that
  * type holds. They need a head width that is a multiple of 32: a row is whole blocks, every block starts at an even
@@ -62,9 +63,12 @@ enum DeviceKvFormat {
 		return this != F16;
 	}
 
-	/** Whether the device can store {@code type}'s values for heads of {@code headDim} values. */
+	/**
+	 * Whether the device can store {@code type}'s values for heads of {@code headDim} values: {@code f16} always, a
+	 * quantized type for heads of whole blocks, {@code f32} never (the device copy has no float32 rows).
+	 */
 	static boolean canHold(KvElementType type, int headDim) {
-		return type == KvElementType.F16 || (headDim > 0 && headDim % BLOCK == 0);
+		return type == KvElementType.F16 || (type.quantized() && headDim > 0 && headDim % BLOCK == 0);
 	}
 
 	/** The format holding {@code type}'s values for heads of {@code headDim}, or {@link #F16} where it cannot. */
@@ -72,7 +76,7 @@ enum DeviceKvFormat {
 		if (!canHold(type, headDim))
 			return F16;
 		return switch (type) {
-		case F16 -> F16;
+		case F16, F32 -> F16;
 		case Q8_0 -> Q8_0;
 		case Q4_0 -> Q4_0;
 		};

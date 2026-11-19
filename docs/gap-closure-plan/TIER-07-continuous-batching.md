@@ -62,6 +62,17 @@ gate is measured on Tier 02H's batched region.
      quantized device KV. Taking it means its own scope text, a device-memory threshold, kit probes and the
      out-of-pages policy, which is this item's admission rule. Tier 03 item 7 computes every device KV address in one
      place so that this change stays local to that place and the tables the host passes.
+   - *Candidate, added 2026-11-19 by owner decision (Tier 03 decision 13 (a)): rotated 4-bit keys.* Tier 03 item 4
+     measured `q4_0` keys under its quality bars on three of four sweep models (Qwen2.5-3B NLL 2.02x), so the 4-bit
+     setting it scores is `q8_0` keys with `q4_0` values, 0.41x of the FP16 device KV where `q4_0` keys and values would
+     be 0.28x. A fixed 32-point Walsh-Hadamard transform of each key block before it is quantized, with the query
+     transformed the same way at attention, keeps a few large key channels from setting a block's scale. Take it only if
+     this item's capacity sweep shows the device KV still binds at `q8_0` keys with `q4_0` values, or a long-context
+     target needs the 0.28x size. It is a cache type of its own, since sessions saved by Tier 03 item 5 record their
+     stored type and hold unrotated `q4_0` keys. Its scope: the quality gate of Tier 03 item 4 (NLL <= 1.02x, greedy
+     agreement >= 97%) on every sweep model, the CPU read path, context shift (moved keys transformed back before they
+     are rotated again), the device kernels, the shared-prefix upload (a shared prefix's device rows are uploaded from
+     host KV, so the upload decodes rotated keys back), kit probes and the hot-path gate.
 3. Re-run the exact multi-session throughput benchmark that produced the 0.86x finding
    (`docs/performance.md:177`) after every other change in this tier lands, as the tier's go/no-go
    checkpoint — continuous must beat static before this tier is called complete, or the tier

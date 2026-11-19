@@ -198,6 +198,10 @@ final class ProbeCatalog {
 				gpuKvPrefill("qwen2.5-3b", 52, 2),
 				gpuKvPrefill("phi-3.5-mini", 73, 2),
 				gpuKvPrefill("mistral-7b", 100, 2),
+				gpuKvFootprint("tinyllama-1.1b", 20, 2),
+				gpuKvFootprint("qwen2.5-3b", 35, 2),
+				gpuKvFootprint("phi-3.5-mini", 45, 2),
+				gpuKvFootprint("mistral-7b", 60, 2),
 				throughput("tinyllama-1.1b", 2048, false, CPU, 6, 465, 2),
 				throughput("tinyllama-1.1b", 128, true, GPU, 6, 10, 2),
 				throughput("qwen2.5-3b", 128, false, CPU, 8, 150, 2),
@@ -310,6 +314,18 @@ final class ProbeCatalog {
 						+ m.title(),
 				ProbeKind.READING, GPU, Requirements.gpu(8L << 30), List.of(modelId), cost, priority, "GpuKvPrefillProbe",
 				Map.of("childHeap", m.heap()), Math.max(3600, 3 * cost), "512m");
+	}
+
+	/**
+	 * The host KV one 2048-token request with 64 generated tokens holds, the handler on the GPU at the default KV, and
+	 * the live heap after load and with the request held, in a 12 GiB maximum heap: a reading.
+	 */
+	private static Probe gpuKvFootprint(String modelId, int cost, int priority) {
+		CatalogModel m = CatalogModel.byId(modelId);
+		return new Probe("gpu.kv-footprint." + modelId,
+				"Host KV and live heap of one 2048-token request with 64 generated tokens, f16 KV, " + m.title(),
+				ProbeKind.READING, GPU, Requirements.gpu(16L << 30), List.of(modelId), cost, priority,
+				"KvFootprintProbe", Map.of("childHeap", "12g"), Math.max(3600, 3 * cost), "512m");
 	}
 
 	/** The throughput harness's two lanes, prefill at {@code nPrompt} and generation, on one model and backend. */

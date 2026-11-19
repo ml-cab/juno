@@ -1,0 +1,66 @@
+# lane side run heap pp_tps tg_tps alloc_bytes_per_token(generate) gc_pause_ms_in_token_span(generate) prefill_gc_pause_ms note
+cpu2048-phi A 1 6g - 2.97 346150 0.00 - prefill http 500 OutOfMemoryError: Java heap space
+cpu2048-phi A 2 6g - 2.79 341566 0.00 - prefill http 500 OutOfMemoryError: Java heap space
+cpu2048-phi B 1 6g 6.90 2.98 357717 0.00 0.00 
+cpu2048-phi B 2 6g 6.09 2.77 341510 0.00 7.46 
+cpu512-phi A 1 6g 9.32 3.00 347252 0.00 0.00 
+cpu512-phi A 2 6g 9.74 3.01 341386 0.00 0.00 
+cpu512-phi A 3 6g 9.23 2.96 352260 0.00 0.00 
+cpu512-phi B 1 6g 9.48 - 346236 0.00 0.00 tg withheld by the span check
+cpu512-phi B 2 6g 9.37 2.96 341586 0.00 4.91 
+cpu512-phi B 3 6g 9.08 3.02 385067 0.00 0.00 
+cpu512-tiny A 1 4g 31.36 11.07 292796 0.00 0.00 
+cpu512-tiny A 2 4g 33.30 11.98 290951 0.00 0.00 
+cpu512-tiny A 3 4g 33.86 12.11 295549 0.00 0.00 
+cpu512-tiny B 1 4g 31.40 11.85 310546 0.00 0.00 
+cpu512-tiny B 2 4g 32.63 11.74 306796 0.00 0.00 
+cpu512-tiny B 3 4g 32.31 11.73 303885 0.00 0.00 
+gpu2048-phi A 1 6g - 58.23 450622 0.00 - prefill http 500 OutOfMemoryError: Java heap space
+gpu2048-phi A 2 6g - 59.94 280782 0.00 - prefill http 500 OutOfMemoryError: Java heap space
+gpu2048-phi B 1 6g 690.31 58.44 446992 0.00 0.00 
+gpu2048-phi B 2 6g 726.28 59.21 430802 0.00 0.00 
+gpu512-phi A 1 6g 875.05 59.92 283706 0.00 0.00 
+gpu512-phi A 2 6g 841.05 59.80 280222 0.00 0.00 
+gpu512-phi A 3 6g 802.66 58.34 425741 0.00 0.00 
+gpu512-phi B 1 6g 942.89 59.41 414981 0.00 0.00 
+gpu512-phi B 2 6g 961.32 60.06 281121 0.00 0.00 
+gpu512-phi B 3 6g 941.89 58.34 468273 0.00 0.00 
+gpu512-tiny A 1 4g 3178.75 169.42 0 0.00 0.00 
+gpu512-tiny A 2 4g 3246.00 166.43 0 0.00 0.00 
+gpu512-tiny A 3 4g 3111.49 160.93 418956 0.00 0.00 
+gpu512-tiny B 1 4g 3147.20 166.75 500352 0.00 0.00 
+gpu512-tiny B 2 4g 3169.94 163.68 421554 0.00 0.00 
+gpu512-tiny B 3 4g 3065.13 163.20 450017 0.00 0.00 
+cpu2048-phi A 1 8g 7.25 - 352362 0.00 2.31 tg withheld by the span check
+cpu2048-phi A 2 8g 6.97 - 391363 0.00 4.97 tg withheld by the span check
+cpu2048-phi B 1 8g 6.91 2.77 353404 0.00 0.00 
+cpu2048-phi B 2 8g 6.87 2.96 359305 0.00 0.00 
+gpu2048-phi A 1 8g 664.51 59.42 434281 0.00 19.11 
+gpu2048-phi A 2 8g 669.82 59.68 412820 0.00 16.66 
+gpu2048-phi A 3 8g 626.89 58.39 415264 0.00 18.41 
+gpu2048-phi B 1 8g 725.14 59.90 431024 0.00 11.23 
+gpu2048-phi B 2 8g 678.04 59.65 431262 0.00 10.92 
+gpu2048-phi B 3 8g 664.50 58.82 435834 0.00 11.11 
+
+# LoRA gate: run side rep train_ms_per_pass playback_tps prefill_ms decode_ms recall host_kv
+reps3 A 1 2800.0 12.111 274.1 260.8 True f16
+reps3 A 2 2866.666667 12.915 246.1 254.3 True f16
+reps3 A 3 2733.333333 12.868 249.8 252.6 True f16
+reps3 B 1 2733.333333 11.494 316.6 250.0 True f16
+reps3 B 2 2733.333333 11.218 329.5 248.2 True f16
+reps3 B 3 2800.0 11.824 301.4 246.5 True f16
+reps3-f32 B 1 3066.666667 10.542 316.1 293.9 True f32
+reps3-f32 B 2 3000.0 11.647 278.7 280.3 True f32
+reps3-f32 B 3 3000.0 10.703 317.2 287.7 True f32
+interleaved A 1 3000.0 11.745 266.3 284.8 True f16 (float rows)
+interleaved B 1 3000.0 10.37 343.2 279.0 True f16
+interleaved A 2 3000.0 11.327 300.1 272.1 True f16 (float rows)
+interleaved B 2 3066.666667 8.794 432.0 313.2 True f16
+interleaved A 3 3000.0 10.417 307.9 316.1 True f16 (float rows)
+interleaved B 3 3000.0 9.296 417.8 289.0 True f16
+interleaved-f32 A 1 3000.0 11.457 279.3 287.1 True f16 (float rows)
+interleaved-f32 B 1 3000.0 11.024 279.2 307.8 True f32
+interleaved-f32 A 2 3000.0 11.2 292.6 286.2 True f16 (float rows)
+interleaved-f32 B 2 3000.0 11.041 286.8 295.5 True f32
+interleaved-f32 A 3 3000.0 10.355 324.9 302.0 True f16 (float rows)
+interleaved-f32 B 3 3066.666667 10.606 315.4 299.8 True f32

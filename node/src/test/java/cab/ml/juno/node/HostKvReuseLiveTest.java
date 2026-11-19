@@ -92,7 +92,7 @@ class HostKvReuseLiveTest {
 		long refKvBytes = 0;
 		for (SessionKvTensor[] side : refKv)
 			for (SessionKvTensor t : side)
-				refKvBytes += (long) t.capacityTokens() * t.kvDim() * Float.BYTES;
+				refKvBytes += t.heapBytes();
 		h.evict("ref");
 		h.evict("long");
 

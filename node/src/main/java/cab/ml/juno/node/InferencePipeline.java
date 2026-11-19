@@ -167,6 +167,16 @@ public interface InferencePipeline {
 	}
 
 	/**
+	 * Tells every stage the most positions {@code requestId} can write (see {@link ForwardPassHandler#reserveKv}).
+	 * Called after any shared prefix is in place and before the prefill. A pipeline of remote stages passes it with
+	 * the request's next forward pass.
+	 *
+	 * <p><b>Correctness-preserving default</b>: no-op; the stages' dense KV then doubles as it grows.
+	 */
+	default void reserveKv(String requestId, int positions) {
+	}
+
+	/**
 	 * Starts {@code toId}'s KV on every stage from positions {@code [0, len)} of {@code fromId}'s (see
 	 * {@link ForwardPassHandler#shareKvPrefix}), so {@code toId}'s prefill begins at {@code len}. Returns false,
 	 * holding nothing new under {@code toId}, where any stage cannot; the caller then prefills in full.

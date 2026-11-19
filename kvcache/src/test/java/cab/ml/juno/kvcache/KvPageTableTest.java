@@ -22,7 +22,7 @@ class KvPageTableTest {
 	@Test
 	@DisplayName("append grows pages; memory scales with used tokens at page granularity")
 	void append_scales_with_pages() {
-		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F32);
 		KvPageTable table = new KvPageTable(pool);
 		assertThat(table.seqLen()).isZero();
 		assertThat(table.pageCount()).isZero();
@@ -42,7 +42,7 @@ class KvPageTableTest {
 	@Test
 	@DisplayName("gather copies contiguous prefix matching written tokens")
 	void gather_matches_written() {
-		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F32);
 		KvPageTable table = new KvPageTable(pool);
 		float[] tok = new float[8];
 		for (int p = 0; p < 6; p++) {
@@ -61,7 +61,7 @@ class KvPageTableTest {
 	@Test
 	@DisplayName("release returns all pages to the pool")
 	void release_frees_pool() {
-		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F32);
 		KvPageTable table = new KvPageTable(pool);
 		float[] tok = new float[8];
 		for (int p = 0; p < 5; p++)
@@ -172,7 +172,7 @@ class KvPageTableTest {
 	@Test
 	@DisplayName("sharing an empty prefix holds no page; a prefix past the written rows is refused")
 	void share_prefix_bounds() {
-		KvBlockPool pool = new KvBlockPool(PAGE, KV_DIM, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(PAGE, KV_DIM, KvElementType.F32);
 		KvPageTable source = written(pool, salts(6, 0));
 		KvPageTable empty = source.sharePrefix(0);
 		assertThat(empty.seqLen()).isZero();
@@ -188,11 +188,11 @@ class KvPageTableTest {
 	@Test
 	@DisplayName("two sessions sharing a prefix write and read on two threads while a third reads the source")
 	void two_sessions_sharing_a_prefix_on_two_threads() throws Exception {
-		KvBlockPool pool = new KvBlockPool(PAGE, KV_DIM, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(PAGE, KV_DIM, KvElementType.F32);
 		KvPageTable source = written(pool, salts(10, 0)); // last page partly filled, held by all three
 		int extra = 200;
 		KvPageTable[] sharers = { source.sharePrefix(10), source.sharePrefix(10) };
-		float[] sourceRows = contents(reference(KvElementType.F16, salts(10, 0)));
+		float[] sourceRows = contents(reference(KvElementType.F32, salts(10, 0)));
 
 		var exec = Executors.newFixedThreadPool(3);
 		CountDownLatch start = new CountDownLatch(1);
@@ -206,7 +206,7 @@ class KvPageTableTest {
 					mine.appendToken(row(p, salt));
 					if (p % 10 == 0)
 						assertThat(contents(mine))
-								.containsExactly(contents(reference(KvElementType.F16, concat(salts(10, 0),
+								.containsExactly(contents(reference(KvElementType.F32, concat(salts(10, 0),
 										salts(p - 9, salt)))));
 				}
 				return null;
@@ -225,7 +225,7 @@ class KvPageTableTest {
 
 		for (int t = 0; t < 2; t++)
 			assertThat(contents(sharers[t]))
-					.containsExactly(contents(reference(KvElementType.F16, concat(salts(10, 0), salts(extra, t + 1)))));
+					.containsExactly(contents(reference(KvElementType.F32, concat(salts(10, 0), salts(extra, t + 1)))));
 		source.release();
 		sharers[0].release();
 		sharers[1].release();

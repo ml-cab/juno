@@ -17,7 +17,9 @@ package cab.ml.juno.player;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
@@ -88,6 +90,11 @@ public final class TensorParallelPipelineClient implements InferencePipeline {
 
 	private final List<NodeStub> stubs;
 	private final int vocabSize;
+	/**
+	 * {@link #reserveKv} positions waiting for the request's next forward pass, which carries them to every node
+	 * ({@code kv_reserve_positions}); taken by that pass.
+	 */
+	private final Map<String, Integer> pendingKvReserve = new ConcurrentHashMap<>();
 
 	/**
 	 * Construct a tensor-parallel pipeline client.
@@ -130,6 +137,8 @@ public final class TensorParallelPipelineClient implements InferencePipeline {
 			throw new IllegalArgumentException("tokens cannot be null");
 
 		byte[] tokenBytes = intsToBytes(tokens);
+		Integer pending = pendingKvReserve.remove(requestId);
+		int reserve = pending == null ? 0 : pending;
 
 		// Dispatch all nodes in parallel
 		List<CompletableFuture<float[]>> futures = new ArrayList<>(stubs.size());
@@ -137,7 +146,7 @@ public final class TensorParallelPipelineClient implements InferencePipeline {
 			futures.add(CompletableFuture.supplyAsync(() -> {
 				ForwardRequest req = ForwardRequest.newBuilder().setRequestId(requestId).setModelId("stub-model")
 						.setSequencePos(startPos).setActivation(ByteString.copyFrom(tokenBytes))
-						.setDtype(cab.ml.juno.api.grpc.ActivationDtype.FLOAT32).build();
+						.setDtype(cab.ml.juno.api.grpc.ActivationDtype.FLOAT32).setKvReservePositions(reserve).build();
 
 				ForwardResponse response = stub.blockingStub.forwardPass(req);
 
@@ -152,6 +161,19 @@ public final class TensorParallelPipelineClient implements InferencePipeline {
 
 		// AllReduce — element-wise sum of all partial logit vectors
 		return allReduceSum(futures, vocabSize);
+	}
+
+	/** Sent with {@code requestId}'s next forward pass, to every node. */
+	@Override
+	public void reserveKv(String requestId, int positions) {
+		if (positions > 0)
+			pendingKvReserve.put(requestId, positions);
+	}
+
+	/** Drops a reservation no forward pass carried. The nodes keep their KV as before. */
+	@Override
+	public void evict(String requestId) {
+		pendingKvReserve.remove(requestId);
 	}
 
 	@Override

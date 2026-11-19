@@ -18,7 +18,7 @@ package cab.ml.juno.kvcache;
 /**
  * CLI / env policy for {@code --cache-type-k} and {@code --cache-type-v}.
  *
- * <p>Defaults are {@link KvElementType#F16} (current float32 path) for both.
+ * <p>Defaults are {@link KvElementType#F16} (IEEE halves) for both.
  */
 public final class CacheTypeOptions {
 
@@ -66,8 +66,19 @@ public final class CacheTypeOptions {
 		return typeV;
 	}
 
+	/** Either side block-quantized ({@code q8_0}, {@code q4_0}). */
 	public boolean usesQuantized() {
-		return typeK != KvElementType.F16 || typeV != KvElementType.F16;
+		return typeK.quantized() || typeV.quantized();
+	}
+
+	/** Either side {@code f32}: float32 rows, which a GPU's device KV copy does not store. */
+	public boolean usesF32() {
+		return typeK == KvElementType.F32 || typeV == KvElementType.F32;
+	}
+
+	/** Both sides the default, {@code f16}. */
+	public boolean isDefault() {
+		return typeK == KvElementType.F16 && typeV == KvElementType.F16;
 	}
 
 	public String policySummary() {

@@ -35,7 +35,7 @@ class KvPageCountsTest {
 		assertThat(c.livePages()).isEqualTo(5);
 		assertThat(c.idlePages()).isEqualTo(2);
 		assertThat(c.reclaimedPages()).isEqualTo(1);
-		long f16Page = 4L * 32 * Float.BYTES;
+		long f16Page = 4L * 32 * Short.BYTES;
 		long q8Page = 4L * Q8_0KvCodec.encodedBytes(32);
 		assertThat(c.storedBytes()).isEqualTo(5 * f16Page + q8Page + f16Page);
 		assertThat(KvPageCounts.sum(List.of())).isEqualTo(KvPageCounts.NONE);

@@ -61,7 +61,7 @@ public interface SessionKvTensor {
 	 * KV that stores the same blocks. Rows that are {@link KvRowCodec#encode} of some floats leave the tensor holding
 	 * exactly what {@link #writeRows} of those floats leaves.
 	 *
-	 * @throws IllegalArgumentException for an {@code F16} tensor, whose rows are floats, not blocks
+	 * @throws IllegalArgumentException for an {@code F32} tensor, whose rows are floats, not encoded
 	 */
 	void writeEncodedRows(int startPos, int rows, MemorySegment src, long srcOffset);
 
@@ -86,6 +86,16 @@ public interface SessionKvTensor {
 
 	/** Return pages to the pool (paged); no-op for dense. */
 	void release();
+
+	/**
+	 * The most positions this tensor's request can write, so storage grows toward it rather than past it
+	 * ({@link DenseKvTensor#limitGrowth}). A paged tensor, which grows a page at a time, ignores it.
+	 */
+	default void limitGrowth(int positions) {
+	}
+
+	/** Heap bytes the tensor's stored rows take: the dense backing array, or the paged tensor's pages. */
+	long heapBytes();
 
 	/** Copy the float row stored at {@code pos} into {@code dst[0, kvDim)}. */
 	void readToken(int pos, float[] dst);

@@ -20,12 +20,16 @@ import java.lang.foreign.ValueLayout;
 import java.util.Arrays;
 
 /**
- * Dense per-layer KV tensor for one request: float32 ({@link KvElementType#F16})
- * or packed {@link KvElementType#Q8_0} / {@link KvElementType#Q4_0} rows ({@link KvRowCodec}).
+ * Dense per-layer KV tensor for one request: float32 rows ({@link KvElementType#F32}) or encoded rows
+ * ({@link KvElementType#F16} halves, {@link KvElementType#Q8_0} / {@link KvElementType#Q4_0} blocks; {@link KvRowCodec}).
  *
  * <p>Attention reads the backing array in place as one page ({@link #attentionRows}):
- * {@code F16} rows as stored floats, {@code Q8_0} rows decoded inside the attention
- * loop. Nothing is dequantized into a scratch buffer.
+ * {@code F32} rows as stored floats, encoded rows decoded a head slice at a time inside the attention
+ * loop. Nothing is decoded into a scratch buffer.
+ *
+ * <p>Capacity doubles as positions are written, from {@link #INITIAL_SEQ_CAPACITY}. A tensor told how many positions
+ * its request can reach ({@link #limitGrowth}) doubles only up to that count and then grows to it, so a request never
+ * holds more positions than it can write; past the count it doubles again.
  *
  * <p>A tensor can serve several requests one after another ({@link SessionKvLayout#retireKLayers}).
  * Positions below {@link #writtenTokens} hold the current request's values; everything at
@@ -45,13 +49,15 @@ public final class DenseKvTensor implements SessionKvTensor {
 	private final KvElementType type;
 	private final int kvDim;
 	private float[] f32;
-	/** Packed rows of a {@code Q8_0} or {@code Q4_0} tensor, {@link #bytesPerToken()} bytes each. */
+	/** Encoded rows of an {@code F16}, {@code Q8_0} or {@code Q4_0} tensor, {@link #bytesPerToken()} bytes each. */
 	private byte[] packed;
 	/** The backing array as attention reads it; repointed when the array grows. */
 	private final KvRows rows;
 	private int capacityTokens;
 	/** Positions {@code [0, writtenTokens)} belong to the current request; see the class comment. */
 	private int writtenTokens;
+	/** The most positions the current request can write ({@link #limitGrowth}); {@link #MAX_SEQ_LEN} when not told. */
+	private int growthLimit = MAX_SEQ_LEN;
 
 	public DenseKvTensor(KvElementType type, int kvDim) {
 		this(type, kvDim, INITIAL_SEQ_CAPACITY);
@@ -73,11 +79,16 @@ public final class DenseKvTensor implements SessionKvTensor {
 
 	/** Allocate one tensor per layer. */
 	public static DenseKvTensor[] layers(int layerCount, KvElementType type, int kvDim) {
+		return layers(layerCount, type, kvDim, INITIAL_SEQ_CAPACITY);
+	}
+
+	/** Allocate one tensor per layer, each holding {@code initialTokens} positions to start with. */
+	public static DenseKvTensor[] layers(int layerCount, KvElementType type, int kvDim, int initialTokens) {
 		if (layerCount < 1)
 			throw new IllegalArgumentException("layerCount must be >= 1");
 		DenseKvTensor[] out = new DenseKvTensor[layerCount];
 		for (int i = 0; i < layerCount; i++)
-			out[i] = new DenseKvTensor(type, kvDim);
+			out[i] = new DenseKvTensor(type, kvDim, initialTokens);
 		return out;
 	}
 
@@ -105,6 +116,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 		int newCap = capacityTokens;
 		while (newCap < need)
 			newCap = Math.min(newCap * 2, MAX_SEQ_LEN);
+		if (need <= growthLimit)
+			newCap = Math.min(newCap, growthLimit);
 		if (newCap < need)
 			throw new IllegalStateException("KV cache position " + pos + " exceeds MAX_SEQ_LEN=" + MAX_SEQ_LEN);
 		grow(newCap);
@@ -121,17 +134,17 @@ public final class DenseKvTensor implements SessionKvTensor {
 		exposeThrough(pos);
 		writtenTokens = Math.max(writtenTokens, pos + 1);
 		switch (type) {
-		case F16 -> System.arraycopy(src, srcOff, f32, pos * kvDim, kvDim);
-		case Q8_0, Q4_0 -> KvRowCodec.encode(type, src, srcOff, kvDim, packed, pos * bytesPerToken());
+		case F32 -> System.arraycopy(src, srcOff, f32, pos * kvDim, kvDim);
+		case F16, Q8_0, Q4_0 -> KvRowCodec.encode(type, src, srcOff, kvDim, packed, pos * bytesPerToken());
 		}
 	}
 
-	/** F16 is one bulk copy into the backing array; Q8_0 and Q4_0 encode a row at a time. */
+	/** F32 is one bulk copy into the backing array; the encoded types encode a row at a time. */
 	@Override
 	public void writeRows(int startPos, int rows, MemorySegment src, long srcOffset) {
 		if (rows < 1)
 			return;
-		if (type != KvElementType.F16) {
+		if (!type.storesFloats()) {
 			SessionKvTensor.super.writeRows(startPos, rows, src, srcOffset);
 			return;
 		}
@@ -144,8 +157,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 	/** One bulk copy into the packed rows. */
 	@Override
 	public void writeEncodedRows(int startPos, int rows, MemorySegment src, long srcOffset) {
-		if (type == KvElementType.F16)
-			throw new IllegalArgumentException("f16 rows are stored as floats, not encoded");
+		if (type.storesFloats())
+			throw new IllegalArgumentException(type.cliName() + " rows are stored as floats, not encoded");
 		if (rows < 1)
 			return;
 		ensureCapacity(startPos + rows - 1);
@@ -167,8 +180,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 		if (src.length < n)
 			throw new IllegalArgumentException("src shorter than seqLen*kvDim");
 		switch (type) {
-		case F16 -> System.arraycopy(src, 0, f32, 0, n);
-		case Q8_0, Q4_0 -> {
+		case F32 -> System.arraycopy(src, 0, f32, 0, n);
+		case F16, Q8_0, Q4_0 -> {
 			for (int p = 0; p < seqLen; p++)
 				KvRowCodec.encode(type, src, p * kvDim, kvDim, packed, p * bytesPerToken());
 		}
@@ -202,8 +215,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 		exposeThrough(seqLen);
 		float[] out = new float[seqLen * kvDim];
 		switch (type) {
-		case F16 -> System.arraycopy(f32, 0, out, 0, out.length);
-		case Q8_0, Q4_0 -> {
+		case F32 -> System.arraycopy(f32, 0, out, 0, out.length);
+		case F16, Q8_0, Q4_0 -> {
 			int bpt = bytesPerToken();
 			for (int p = 0; p < seqLen; p++)
 				KvRowCodec.decode(type, packed, p * bpt, out, p * kvDim, kvDim);
@@ -212,10 +225,27 @@ public final class DenseKvTensor implements SessionKvTensor {
 		return out;
 	}
 
+	/**
+	 * The most positions this tensor's current request can write: capacity grows toward it instead of doubling past
+	 * it. Clamped to {@link #MAX_SEQ_LEN}; never shrinks the capacity already held. A reused tensor starts without one.
+	 */
+	@Override
+	public void limitGrowth(int positions) {
+		if (positions < 1)
+			throw new IllegalArgumentException("positions must be >= 1 (got " + positions + ")");
+		growthLimit = Math.min(positions, MAX_SEQ_LEN);
+	}
+
+	/** Heap bytes of the backing array: {@link #allocatedBytes}. */
+	@Override
+	public long heapBytes() {
+		return allocatedBytes();
+	}
+
 	public int allocatedBytes() {
 		return switch (type) {
-		case F16 -> f32.length * Float.BYTES;
-		case Q8_0, Q4_0 -> packed.length;
+		case F32 -> f32.length * Float.BYTES;
+		case F16, Q8_0, Q4_0 -> packed.length;
 		};
 	}
 
@@ -225,8 +255,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 			throw new IllegalArgumentException("pos " + pos + " outside [0, " + capacityTokens + ")");
 		exposeThrough(pos + 1);
 		switch (type) {
-		case F16 -> System.arraycopy(f32, pos * kvDim, dst, 0, kvDim);
-		case Q8_0, Q4_0 -> KvRowCodec.decode(type, packed, pos * bytesPerToken(), dst, 0, kvDim);
+		case F32 -> System.arraycopy(f32, pos * kvDim, dst, 0, kvDim);
+		case F16, Q8_0, Q4_0 -> KvRowCodec.decode(type, packed, pos * bytesPerToken(), dst, 0, kvDim);
 		}
 	}
 
@@ -237,8 +267,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 			throw new IllegalArgumentException("seqLen " + seqLen + " > capacity " + capacityTokens);
 		int moved = seqLen - keep - discard;
 		switch (type) {
-		case F16 -> System.arraycopy(f32, (keep + discard) * kvDim, f32, keep * kvDim, moved * kvDim);
-		case Q8_0, Q4_0 -> {
+		case F32 -> System.arraycopy(f32, (keep + discard) * kvDim, f32, keep * kvDim, moved * kvDim);
+		case F16, Q8_0, Q4_0 -> {
 			int bpt = bytesPerToken();
 			System.arraycopy(packed, (keep + discard) * bpt, packed, keep * bpt, moved * bpt);
 		}
@@ -261,8 +291,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 			throw new IllegalArgumentException("len " + len + " outside [1, " + src.writtenTokens + "]");
 		ensureCapacity(len - 1);
 		switch (type) {
-		case F16 -> System.arraycopy(src.f32, 0, f32, 0, len * kvDim);
-		case Q8_0, Q4_0 -> System.arraycopy(src.packed, 0, packed, 0, len * bytesPerToken());
+		case F32 -> System.arraycopy(src.f32, 0, f32, 0, len * kvDim);
+		case F16, Q8_0, Q4_0 -> System.arraycopy(src.packed, 0, packed, 0, len * bytesPerToken());
 		}
 		writtenTokens = len;
 	}
@@ -280,6 +310,7 @@ public final class DenseKvTensor implements SessionKvTensor {
 	/** Hands the tensor to a new request: its earlier values become unreadable (see the class comment). */
 	void reuse() {
 		writtenTokens = 0;
+		growthLimit = MAX_SEQ_LEN;
 	}
 
 	/**
@@ -291,8 +322,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 		if (tokens <= writtenTokens)
 			return;
 		switch (type) {
-		case F16 -> Arrays.fill(f32, writtenTokens * kvDim, tokens * kvDim, 0f);
-		case Q8_0, Q4_0 -> Arrays.fill(packed, writtenTokens * bytesPerToken(), tokens * bytesPerToken(), (byte) 0);
+		case F32 -> Arrays.fill(f32, writtenTokens * kvDim, tokens * kvDim, 0f);
+		case F16, Q8_0, Q4_0 -> Arrays.fill(packed, writtenTokens * bytesPerToken(), tokens * bytesPerToken(), (byte) 0);
 		}
 		writtenTokens = tokens;
 	}
@@ -300,15 +331,15 @@ public final class DenseKvTensor implements SessionKvTensor {
 	private void allocate(int tokens) {
 		capacityTokens = tokens;
 		switch (type) {
-		case F16 -> rows.setPage(0, f32 = new float[tokens * kvDim]);
-		case Q8_0, Q4_0 -> rows.setPage(0, packed = new byte[tokens * bytesPerToken()]);
+		case F32 -> rows.setPage(0, f32 = new float[tokens * kvDim]);
+		case F16, Q8_0, Q4_0 -> rows.setPage(0, packed = new byte[tokens * bytesPerToken()]);
 		}
 	}
 
 	private void grow(int newTokens) {
 		switch (type) {
-		case F16 -> rows.setPage(0, f32 = Arrays.copyOf(f32, newTokens * kvDim));
-		case Q8_0, Q4_0 -> rows.setPage(0, packed = Arrays.copyOf(packed, newTokens * bytesPerToken()));
+		case F32 -> rows.setPage(0, f32 = Arrays.copyOf(f32, newTokens * kvDim));
+		case F16, Q8_0, Q4_0 -> rows.setPage(0, packed = Arrays.copyOf(packed, newTokens * bytesPerToken()));
 		}
 		capacityTokens = newTokens;
 	}

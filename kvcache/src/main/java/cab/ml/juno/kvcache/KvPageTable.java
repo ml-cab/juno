@@ -84,7 +84,7 @@ public final class KvPageTable {
 
 	/** Points the attention view's page {@code page} at block {@code blockId}'s storage. */
 	private void track(int page, int blockId) {
-		if (pool.type() == KvElementType.F16)
+		if (pool.type().storesFloats())
 			rows.setPage(page, pool.floatPage(blockId));
 		else
 			rows.setPage(page, pool.bytePage(blockId));
@@ -177,11 +177,11 @@ public final class KvPageTable {
 	 * cover. The rules of {@link #writeToken} hold: positions ahead of {@code seqLen} are zero-filled first, a full
 	 * last page gets a new one, and a page another table holds is copied before it is written.
 	 *
-	 * @throws IllegalArgumentException for an {@code F16} pool, whose rows are floats, not blocks
+	 * @throws IllegalArgumentException for an {@code F32} pool, whose rows are floats, not encoded
 	 */
 	public void writeEncodedRows(int pos, int rows, MemorySegment src, long srcOffset) {
-		if (pool.type() == KvElementType.F16)
-			throw new IllegalArgumentException("f16 rows are stored as floats, not encoded");
+		if (pool.type().storesFloats())
+			throw new IllegalArgumentException(pool.type().cliName() + " rows are stored as floats, not encoded");
 		if (rows < 1)
 			return;
 		if (pos < 0)
@@ -234,7 +234,7 @@ public final class KvPageTable {
 		int pageSize = pool.pageSize();
 		int kvDim = pool.kvDim();
 		// Through the block ids, not the attention view, so that a copy checks what the view reads.
-		if (pool.type() == KvElementType.F16) {
+		if (pool.type().storesFloats()) {
 			for (int p = 0, page = 0; p < len; p += pageSize, page++)
 				System.arraycopy(pool.floatPage(blockIds.get(page)), 0, workspace, p * kvDim,
 						Math.min(pageSize, len - p) * kvDim);

@@ -381,6 +381,16 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
     }
 
     @Override
+    public void reserveKv(String requestId, int positions) {
+        textHandler.reserveKv(requestId, positions);
+    }
+
+    @Override
+    public long hostKvBytes(String requestId) {
+        return textHandler.hostKvBytes(requestId);
+    }
+
+    @Override
     public PagedKvArena pagedKvArena() {
         return textHandler.pagedKvArena();
     }

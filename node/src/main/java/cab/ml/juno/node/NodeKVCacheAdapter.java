@@ -38,7 +38,7 @@ import cab.ml.juno.kvcache.SessionKvTensor;
  *
  * <h3>KVBlock serialisation</h3>
  * <ul>
- * <li>{@link KvElementType#F16} + {@link KvElementType#F16} (default): legacy
+ * <li>{@link KvElementType#F32} + {@link KvElementType#F32}: legacy
  * float32 LE — K then V.</li>
  * <li>Otherwise: {@code 'K''V' ver=1 kType vType} then per-token packed payloads.</li>
  * </ul>
@@ -60,20 +60,20 @@ public final class NodeKVCacheAdapter {
 	}
 
 	/**
-	 * Serialise float K/V (legacy F16 path) into the manager.
+	 * Serialise float K/V (the headerless float32 layout, {@code f32}) into the manager.
 	 */
 	public void flush(String requestId, int absoluteLayerIndex,
 			float[] kData, float[] vData,
 			int seqLen, int kvDim) {
 		flush(requestId, absoluteLayerIndex, kData, vData, seqLen, kvDim,
-				KvElementType.F16, KvElementType.F16);
+				KvElementType.F32, KvElementType.F32);
 	}
 
 	public void flush(String requestId, int absoluteLayerIndex,
 			float[] kData, float[] vData,
 			int seqLen, int kvDim,
 			KvElementType kType, KvElementType vType) {
-		if (kType == KvElementType.F16 && vType == KvElementType.F16) {
+		if (kType.storesFloats() && vType.storesFloats()) {
 			int floatsPerSeq = seqLen * kvDim;
 			int bytesPerSeq = floatsPerSeq * Float.BYTES;
 			byte[] data = new byte[bytesPerSeq * 2];
@@ -97,7 +97,7 @@ public final class NodeKVCacheAdapter {
 			DenseKvTensor k, DenseKvTensor v, int seqLen) {
 		KvElementType kType = k.type();
 		KvElementType vType = v.type();
-		if (kType == KvElementType.F16 && vType == KvElementType.F16) {
+		if (kType.storesFloats() && vType.storesFloats()) {
 			flush(requestId, absoluteLayerIndex, k.toFloatArray(seqLen), v.toFloatArray(seqLen),
 					seqLen, k.kvDim(), kType, vType);
 			return;
@@ -217,13 +217,13 @@ public final class NodeKVCacheAdapter {
 	private static void encodeTensorPayload(DenseKvTensor t, int seqLen, byte[] dst, int dstOff) {
 		float[] floats = t.toFloatArray(seqLen);
 		switch (t.type()) {
-		case F16 -> {
+		case F32 -> {
 			ByteBuffer bb = ByteBuffer.wrap(dst, dstOff, seqLen * t.kvDim() * Float.BYTES)
 					.order(ByteOrder.LITTLE_ENDIAN);
 			for (float f : floats)
 				bb.putFloat(f);
 		}
-		case Q8_0, Q4_0 -> {
+		case F16, Q8_0, Q4_0 -> {
 			int bpt = t.bytesPerToken();
 			for (int p = 0; p < seqLen; p++)
 				KvRowCodec.encode(t.type(), floats, p * t.kvDim(), t.kvDim(), dst, dstOff + p * bpt);
@@ -234,13 +234,13 @@ public final class NodeKVCacheAdapter {
 	private static float[] decodePayload(byte[] data, int off, int seqLen, int kvDim, KvElementType type) {
 		float[] out = new float[seqLen * kvDim];
 		switch (type) {
-		case F16 -> {
+		case F32 -> {
 			ByteBuffer bb = ByteBuffer.wrap(data, off, seqLen * kvDim * Float.BYTES)
 					.order(ByteOrder.LITTLE_ENDIAN);
 			for (int i = 0; i < out.length; i++)
 				out[i] = bb.getFloat();
 		}
-		case Q8_0, Q4_0 -> {
+		case F16, Q8_0, Q4_0 -> {
 			int bpt = KvRowCodec.rowBytes(type, kvDim);
 			for (int p = 0; p < seqLen; p++)
 				KvRowCodec.decode(type, data, off + p * bpt, out, p * kvDim, kvDim);

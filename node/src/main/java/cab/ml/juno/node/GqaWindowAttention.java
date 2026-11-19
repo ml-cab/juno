@@ -28,10 +28,10 @@ import cab.ml.juno.kvcache.KvRows;
  *
  * <p>The worker pool is entered once per window with (row, KV head) pairs as its units, instead of once per row with
  * query heads as units. A unit runs the {@code gqaRatio} query heads that share one KV head. Over
- * {@link KvElementType#Q8_0} or {@link KvElementType#Q4_0} rows it decodes each key slice and each value slice once
+ * encoded rows ({@link KvElementType#F16}, {@link KvElementType#Q8_0}, {@link KvElementType#Q4_0}) it decodes each key slice and each value slice once
  * for all of those heads ({@link KvRows#decodeRange}); a unit of one head would decode it once per head. Each head then scores and sums
  * exactly as its own unit would: the decoded values are the same, and so are the dot product and the key-order sums.
- * Over {@link KvElementType#F16} rows a unit runs its heads one after another through the per-head forms.
+ * Over {@link KvElementType#F32} rows a unit runs its heads one after another through the per-head forms.
  */
 final class GqaWindowAttention {
 
@@ -74,7 +74,7 @@ final class GqaWindowAttention {
 		float[][] scores = scores(gqaRatio, n);
 		int kBase = g * headDim;
 		int h0 = g * gqaRatio;
-		if (k.type() == KvElementType.F16) {
+		if (k.type().storesFloats()) {
 			for (int i = 0; i < gqaRatio; i++) {
 				int qBase = (h0 + i) * headDim;
 				if (vectorHead)
@@ -87,7 +87,7 @@ final class GqaWindowAttention {
 		}
 		for (int i = 0; i < gqaRatio; i++)
 			LlamaTransformerHandler.softmax(scores[i], n);
-		if (v.type() == KvElementType.F16) {
+		if (v.type().storesFloats()) {
 			for (int i = 0; i < gqaRatio; i++) {
 				int outBase = (h0 + i) * headDim;
 				if (vectorHead) {

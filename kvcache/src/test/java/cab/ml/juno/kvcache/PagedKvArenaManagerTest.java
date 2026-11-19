@@ -18,7 +18,7 @@ class PagedKvArenaManagerTest {
 	void manager_arena_and_blob_roundtrip() {
 		int kvDim = 32;
 		int seqLen = 5;
-		PagedKvArena arena = new PagedKvArena(4, kvDim, KvElementType.Q8_0, KvElementType.F16);
+		PagedKvArena arena = new PagedKvArena(4, kvDim, KvElementType.Q8_0, KvElementType.F32);
 		KVCacheManager mgr = new KVCacheManager(
 				new GpuKVCache(100 * MB), new CpuKVCache(1000), LayerRange.all(), arena);
 
@@ -42,7 +42,7 @@ class PagedKvArenaManagerTest {
 
 		KVBlock got = mgr.get(key).orElseThrow();
 		assertThat(got.kType()).isEqualTo(KvElementType.Q8_0);
-		assertThat(got.vType()).isEqualTo(KvElementType.F16);
+		assertThat(got.vType()).isEqualTo(KvElementType.F32);
 		assertThat(got.sequenceLen()).isEqualTo(seqLen);
 
 		PagedKvTensor k2 = arena.newK();
@@ -67,7 +67,7 @@ class PagedKvArenaManagerTest {
 	void q4_blob_roundtrip() {
 		int kvDim = 64;
 		int seqLen = 6;
-		PagedKvArena arena = new PagedKvArena(4, kvDim, KvElementType.F16, KvElementType.Q4_0);
+		PagedKvArena arena = new PagedKvArena(4, kvDim, KvElementType.F32, KvElementType.Q4_0);
 		PagedKvTensor k = arena.newK();
 		PagedKvTensor v = arena.newV();
 		float[] tok = new float[kvDim];
@@ -94,7 +94,7 @@ class PagedKvArenaManagerTest {
 	@Test
 	@DisplayName("evict clears tiers; released tensors free pool pages")
 	void evict_and_release() {
-		PagedKvArena arena = new PagedKvArena(4, 8, KvElementType.F16, KvElementType.F16);
+		PagedKvArena arena = new PagedKvArena(4, 8, KvElementType.F32, KvElementType.F32);
 		KVCacheManager mgr = new KVCacheManager(
 				new GpuKVCache(100 * MB), new CpuKVCache(1000), LayerRange.all(), arena);
 		PagedKvTensor k = arena.newK();

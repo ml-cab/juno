@@ -188,6 +188,16 @@ public final class GenerationLoop {
 		return prefillMode;
 	}
 
+	/**
+	 * The most KV positions a request can write: its prompt, the tokens it may generate, and the draft tokens a
+	 * speculative step verifies past the last accepted one. Context shifting keeps positions under the context
+	 * limit, which the stages cap at in any case.
+	 */
+	int kvPositions(int promptTokens, int maxTokens) {
+		long n = (long) promptTokens + Math.max(0, maxTokens) + (specOptions.enabled() ? specOptions.ngramM() : 0);
+		return (int) Math.max(1, Math.min(n, Integer.MAX_VALUE));
+	}
+
 	int prefillBatchSize() {
 		return prefillBatchSize;
 	}
@@ -301,6 +311,7 @@ public final class GenerationLoop {
 			int[] promptIds = Arrays.copyOfRange(allTokens[i], 0, promptLens[i]);
 			if (sharedPrefixes != null)
 				startPos[i] = sharedPrefixes.shareInto(requestIds[i], promptIds);
+			pipeline.reserveKv(requestIds[i], kvPositions(promptLens[i], maxTokens[i]));
 			int windowSize = promptLens[i] - 1 - startPos[i];
 			if (windowSize > 0) {
 				PrefillChunker.run(pipeline, prefillMode, prefillBatchSize, requestIds[i], promptIds, startPos[i]);
@@ -513,7 +524,9 @@ public final class GenerationLoop {
 		// ── Step 2b: Prefill — populate KV cache for uncached prompt tokens ──
 		// Walk positions startPos..promptLen-2, storing KV at each position under
 		// kvKey. The last prompt token (position promptLen-1) is left for step 0 of
-		// the decode loop so its logits drive the first sampled token.
+		// the decode loop so its logits drive the first sampled token. First, tell the
+		// stages how far this request can go, so their KV grows toward it.
+		pipeline.reserveKv(kvKey, kvPositions(promptIds.length, params.maxTokens()));
 		int prefillSteps = promptIds.length - 1 - startPos;
 		if (prefillSteps > 0) {
 			log.info("Prefill: " + prefillSteps + " steps for prompt of " + promptIds.length + " tokens (kvKey=" + kvKey
@@ -540,7 +553,11 @@ public final class GenerationLoop {
 		DraftProposer draftProposer = switch (specOptions.specType()) {
 			case NONE -> null;
 			case NGRAM_SIMPLE -> new NgramDraftCache(specOptions.ngramN());
-			case DRAFT_SIMPLE -> new DraftModelSession(draftPipeline, kvKey + "#draft");
+			case DRAFT_SIMPLE -> {
+				String draftKey = kvKey + "#draft";
+				draftPipeline.reserveKv(draftKey, kvPositions(promptIds.length, maxTokens));
+				yield new DraftModelSession(draftPipeline, draftKey);
+			}
 		};
 		if (draftProposer != null)
 			draftProposer.observe(allTokens);

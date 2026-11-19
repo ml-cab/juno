@@ -208,7 +208,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		this.hasOutputProj = ctx.hasOutputProjection();
 		this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
 		log.info(kvLayout.policySummary());
-		if (kvLayout.cacheTypes().usesQuantized()) {
+		if (!kvLayout.cacheTypes().isDefault()) {
 			log.warning("LoRA training uses ephemeral float KV for teacher-forced forward; "
 					+ kvLayout.cacheTypes().policySummary() + " applies to inference / --lora-play maps only.");
 		}
@@ -605,7 +605,18 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	 * rather than kept for the next request, since this handler does not track which requests have a pass running.
 	 */
 	@Override
+	public void reserveKv(String requestId, int positions) {
+		kvLayout.reserve(requestId, positions, kvCacheK.get(requestId), kvCacheV.get(requestId));
+	}
+
+	@Override
+	public long hostKvBytes(String requestId) {
+		return SessionKvLayout.heapBytes(kvCacheK.get(requestId)) + SessionKvLayout.heapBytes(kvCacheV.get(requestId));
+	}
+
+	@Override
 	public void evict(String requestId) {
+		kvLayout.forget(requestId);
 		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
 		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
 	}
@@ -670,8 +681,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		int kvDim = cfg.kvDim();
 		int lastPos = startPos + W - 1;
 
-		kvCacheK.computeIfAbsent(requestId, k -> newKLayers(L));
-		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+		kvCacheK.computeIfAbsent(requestId, k -> newKLayers(k, L));
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(k, L));
 		SessionKvTensor[] kC = kvCacheK.get(requestId);
 		SessionKvTensor[] vC = kvCacheV.get(requestId);
 		for (int li = 0; li < L; li++) {
@@ -1187,8 +1198,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private float[] runLayers(float[] x, String requestId, int pos) {
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
-		kvCacheK.computeIfAbsent(requestId, k -> newKLayers(L));
-		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+		kvCacheK.computeIfAbsent(requestId, k -> newKLayers(k, L));
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(k, L));
 		SessionKvTensor[] kC = kvCacheK.get(requestId);
 		SessionKvTensor[] vC = kvCacheV.get(requestId);
 		for (int li = 0; li < L; li++) {
@@ -1994,11 +2005,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			dst[i] += src[i];
 	}
 
-	private SessionKvTensor[] newKLayers(int L) {
-		return kvLayout.newKLayers(L);
+	private SessionKvTensor[] newKLayers(String requestId, int L) {
+		return kvLayout.newKLayers(requestId, L);
 	}
 
-	private SessionKvTensor[] newVLayers(int L) {
-		return kvLayout.newVLayers(L);
+	private SessionKvTensor[] newVLayers(String requestId, int L) {
+		return kvLayout.newVLayers(requestId, L);
 	}
 }

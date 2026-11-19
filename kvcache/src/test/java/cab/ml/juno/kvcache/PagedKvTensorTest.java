@@ -10,12 +10,12 @@ import org.junit.jupiter.api.Test;
 class PagedKvTensorTest {
 
 	@Test
-	@DisplayName("F16 rows gathered from the pages match DenseKvTensor writes")
-	void f16_matches_dense() {
+	@DisplayName("F32 rows gathered from the pages match DenseKvTensor writes")
+	void f32_matches_dense() {
 		int kvDim = 8;
 		int pageSize = 4;
-		DenseKvTensor dense = new DenseKvTensor(KvElementType.F16, kvDim);
-		PagedKvArena arena = new PagedKvArena(pageSize, kvDim, KvElementType.F16, KvElementType.F16);
+		DenseKvTensor dense = new DenseKvTensor(KvElementType.F32, kvDim);
+		PagedKvArena arena = new PagedKvArena(pageSize, kvDim, KvElementType.F32, KvElementType.F32);
 		PagedKvTensor paged = arena.newK();
 
 		float[] tok = new float[kvDim];
@@ -35,12 +35,12 @@ class PagedKvTensorTest {
 	}
 
 	@Test
-	@DisplayName("Q8_0 pages use less memory than F16 and roundtrip")
+	@DisplayName("Q8_0 pages use less memory than F32 and roundtrip")
 	void q8_smaller_and_roundtrips() {
 		int kvDim = 256;
 		int tokens = 33;
 		int pageSize = 16;
-		PagedKvArena f16Arena = new PagedKvArena(pageSize, kvDim, KvElementType.F16, KvElementType.F16);
+		PagedKvArena f16Arena = new PagedKvArena(pageSize, kvDim, KvElementType.F32, KvElementType.F32);
 		PagedKvArena q8Arena = new PagedKvArena(pageSize, kvDim, KvElementType.Q8_0, KvElementType.Q8_0);
 		PagedKvTensor f16 = f16Arena.newK();
 		PagedKvTensor q8 = q8Arena.newK();
@@ -63,7 +63,7 @@ class PagedKvTensorTest {
 	@Test
 	@DisplayName("release returns pages; mid-write zero-fills holes like dense")
 	void release_and_zero_fill_holes() {
-		PagedKvArena arena = new PagedKvArena(4, 8, KvElementType.F16, KvElementType.F16);
+		PagedKvArena arena = new PagedKvArena(4, 8, KvElementType.F32, KvElementType.F32);
 		PagedKvTensor t = arena.newK();
 		float[] tok = new float[8];
 		for (int i = 0; i < 8; i++)

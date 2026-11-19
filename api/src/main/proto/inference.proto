@@ -126,6 +126,10 @@ message ForwardRequest {
     bool           use_kv_cache = 7;  // whether to read/write KV cache for this pass
     int32          batch_size   = 8;  // number of sequences in this batch
     ActivationDtype dtype       = 9;  // encoding of the activation bytes field
+    // The most KV positions this request can write (prompt + max_tokens), sent with its
+    // first forward pass after the coordinator learns it; 0 = not given. The node's dense
+    // host KV grows toward it instead of doubling past it.
+    int32          kv_reserve_positions = 10;
 }
 
 message ForwardResponse {

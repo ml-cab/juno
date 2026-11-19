@@ -1194,12 +1194,13 @@ public final class ConsoleMain {
 		System.out.println("                             CUDA, K-quant MMQ weights, LLaMA family (Qwen2 included), Phi-3 and Qwen3, one request or a batch of");
 		System.out.println("                             them (--parallel, continuous schedule); elsewhere the existing path, said once only with an explicit on;");
 		System.out.println("                             off keeps the op-at-a-time path; env JUNO_GPU_RESIDENCY)");
-		System.out.println("  --cache-type-k f16|q8_0|q4_0  K cache element type (default: f16 = current float path)");
-		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8x smaller vs float),");
-		System.out.println("                             q4_0 (~7.1x smaller); host KV only beside GPU attention;");
+		System.out.println("  --cache-type-k f16|f32|q8_0|q4_0  K cache element type (default: f16, IEEE half floats)");
+		System.out.println("                             env JUNO_CACHE_TYPE_K; f32 keeps float32 rows (2x f16's size);");
+		System.out.println("                             q8_0 packs KV (~1.9x smaller than f16), q4_0 (~3.6x smaller);");
+		System.out.println("                             GPU attention's KV copy uses the same type (f32 held in FP16 there);");
 		System.out.println("                             q4_0 keys cost quality on some models (startup warning):");
 		System.out.println("                             for a 4-bit cache use q8_0 keys with q4_0 values");
-		System.out.println("  --cache-type-v f16|q8_0|q4_0  V cache element type (default: f16)");
+		System.out.println("  --cache-type-v f16|f32|q8_0|q4_0  V cache element type (default: f16)");
 		System.out.println("                             env JUNO_CACHE_TYPE_V");
 		System.out.println("  --schedule static|continuous  Serving schedule (default: static = dense KV + static micro-batch;");
 		System.out.println("                             continuous = paged KV + running-set batching on local/single-shard.");

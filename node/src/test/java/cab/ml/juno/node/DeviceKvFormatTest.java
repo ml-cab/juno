@@ -108,6 +108,37 @@ class DeviceKvFormatTest {
 		assertThat(DeviceKvFormats.F16.quantized()).isFalse();
 		assertThat(q8q4.summary()).isEqualTo("K q8_0, V q4_0");
 	}
+	@Test
+	@DisplayName("f32: never stored on the device; FP16 holds it for sharing; selected without the quantized kernel")
+	void f32() {
+		assertThat(DeviceKvFormat.canHold(KvElementType.F32, 128)).isFalse();
+		assertThat(DeviceKvFormat.canHold(KvElementType.F16, 80)).isTrue();
+		assertThat(DeviceKvFormat.holding(KvElementType.F32, 128)).isEqualTo(DeviceKvFormat.F16);
+		CacheTypeOptions f32 = CacheTypeOptions.of(KvElementType.F32, KvElementType.F32);
+		assertThat(DeviceKvFormats.select(f32, 128, () -> {
+			throw new AssertionError("an f32 launch loads no quantized kernel");
+		})).isEqualTo(DeviceKvFormats.F16);
+		assertThat(DeviceKvFormats.F16.holds(f32)).isTrue();
+		assertThat(new DeviceKvFormats(DeviceKvFormat.F16, DeviceKvFormat.Q8_0)
+				.holds(CacheTypeOptions.of(KvElementType.F32, KvElementType.Q8_0))).isTrue();
+		assertThat(new DeviceKvFormats(DeviceKvFormat.Q8_0, DeviceKvFormat.Q8_0).holds(f32)).isFalse();
+	}
+
+	@Test
+	@DisplayName("an FP16 device row is the f16 host row, byte for byte")
+	void f16RowIsTheHostRow() {
+		float[] row = new float[64];
+		for (int i = 0; i < row.length; i++)
+			row[i] = (float) Math.sin(i * 0.7) * (i - 20);
+		byte[] host = new byte[KvRowCodec.rowBytes(KvElementType.F16, row.length)];
+		KvRowCodec.encode(KvElementType.F16, row, 0, row.length, host, 0);
+		try (java.lang.foreign.Arena a = java.lang.foreign.Arena.ofConfined()) {
+			java.lang.foreign.MemorySegment seg = a.allocate(DeviceKvFormat.F16.rowBytes(row.length));
+			DeviceKvFormat.F16.pack(row, 0, row.length, seg, 0);
+			assertThat(seg.toArray(java.lang.foreign.ValueLayout.JAVA_BYTE)).isEqualTo(host);
+		}
+	}
+
 
 	@Test
 	@DisplayName("host packing: FP16 rounds as Float.floatToFloat16; q8_0 and q4_0 are the host codecs' bytes")

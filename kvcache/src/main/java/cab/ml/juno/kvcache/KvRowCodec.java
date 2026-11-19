@@ -16,20 +16,21 @@
 package cab.ml.juno.kvcache;
 
 /**
- * Stored rows of a {@link KvElementType}: their size, and for the block-packed types ({@link KvElementType#Q8_0},
- * {@link KvElementType#Q4_0}) their encoding and decoding, in one place, so that every KV store (dense, paged,
- * serialized) and reader handles every type the same way. {@link KvElementType#F16} rows are floats held as they are;
- * the byte methods refuse it.
+ * Stored rows of a {@link KvElementType}: their size, and for the encoded types ({@link KvElementType#F16} halves,
+ * {@link KvElementType#Q8_0} and {@link KvElementType#Q4_0} blocks) their encoding and decoding, in one place, so that
+ * every KV store (dense, paged, serialized) and reader handles every type the same way. {@link KvElementType#F32} rows
+ * are floats held as they are; the byte methods refuse it.
  */
 public final class KvRowCodec {
 
 	private KvRowCodec() {
 	}
 
-	/** Bytes one stored row of {@code kvDim} values takes: floats for {@code F16}, the row's blocks otherwise. */
+	/** Bytes one stored row of {@code kvDim} values takes: floats for {@code F32}, halves for {@code F16}, blocks otherwise. */
 	public static int rowBytes(KvElementType type, int kvDim) {
 		return switch (type) {
-		case F16 -> kvDim * Float.BYTES;
+		case F32 -> kvDim * Float.BYTES;
+		case F16 -> F16KvCodec.encodedBytes(kvDim);
 		case Q8_0 -> Q8_0KvCodec.encodedBytes(kvDim);
 		case Q4_0 -> Q4_0KvCodec.encodedBytes(kvDim);
 		};
@@ -40,7 +41,8 @@ public final class KvRowCodec {
 		switch (type) {
 		case Q8_0 -> Q8_0KvCodec.encode(src, srcOff, n, dst, dstOff);
 		case Q4_0 -> Q4_0KvCodec.encode(src, srcOff, n, dst, dstOff);
-		case F16 -> throw new IllegalArgumentException("f16 rows are stored as floats, not encoded");
+		case F16 -> F16KvCodec.encode(src, srcOff, n, dst, dstOff);
+		case F32 -> throw new IllegalArgumentException(type.cliName() + " rows are stored as floats, not encoded");
 		}
 	}
 
@@ -49,7 +51,8 @@ public final class KvRowCodec {
 		switch (type) {
 		case Q8_0 -> Q8_0KvCodec.decode(src, srcOff, dst, dstOff, n);
 		case Q4_0 -> Q4_0KvCodec.decode(src, srcOff, dst, dstOff, n);
-		case F16 -> throw new IllegalArgumentException("f16 rows are stored as floats, not encoded");
+		case F16 -> F16KvCodec.decode(src, srcOff, dst, dstOff, n);
+		case F32 -> throw new IllegalArgumentException(type.cliName() + " rows are stored as floats, not encoded");
 		}
 	}
 }

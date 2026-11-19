@@ -49,7 +49,7 @@ widths it scores). Owner decisions 7 (a) and 8 (a), 2026-11-15. Decision 7 (a) i
 writes the host KV from the device copy's stored rows (no CPU encode; a quarter of the bytes over the bus), host bytes
 unchanged; prefill `q8_0` over FP16, unpinned, 0.90x to 0.99x in one window and 0.90x to 0.97x in 128-row windows, every
 sweep model; kit probe `gpu.kv-prefill.<model>` in. The owner's pinned prefill gate (decision 8 (a)), 2026-11-16: 0.877x to
-0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned. The owner's gate, 2026-11-17, pinned: `q8_0` decode 0.958x (Qwen2.5-3B) to 0.985x FP16, 4 of 4 at or above 0.95x; exit criterion 7 ticked again (6 of 15). Decision 4 (a) in 2026-11-17 (out of tier): gate and up in one launch (`q4k_gemv_pair`), bit for bit the two launches, 0.63x to 0.97x their device time at nine placements of the input vector, unpinned; LoRA gate and suites pass. The owner's gate, 2026-11-18, pinned: decode after over before, FP16 1.014x (Mistral 7B) to 1.075x (TinyLlama) and `q8_0` 1.015x (Phi-3.5-mini) to 1.045x (Qwen2.5-3B), 8 of 8 over 1.00, no cycle under; `q8_0` over FP16 read 0.951x to 0.978x and bounded at 0.956x or above, so criterion 7 stays met (6 of 15). Next: item 6, on a commit that holds decision 4 (a); then step 7.
+0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned. The owner's gate, 2026-11-17, pinned: `q8_0` decode 0.958x (Qwen2.5-3B) to 0.985x FP16, 4 of 4 at or above 0.95x; exit criterion 7 ticked again (6 of 15). Decision 4 (a) in 2026-11-17 (out of tier): gate and up in one launch (`q4k_gemv_pair`), bit for bit the two launches, 0.63x to 0.97x their device time at nine placements of the input vector, unpinned; LoRA gate and suites pass. The owner's gate, 2026-11-18, pinned: decode after over before, FP16 1.014x (Mistral 7B) to 1.075x (TinyLlama) and `q8_0` 1.015x (Phi-3.5-mini) to 1.045x (Qwen2.5-3B), 8 of 8 over 1.00, no cycle under; `q8_0` over FP16 read 0.951x to 0.978x and bounded at 0.956x or above, so criterion 7 stays met (6 of 15). Item 6 begun 2026-11-18 on `c607e926`: the live-heap bar measured out of reach of its levers (0.68x projected, the float32 embedding and output copies are not KV); owner decisions 10 (a) (bar restated: host KV <= 0.35x, live heap <= 0.75x), 11 (a) (the request's length passed to every stage, a new gRPC field) and 12 (a) (`f16` stores IEEE halves on every host store, the float32 rows kept as `f32`). Item 6 in 2026-11-18 and 2026-11-19 (uncommitted): host KV 0.258x and live heap 0.640x the pre-tier build; `f16` against `f32` NLL 0.99967x to 1.00053x and greedy agreement 99.02% to 99.80% on the four sweep models; throughput against `c607e926` unpinned, pp 0.969x to 1.121x and tg 0.980x to 1.004x; LoRA gate passes; exit criterion 6 ticked (7 of 15). Step 6 done. Next: step 7, disk-backed session save/restore.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -141,6 +141,8 @@ ordering note both withdraw.)*
    the earlier three-tier-to-two-tier simplification (`CHANGELOG.md:1758`) — this time scoped
    narrowly (explicit save/restore commands, not always-on disk IO) so it doesn't reintroduce the
    complexity that motivated removing the old design.
+   *(2026-11-19: the pointer `CHANGELOG.md:1758` has drifted; the simplification it names, three tiers to two with no
+   disk IO, is described at `CHANGELOG.md:3560` today, in the design-history section.)*
 6. **Host KV footprint: exact growth and real FP16 storage** *(added 2026-10-04 from Tier 01C step 6)*.
    `DenseKvTensor` doubles its capacity, and its `f16` element type stores 32-bit floats. A 2,048-token
    prompt plus one generated token doubles every layer's K and V to 4,096 positions. On Phi-3.5-mini (32
@@ -155,6 +157,11 @@ ordering note both withdraw.)*
    finished request's dense tensors for the next one ([Tier 02D](TIER-02D-gpu-host-overhead.md) item 3). Growing
    toward the known request length, real FP16 storage and the live-heap measurement stay here, measured against
    the build Tier 02D leaves. Note for that measurement: an idle handler now keeps one request's dense host KV.*
+   *2026-11-18 (owner decisions 10 (a), 11 (a), 12 (a); see that day's entry): the request's length reaches the handler as a
+   hint from the coordinator (every stage, the gRPC `ForwardRequest` included), and a dense layer grows toward it without
+   doubling past it; `f16` stores IEEE halves on every host store and the float32 storage stays selectable as `f32`; the
+   live-heap bar, measured out of reach of these two levers (0.68x projected: the float32 embedding and output copies are
+   not KV), is restated as a host KV bar and a looser live-heap bar.*
 
 7. **Quantized KV on the device** *(added 2026-10-11, plan review)*. `--cache-type-k`/`--cache-type-v`
    (`f16|q8_0`, and item 4's `q4_0`) choose the **host** KV storage only. On a GPU run every running
@@ -291,6 +298,10 @@ ordering note both withdraw.)*
   - real FP16 dense KV storage (item 6): greedy agreement with today's FP32-backed `f16` storage on
     **>= 99%** of the first 512 tokens on every sweep model, mean NLL **<= 1.005x**, and Phi-3.5-mini's
     live heap at a 2048-token request **<= 0.60x** the pre-tier reading;
+    *(Restated 2026-11-18, owner decision 10 (a): the live-heap half reads **<= 0.75x** the pre-tier reading (7,103 MiB,
+    `e16748ad`, CUDA, 2,048 prompt tokens and 64 generated, after a full collection with the session held), and the host KV
+    that request holds (its K and V tensors' bytes) **<= 0.35x** the pre-tier build's 3,221,225,472 bytes. Today's
+    FP32-backed storage is the `f32` type from decision 12 (a), so both quality readings come from one build.)*
   - quantized device KV (item 7): device KV bytes per position **<= 0.55x** the FP16 copy at `q8_0` and
     **<= 0.30x** at `q4_0`; the number of 2,048-token Mistral 7B sessions whose device KV fits beside the
     weights **>= 1.8x** the FP16 figure at `q8_0`; GPU decode tg at a 2,048-token context with `q8_0`
@@ -329,7 +340,8 @@ README execution rule 10.
   - Session save and restore (item 5): a restored session continues with the reply the unbroken session gives.
   - Defragmentation (item 3): replies unchanged under page churn, with the compaction counted. *(2026-11-11: in
     `schedule.tinyllama` and `gpu.schedule.tinyllama`, the continuous leg; `coverage.tsv` line `feature:kv-page-reclaim`.)*
-  - The host KV footprint per session (item 6), as a reading.
+  - The host KV footprint per session (item 6), as a reading. *(2026-11-19: in, `gpu.kv-footprint.<model>` on the
+    sweep models, `KvFootprintProbe` launching `KvFootprintRunMain`; `coverage.tsv` line `feature:host-kv-footprint`.)*
   - Item 7's prefill bar (decision 6 (a)): the 2,048-token prefill time with `q8_0` device KV over FP16, as a reading, on the
     sweep models. *(2026-11-15: owed with decision 7, which settles what the bar scores; `DeviceKvPrefillTimeLiveTest` is
     the reading it would run. 2026-11-16: in: `gpu.kv-prefill.<model>` on the four sweep models, CUDA, `KvPrefillRunMain`
@@ -388,8 +400,17 @@ in `models/`.)*
       1.030x and 97.1%, Phi-3.5-mini 1.035x and 98.1%, Qwen2.5-3B 2.02x and 83.6%; `q8_0` K with `q4_0` V meets both bars on all
       four ([`20261113T051804Z-kv-q4-0`](../perf-compare/20261113T051804Z-kv-q4-0/INDEX.md)). How it closes is the owner's
       decision, put in the 2026-11-13 entry.)*
-- [ ] Real FP16 dense KV storage meets its threshold (greedy agreement >= 99%, NLL <= 1.005x, Phi-3.5-mini
+- [x] Real FP16 dense KV storage meets its threshold (greedy agreement >= 99%, NLL <= 1.005x, Phi-3.5-mini
       live heap at 2048 tokens <= 0.60x the pre-tier reading).
+      *(Restated 2026-11-18, owner decision 10 (a): live heap <= 0.75x the pre-tier reading and the request's host KV
+      <= 0.35x the pre-tier build's; agreement and NLL unchanged.)*
+      *(Met 2026-11-19, on the restated bars. Phi-3.5-mini, CUDA, 2,048 prompt tokens and 64 generated: host KV
+      830,472,192 bytes against the pre-tier build's 3,221,225,472, **0.258x**, and live heap 4,543.5 MiB against
+      7,103 MiB, **0.640x** ([`20261118T220603Z-host-kv-footprint`](../perf-compare/20261118T220603Z-host-kv-footprint/INDEX.md)).
+      `f16` (IEEE halves) against `f32` (the float32 rows `f16` stored before), CPU backend, the four sweep models: NLL
+      0.99967x to 1.00053x, greedy agreement 99.02% (Qwen2.5-3B, 507 of 512, the smallest passing count) to 99.80%
+      ([`20261119T040705Z-host-kv-half-quality`](../perf-compare/20261119T040705Z-host-kv-half-quality/INDEX.md)).
+      Deterministic and memory readings, not timings, so not pinned.)*
 - [x] Quantized device KV (item 7): `--cache-type-k`/`-v` reach the GPU's KV copy on every handler with
       a GPU attention path, or the handler keeps FP16 and says so at startup; bytes per position, session
       capacity, decode tg and greedy-agreement thresholds met.
@@ -433,14 +454,19 @@ in `models/`.)*
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
       *(2026-11-10: open; the owner's pinned run at tier close. Step 3's unpinned A/B met the CPU bars on every lane, evidence
-      only.)*
+      only.)* *(2026-11-18: item 6's unpinned A/B, against `c607e926` rather than the pre-tier build, met the throughput bars
+      on every lane (pp 0.969x to 1.121x, tg 0.980x to 1.004x) and read allocation per token 0.958x to 1.048x where the
+      reading is stable, no GC pause in a token span
+      ([`20261118T232702Z-host-kv-half-ab`](../perf-compare/20261118T232702Z-host-kv-half-ab/INDEX.md)); evidence only.)*
 - [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
       self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
       *(2026-11-13: item 4's probe is in, `kv-quality.<model>`, with its self-test and `feature:kv-q4-0`, scoring `q8_0` keys with
       `q4_0` values since owner decision (a); item 7's half, item 5's and item 6's are owed with those items.)* *(2026-11-13,
       later: item 7's half is still owed, by the executor: the GPU quality probe and batched equal to single on the device at
       each cache type. The tests it would run in the kit exist (`DeviceKvQuantQualityLiveTest`,
-      `ResidentBatchDecodeTest`'s quantized cases).)*
+      `ResidentBatchDecodeTest`'s quantized cases).)* *(2026-11-18: item 6's probe is in, `gpu.kv-footprint.<model>` (the
+      host KV and live heap of a 2,048-token request with 64 generated, failing if the KV grew past the request's
+      positions), with its self-test (`KvFootprintProbeTest`) and `feature:host-kv-footprint`.)*
 - [ ] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
 - [ ] Perf gate published; `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag pause within budget.
       *(2026-11-10: the `paged_vs_dense%` half read -6.35%, unpinned,
@@ -2788,3 +2814,248 @@ decode on every handler with a decode region once committed.
 **Next for the executor:** item 6 (exact host KV growth, real FP16 host storage, exit criterion 6), then step 7. Item 6
 changes the KV paths, so its A/B and hot-path gate need a baseline build of the tree before it (`git archive` of a commit):
 decision 4 (a) is committed first.
+
+### 2026-11-18, later: item 6 begun; the heap bar measured out of reach of item 6's levers; owner decisions 10 (a), 11 (a), 12 (a)
+
+**Plan against code.** Both of item 6's code claims hold on HEAD `c607e926` (decision 4 (a) committed, the precondition the
+previous entry named): `DenseKvTensor.ensureCapacity` doubles from 64 positions, and the `f16` element type stores `float[]`
+rows (`KvElementType`'s own javadoc says it does not pack halves). Two things the plan did not foresee:
+1. **No handler knows the request's length.** Item 6 says "grow toward the known request length (prompt plus `max_tokens`)".
+   The coordinator knows both; `ForwardRequest`, `InferencePipeline` and the gRPC `ForwardRequest` carry neither, so the
+   length has to be passed down.
+2. **The live-heap bar (<= 0.60x) is out of reach of item 6's levers.** Measured (a scratch probe, not in the tree: the
+   handler on CUDA, the first 2,048 tokens of `model-quality-nll.phi35.ids` prefilled in one window, 64 tokens decoded,
+   the live heap read after two full collections with the session held, 12 GiB heap, G1): the pre-tier build (`e16748ad`,
+   whose production code Tier 03's first commit `9dda5f7d` left unchanged) and HEAD both hold **7,103 MiB** live, 3,446 MiB
+   of it after load. The class histogram at that point: `float[]` 4,086 MB (788.8 MB of it after load: the token embedding
+   and the output projection, two 32,064 x 3,072 float32 host copies; 3,221 MB the KV: 2 x 32 layers x 4,096 positions x
+   3,072 x 4 bytes; about 76 MB window buffers), `byte[]` 2,259 MB (the quantized host weights). G1 counts each 48 MiB KV
+   array in 13 regions of 4 MiB, 3,328 MiB in all. Item 6's levers (exact growth to 2,112 positions, real FP16) leave
+   792 MiB of KV (1,024 MiB in whole regions), so the live heap reads about 4,800 MiB, **0.68x**. The bar was derived
+   (scope item 6) from Tier 01C's figures, KV plus 2.2 GB of weights; the float32 embedding and output copies and the
+   region rounding were not in it, and they are not KV.
+
+*(Decided 2026-11-18 by the owner: 10 (a), 11 (a), 12 (a).)*
+
+**Owner decisions 2026-11-18.**
+- **10 (a):** item 6's heap bar is restated. Scored instead: the host KV a 2,048-token request holds (Phi-3.5-mini, CUDA,
+  2,048 prompt tokens and 64 generated, the handler told the request's length) **<= 0.35x** the pre-tier build's
+  (3,221,225,472 bytes, the 64 arrays above; projected 0.26x), and Phi-3.5-mini's live heap at that request **<= 0.75x**
+  the pre-tier reading (7,103 MiB; projected 0.68x), so it answers a 2,048-token request in the comparison harness's
+  fixed 6 GiB heap (Tier 01C needed 8 GiB). The greedy-agreement and NLL bars are unchanged.
+- **11 (a):** a request-length hint through every stage. The coordinator passes the most positions a request can write
+  (prompt plus `max_tokens`, plus the n-gram lookahead when speculation is on) once per request, after any shared
+  prefix and before the prefill, through the pipeline to every stage handler; remote cluster stages get it as a new
+  optional field of the gRPC `ForwardRequest`. A dense layer grows toward it: doubling as before, but never past it, so a
+  short reply under a large `max_tokens` allocates no more than before; a request that goes past it doubles as before.
+  Paged KV, which grows a page at a time, ignores it.
+- **12 (a):** `f16` stores IEEE halves on every host KV store (dense and paged, so the static and continuous schedules
+  read the same values), and today's float32 storage is kept as an appended type, `f32` (the spellings `f32`, `fp32` and
+  `float` already parse, to the float32 storage they name). The quality test compares `f16` against `f32` in one build.
+  The device copy stays FP16 under `f32`, as it is today under `f16`, and a GPU launch is told so.
+
+**Design choice (the executor's, within the decisions).** FP16 rows are a row codec beside `q8_0` and `q4_0`: two
+little-endian bytes per value in the byte pages every store already keeps for the quantized types, so the dense tensor,
+the paged pool, copy-on-write, context shift, prefix copies, the device-encoded host write (decision 7 (a)) and the
+serialized blocks carry `f16` through the code that carries `q8_0`, and the float pages become `f32`'s. Measured on this
+host before choosing (scratch microbench, a head slice of 64, 96 and 128 values out of 3,072-value rows): half-to-float
+over `byte[]` through a little-endian view runs at the speed of `short[]` (0.99 / 0.38 / 0.28 ns a value against 1.12 /
+0.37 / 0.28), both vectorised by C2 on this F16C host (a long contiguous loop reads 0.24 ns a value). CPU attention then
+reads `f16` rows as it reads `q8_0` rows, decoded a head slice at a time.
+
+### 2026-11-19: item 6 done: `f16` stores halves, `f32` kept, dense KV grows toward the request's length; host KV 0.258x, live heap 0.640x, quality bars met on every sweep model; criterion 6 met, step 6 done
+
+**What changed** (uncommitted on HEAD `c607e926`):
+- `kvcache`: `F16KvCodec` (new): an `f16` row is its values' IEEE half bits, two little-endian bytes, `Float.floatToFloat16`
+  (round to nearest even), read with `float16ToFloat` through a little-endian `byte[]` view; `decodeRange` reads any
+  slice. `KvElementType.F32` appended (ordinal 3; `f32`, `fp32`, `float` parse to it, as they parsed to the float32
+  storage before), `storesFloats()` (only `F32`) and `quantized()`; `F16` takes 2 bytes a value. `KvRowCodec`,
+  `DenseKvTensor`, `KvBlockPool`, `KvPageTable`, `KvRows`, `PagedKvCodec`, `KVBlock` (an untyped block is `f32`, the
+  headerless float32 layout), `CacheTypeOptions` (`usesQuantized` now only `q8_0`/`q4_0`; `usesF32`, `isDefault`):
+  `F16` joins the encoded types' paths everywhere, `F32` takes the float pages. Growth ceiling:
+  `SessionKvTensor.limitGrowth` (dense: doubling capped at the ceiling, past it doubling again; a reused tensor starts
+  without one; paged: no-op), `SessionKvLayout.reserve/forget/newKLayers(id, n)/newVLayers(id, n)` (layers made later
+  take a reservation; new ones start at min(64, positions)), `heapBytes`. `GatherTaxMicrobench` runs on `f32` (its loops
+  read float pages).
+- `node`: `ForwardPassHandler.reserveKv/hostKvBytes` (defaults no-op / 0), implemented by the eight host-KV handler
+  classes (layer creation passes the request id; `evict` forgets an untaken reservation); `InferencePipeline.reserveKv`
+  (default no-op), `LocalInferencePipeline` (each distinct handler once); `EmbeddedNodeServer` applies the gRPC field;
+  CPU attention (`GqaMath`, `GqaVectorHead`, `GqaWindowAttention`) branches on `storesFloats()`, so `f16` rows are
+  decoded a head slice at a time like `q8_0`'s; `DeviceKvFormat.canHold` (never `f32`), `DeviceKvCache.encodedRows`
+  (an FP16 side hands its rows to an `f16` host as stored), `DeviceKvFormats.holds` (FP16 beside `f32` holds),
+  `DeviceKvTypeNotice` (an `f32` side on a GPU launch is told GPU attention reads FP16), `ResidentActivation`, LoRA
+  handlers' warning (`!isDefault()`), `NodeKVCacheAdapter` (`f32` the legacy float layout).
+- `api`: `inference.proto` `ForwardRequest.kv_reserve_positions = 10`.
+- `coordinator`: `GenerationLoop.kvPositions` and the reservation on the single-request path, each static-batch member
+  and a draft model's session; `FaultTolerantPipeline` broadcasts it.
+- `juno-player`: `ProcessPipelineClient`, `TensorParallelPipelineClient` (kept until the request's next forward pass,
+  sent to every node); `ConsoleMain` help. `vision`: `VisionAwareForwardPassHandler` delegates both methods.
+- `juno-kit`: `KvFootprintProbe` + `KvFootprintRunMain` (`gpu.kv-footprint.<model>`), self-test, `coverage.tsv`
+  `feature:host-kv-footprint`, `ProbeMain`.
+- Scripts: `run.sh`, `run.bat`, `compare-llama-cpp.sh` help name `f32`.
+
+**Tests first.** The four `kvcache` tests (`F16KvCodecTest`, `KvElementTypeTest`, `HostKvHalfStorageTest`,
+`KvGrowthCeilingTest`) ran against a skeleton (the `F32` type and the predicates in, `F16` still float rows, the codec and
+the ceiling stubs): 7 of 7, 1 of 5, 6 of 7 and 6 of 10 failed, each on behaviour (the codec unimplemented, `f16` rows four
+bytes wide, growth past the reservation). `HandlerKvReserveTest` and `GenerationLoopKvReserveTest` were written after the
+methods they call existed, so each was shown to fail by planting a defect and restoring the file (`cmp` checked):
+`evict` without `kvLayout.forget` failed 2 of 27; the single-request path without its reservation failed 2 of 3; a
+`decodeRange` offset off by one value from the second slice on failed `F16KvCodecTest` (1 of 7),
+`PagedKvAttentionOracleTest` (36 of 113) and `GqaWindowAttentionTest` (28 of 64). Existing tests that asserted float rows
+under `f16` were moved to `f32` where they test float storage, or to the stored type where they test the code path.
+
+**Suites.** The full unit suite with the GPU groups, every module (`node` 1,738 tests): six failures in `node` and one in
+`juno-kit`, none from item 6's behaviour. `HostKvReuseLiveTest` (3 of 3) counted the reference KV as four bytes a value;
+an `f16` row now holds two, so its 90% bar was out of reach of a correct reuse. It reads `heapBytes()` now and passes on
+TinyLlama, Phi-3.5-mini and Qwen3-1.7B (saved 1.4, 25.2 and 7.3 MB, the real KV). `DeviceUploadOrderingTest` (2 of 4)
+passes 4 of 4 alone (the known upload race). `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`
+fails on `c607e926` too, with the same reading (95,420,416 free bytes against 67,108,864; the GPU also drives the
+desktop), so it predates item 6. `ProbeRunnerTest` refuses to run while other processes use 12% to 14% of the CPU (its own
+guard; the desktop session); `KvFootprintProbeTest` and `CoverageTest` pass beside it.
+
+Cluster tests added after the suite (the gRPC field had no test of its own): `EmbeddedNodeServerKvReserveTest` (node; the
+node gives its handler the reservation before the forward pass that carries it, and only that one) and
+`PipelineClientKvReserveTest` (juno-player; both cluster clients send it to every node with the next pass, once, and an
+evicted request sends none). Both passed on their first run, the code being in place; each was shown to fail by planting
+a defect and restoring the file (`cmp` checked): the node ignoring the field failed 1 of 1, the pipeline client sending
+0 and the tensor-parallel client keeping the reservation after sending it failed 2 of 3. `mvn verify -pl juno-master`
+(stub nodes): 20 of 20, `ThreeNodeClusterIT` and `TensorParallelClusterIT` among them.
+
+**Readings.**
+- Footprint (owner decision 10 (a)), on the pre-tier build `e16748ad`, `c607e926` and this tree
+  ([`20261118T220603Z-host-kv-footprint`](../perf-compare/20261118T220603Z-host-kv-footprint/INDEX.md), memory readings):
+  host KV of the 2,048-token request 830,472,192 bytes against 3,221,225,472, **0.258x** (bar 0.35x); live heap with the
+  request held 4,543.5 MiB against 7,103 MiB, **0.640x** (bar 0.75x). Half floats without the length: 5,567 MiB, 0.784x.
+- Throughput and allocation, unpinned, A (`c607e926`) and B interleaved, each tree's own harness
+  ([`20261118T232702Z-host-kv-half-ab`](../perf-compare/20261118T232702Z-host-kv-half-ab/INDEX.md)): pp B/A 0.970 (CPU
+  TinyLlama), 1.006 (CPU Phi-3.5-mini), 0.990 (GPU TinyLlama), 1.121 (GPU Phi-3.5-mini) at 512 tokens, 0.969 (CPU) and
+  1.020 (GPU) on Phi-3.5-mini at 2,048 with 8 GiB on both; tg 0.980 to 1.004. At the harness's 6 GiB, A runs out of heap
+  on the 2,048-token lane (its calibration request, 2,057 tokens, doubles the float32 KV to 4,096 positions); B answers.
+  Handler allocation per token equal on both builds (CPU TinyLlama 162,920 B, CUDA TinyLlama 376,177 B; CUDA
+  Phi-3.5-mini 0.972x). The harness's CPU TinyLlama decode reads +4.8% allocation per token (inside 1.10x), on the
+  generating thread but outside the handler, not placed. Evidence for the standing gate only; its scored run is the
+  owner's at the tier's close.
+- Hot-path gate (`compare-lora.sh --gpu --skip-build --no-publish` from each tree, same INDEX, section 4): train 0.976x,
+  recall 6 of 6; playback 0.893x (`--reps 3`) and 0.821x (three interleaved single reps), bars 1.25x and 0.80x. All of
+  the playback difference is the request's single 22-token prefill pass and only on `f16`: this tree on `f32`, interleaved,
+  reads 0.984x. The decode passes after it read the same rows doing about as much attention work at the old speed, so
+  the prefill pays the first execution of the `f16` read path in a JVM whose training ran only the float path (in a cold
+  JVM the codec's first round of a 30-token prefill's work takes 31 to 34 ms against 3 ms warm).
+- Quality (decision 12 (a): `f16` against `f32` in one build), `HostKvHalfQualityLiveTest` (node,
+  `-Djuno.test.hostKvHalfQuality=true`), CPU backend so attention reads the host rows, the four sweep models
+  ([`20261119T040705Z-host-kv-half-quality`](../perf-compare/20261119T040705Z-host-kv-half-quality/INDEX.md)): NLL ratio
+  0.99967 (TinyLlama), 1.00053 (Qwen2.5-3B), 0.99983 (Phi-3.5-mini), 0.99980 (Mistral 7B), bar 1.005; greedy agreement
+  510, 507, 510 and 511 of 512 (99.61%, 99.02%, 99.61%, 99.80%), bar 99%; text agreement 99.4% to 100%. 4 of 4 tests
+  pass. Qwen2.5-3B passes at the smallest passing count (one more disagreement reads 98.83%); with `q8_0` the same model
+  read 508 of 512 and NLL 1.00073x on 2026-11-13, so halves move its NLL less than `q8_0` did and the margin is the
+  count's, not the format's. The `f32` NLL equals that run's float32 `f16` reference to five decimals on every model,
+  so `f32` is the storage `f16` had.
+
+**A stale class directory, found and cleared.** Checking the build behind the quality run, `juno-player/target/classes`
+held the two cluster clients as compiled with the last planted defect (the tensor-parallel client's `Map.get` where
+the code has `Map.remove`): the files were restored three seconds after that compile and not compiled again. Nothing
+measured used them: the quality run compiles only `node` and what it depends on, the integration tests finished
+(22:03 local) before any defect was planted, and the shaded jar built then holds the restored code. Re-run on the
+restored sources: `EmbeddedNodeServerKvReserveTest` 1 of 1 and `PipelineClientKvReserveTest` 3 of 3 pass, and both
+client classes now equal the shaded jar's byte for byte.
+
+**Cross-surface (item 6).**
+
+| Surface | Status |
+|---|---|
+| CPU inference | PASS: the oracles over `f16` rows (`PagedKvAttentionOracleTest`, `GqaWindowAttentionTest`), the quality run, the A/B |
+| CUDA | PASS: device KV tests, the footprint readings, the A/B, the LoRA gate; GPU attention reads the device FP16 copy under `f16` and `f32` |
+| ROCm | NEEDS-AMD-HARDWARE: attends on the CPU path, the same code as CPU inference; not run on AMD hardware |
+| Static schedule | PASS: `GenerationLoopKvReserveTest` (single request, each static-batch member, a draft model's session) |
+| Continuous schedule | PASS: paged KV stores halves (`HostKvHalfStorageTest`, the paged oracles); the reservation is a no-op on paged KV (`KvGrowthCeilingTest`) |
+| Single-node local mode | PASS: `LocalInferencePipeline` reserves on each distinct handler once; the A/B readings are local mode (the harness runs the local server); the footprint readings are the handler's, through a probe |
+| Pipeline-parallel cluster | PASS: `PipelineClientKvReserveTest`, `EmbeddedNodeServerKvReserveTest`, `ThreeNodeClusterIT` |
+| Tensor-parallel cluster | PASS: `PipelineClientKvReserveTest`, `TensorParallelClusterIT` |
+| LoRA training | N/A: training keeps its own float KV; a non-default cache type is warned at startup, as before |
+| LoRA playback | PASS: the LoRA gate (train 0.976x, playback 0.821x to 0.893x against 0.80x), recall 6 of 6 |
+| Vision | PASS by delegation: `VisionAwareForwardPassHandler` forwards `reserveKv` and `hostKvBytes` to the wrapped handler |
+| OpenAI and native REST | unchanged surface; requests carry their `max_tokens` into the reservation through `GenerationLoop` |
+| CLI | `f32` in `--help`, `run.sh`, `run.bat` and the comparison harness's help; `f16` documented as IEEE halves |
+| `JunoPlayer` facade | the cache type reaches it through `JUNO_CACHE_TYPE_K/V` and the system properties, as before |
+
+**Out-of-tier changes.** None. The kit probe is the tier's kit-probe rule; the scripts' help names the new type.
+
+**Known failures, not item 6's.** `PrefillReserveDeviceTest` fails the same way on `c607e926` (the GPU also drives the
+desktop, so the free-memory reading is off by the desktop's use). `ProbeRunnerTest` refuses to run under its own CPU
+guard while the desktop session uses 12% to 14% of the CPU. Neither is changed here.
+
+**Decision for the owner (optional).** The first `f16` read in a JVM runs that code before C2 compiles it (about 0.1 s
+once in the LoRA gate's playback; under 2 ms with the classes already loaded). (a) Accept it as a one-time cost
+(recommended: no gate fails, and steady-state decode is unchanged). (b) Warm the `f16` read path once when a handler
+loads (a few milliseconds of load time, and a new code path to keep in step).
+
+**Plan check.** `scripts/performance-tests/check-plan-thresholds.sh`: ok after this entry.
+
+**Step 7, before it starts: plan against code, and decisions raised with the owner.** Nothing saves or restores a session
+today: `KVCacheManager`'s CPU tier keeps `KVBlock`s in memory only, and `juno-api.yaml` names `DELETE /v1/sessions/{id}`
+as a future endpoint. One drift, corrected above with a dated note: item 5's `CHANGELOG.md:1758` pointer. Open before
+any step 7 code:
+- **13. Rotated 4-bit keys (the 2026-11-13 deferral, to revisit before step 7).** (a) Recommended: not now. Saved
+  sessions record their stored type, so rotated keys can come later as a type of their own, which that entry already
+  requires once anything is saved; item 7 gives twice the sessions at `q8_0`, and no target yet needs 0.28x over 0.41x.
+  (b) Take it first, so `q4_0` keys change meaning before any session is saved.
+- **14. The API surface (cross-surface rows 12 and 13).** (a) Recommended: endpoints `POST /v1/sessions/{id}/save` and
+  `POST /v1/sessions/{id}/restore` over the session ids `x_juno_session_id` already names, files only under a directory
+  the server is started with (no client paths), and a server started without one refuses both (HTTP 400). (b)
+  `x_juno_*` fields on the chat request.
+- **15. Cluster (rows 7 and 8).** (a) Recommended: every stage saves its own layers beside a coordinator manifest
+  (tokens, model, shard plan, cache types, format version); restore needs the same shard plan and each node's
+  directory, documented as node-pinned unless the directories are shared. (b) Local mode only; a cluster refuses. (c)
+  KV shipped to the coordinator over gRPC, resumable on any node (largest).
+- **16. CLI (row 14).** (a) Recommended: API only, documented, keeping item 5's narrow scope. (b) REPL commands too.
+The executor's choices within them: restore refuses (never ignores) a different model file, cache type, layer range,
+LoRA adapter or format version; vision sessions are not saved (their KV holds a request's image).
+
+*(2026-11-19, the owner: 13 (a) and 15 (a) decided; 14 and 16 open, details asked for. Later that day: 14 (a) and
+16 (a), after the details below.)*
+
+**Owner decisions 2026-11-19.**
+- **13 (a):** rotated 4-bit keys are not taken now (as decision 3 (a) of 2026-11-15 already had it; 13 asked it again at
+  step 7's start, as the 2026-11-13 deferral said to). The owner asked for them to be planned where they would land:
+  [Tier 07](TIER-07-continuous-batching.md) item 2 carries them as a candidate beside the paged device KV, taken on
+  that item's capacity sweep, as a cache type of their own.
+- **15 (a):** in a cluster every stage saves its own layers beside a coordinator manifest; restore needs the same shard
+  plan and each node's directory, documented as node-pinned unless the directories are shared.
+- **14 (a):** explicit endpoints, keyed by the session id chat requests already carry (`x_juno_session_id`), files
+  only under a directory the server is started with. Asked first how the calls would work and how others do it; the
+  comparison given: a hosted API's prompt cache is automatic and keyed by the prompt's bytes, lives 5 minutes or an
+  hour, and cannot be saved, listed or restored by the client; a self-hosted serving engine saves a server slot (a
+  worker index, not a conversation) to a client-named file in a server directory, with no documented check against
+  the loaded model. Decided shape:
+  - `--session-dir PATH` (`JUNO_SESSION_DIR`); without it both calls answer HTTP 400 naming the flag. Disk is touched
+    only by these calls.
+  - `POST /v1/sessions/{session_id}/save` and `POST /v1/sessions/{session_id}/restore`, each answering the session id,
+    its token count, the bytes written or read and the time taken; `DELETE /v1/sessions/{session_id}` frees the
+    session's memory (the endpoint `juno-api.yaml` names as future). The id is limited to letters, digits, `-`, `_`
+    and `.` (HTTP 400 otherwise); the client never sends a path or a file name.
+  - Saves happen between turns: a session with a request in flight answers HTTP 409. The test list's "save
+    mid-generation" is read as mid-conversation (a reply cut mid-token would also need the sampler's state); told to
+    the owner with this decision.
+  - The file records a format version, the model file's identity, layer range, KV width, cache types and LoRA
+    adapter, then the tokens and each layer's rows as stored; restore refuses any mismatch (HTTP 400), a missing file
+    answers 404, a vision session is not saved (400). A write goes to a temporary file renamed into place. Rows are
+    written by position, so one file restores under either schedule.
+  - After a restore, the next chat turn sends the whole conversation as usual; the restored tokens are the session's
+    prefix entry, so only the new turn is prefilled.
+- **16 (a):** REST only, documented; no REPL command. "CLI" in the question meant Juno's interactive prompt
+  (`./juno local`, `./juno cluster`), not a GitHub tool. The owner states that features are tested on testers'
+  machines through the kit; the kit's save/restore probe (Kit probes above) drives the REST surface in fresh JVMs.
+
+**Where the code meets this (plan against code, for the executor).** Each KV-holding handler keeps a request's
+layers in `kvCacheK`/`kvCacheV` maps (`LlamaTransformerHandler.java:114`). `HandlerKvShare` already does the hard half
+of a restore: it installs host layers under a request id (`shareHost`) and rebuilds that request's device attention
+rows from the host rows (`uploadMirrors`), refusing where the device KV cannot hold the host types' values
+(`HandlerKvShare.supported`); restore takes the same route and the same refusal. The coordinator registers a
+session's prefix with `kvCache.cachePrefix` (`GenerationLoop.java:674`, `ContinuousBatchEngine.java:385`), which a
+restore does with the saved tokens. Cluster stages need a node RPC beside `ForwardPass` in `NodeService`
+(`inference.proto:86`). Routes live in `InferenceApiServer.java:134`.
+
+**Next for the executor:** step 7, disk-backed session save/restore (item 5), on decisions 14 (a), 15 (a) and 16 (a),
+on a commit that holds item 6, so the saved format is the halves `f16` now stores (handoff:
+`docs/infra-plan/PROMPT-session-persistence.md`). The standing gate's scored run stays the owner's
+at the tier's close.

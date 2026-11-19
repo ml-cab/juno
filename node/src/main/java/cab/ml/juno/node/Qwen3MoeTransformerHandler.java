@@ -250,8 +250,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 			int pos = positions[i];
 
 			if (!kvCacheK.containsKey(requestId))
-				kvCacheK.putIfAbsent(requestId, newKLayers(L));
-			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+				kvCacheK.putIfAbsent(requestId, newKLayers(requestId, L));
+			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(k, L));
 			SessionKvTensor[] kCache = kvCacheK.get(requestId);
 			SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
@@ -430,7 +430,18 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 
 	@Override
+	public void reserveKv(String requestId, int positions) {
+		kvLayout.reserve(requestId, positions, kvCacheK.get(requestId), kvCacheV.get(requestId));
+	}
+
+	@Override
+	public long hostKvBytes(String requestId) {
+		return SessionKvLayout.heapBytes(kvCacheK.get(requestId)) + SessionKvLayout.heapBytes(kvCacheV.get(requestId));
+	}
+
+	@Override
 	public void evict(String requestId) {
+		kvLayout.forget(requestId);
 		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
 		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
 		NodeKVCacheAdapter a = kvAdapter;
@@ -485,8 +496,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 
 		if (!kvCacheK.containsKey(requestId))
-			kvCacheK.putIfAbsent(requestId, newKLayers(L));
-		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+			kvCacheK.putIfAbsent(requestId, newKLayers(requestId, L));
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(k, L));
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
 		SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
@@ -594,12 +605,12 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		return LlamaTransformerHandler.matVec(outputProj, xNorm, actualVocab, cfg.hiddenDim());
 	}
 
-	private SessionKvTensor[] newKLayers(int L) {
-		return kvLayout.newKLayers(L);
+	private SessionKvTensor[] newKLayers(String requestId, int L) {
+		return kvLayout.newKLayers(requestId, L);
 	}
 
-	private SessionKvTensor[] newVLayers(int L) {
-		return kvLayout.newVLayers(L);
+	private SessionKvTensor[] newVLayers(String requestId, int L) {
+		return kvLayout.newVLayers(requestId, L);
 	}
 
 	private final class MoeLayerWeights implements Qwen3TransformerHandler.Qwen3AttentionWeights {

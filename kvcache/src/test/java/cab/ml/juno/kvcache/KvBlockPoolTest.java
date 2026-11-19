@@ -23,7 +23,7 @@ class KvBlockPoolTest {
 	@Test
 	@DisplayName("allocate returns distinct ids and free recycles")
 	void allocate_and_free_recycles() {
-		KvBlockPool pool = new KvBlockPool(16, 64, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(16, 64, KvElementType.F32);
 		int a = pool.allocate();
 		int b = pool.allocate();
 		assertThat(a).isNotEqualTo(b);
@@ -40,7 +40,7 @@ class KvBlockPoolTest {
 	@Test
 	@DisplayName("writeToken / readToken roundtrip within a page")
 	void write_read_roundtrip() {
-		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F32);
 		int id = pool.allocate();
 		float[] tok = new float[8];
 		for (int i = 0; i < 8; i++)
@@ -54,7 +54,7 @@ class KvBlockPoolTest {
 	@Test
 	@DisplayName("reject out-of-range slot and double-free")
 	void rejects_bad_ops() {
-		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F32);
 		int id = pool.allocate();
 		float[] tok = new float[8];
 		assertThatThrownBy(() -> pool.writeToken(id, 4, tok))
@@ -65,11 +65,11 @@ class KvBlockPoolTest {
 	}
 
 	@Test
-	@DisplayName("Q8_0 write/read roundtrip and smaller pages than F16")
+	@DisplayName("Q8_0 write/read roundtrip and smaller pages than F32")
 	void q8_roundtrip_and_size() {
 		int kvDim = 256;
 		int pageSize = 8;
-		KvBlockPool f16 = new KvBlockPool(pageSize, kvDim, KvElementType.F16);
+		KvBlockPool f16 = new KvBlockPool(pageSize, kvDim, KvElementType.F32);
 		KvBlockPool q8 = new KvBlockPool(pageSize, kvDim, KvElementType.Q8_0);
 		int id = q8.allocate();
 		float[] tok = new float[kvDim];
@@ -89,7 +89,7 @@ class KvBlockPoolTest {
 	@Test
 	@DisplayName("concurrent allocate/free keeps unique live ids")
 	void concurrent_allocate_free() throws Exception {
-		KvBlockPool pool = new KvBlockPool(8, 16, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(8, 16, KvElementType.F32);
 		int threads = 8;
 		int ops = 200;
 		var exec = Executors.newFixedThreadPool(threads);
@@ -123,7 +123,7 @@ class KvBlockPoolTest {
 	@Test
 	@DisplayName("a retained page stays live until its last reference is freed, then recycles")
 	void retained_page_lives_until_last_free() {
-		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F32);
 		int a = pool.allocate();
 		assertThat(pool.refCount(a)).isEqualTo(1);
 		pool.retain(a);
@@ -179,7 +179,7 @@ class KvBlockPoolTest {
 	@DisplayName("holders of one page making it exclusive at once each end with a page of their own")
 	void concurrent_exclusive_gives_each_holder_its_own_page() throws Exception {
 		int holders = 8;
-		KvBlockPool pool = new KvBlockPool(4, 16, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(4, 16, KvElementType.F32);
 		int shared = pool.allocate();
 		for (int slot = 0; slot < 4; slot++)
 			pool.writeToken(shared, slot, row(slot, 16));
@@ -212,7 +212,7 @@ class KvBlockPoolTest {
 	@Test
 	@DisplayName("concurrent retain and free keep every page's count")
 	void concurrent_retain_and_free_keep_counts() throws Exception {
-		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F16);
+		KvBlockPool pool = new KvBlockPool(4, 8, KvElementType.F32);
 		int pages = 16;
 		int threads = 8;
 		int rounds = 300;

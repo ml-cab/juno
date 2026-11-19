@@ -379,11 +379,12 @@ final class DeviceKvCache implements AutoCloseable {
 
 	/**
 	 * The device address of K rows {@code [startPos, startPos + count)} when they are, byte for
-	 * byte, the rows a host KV tensor of {@code hostType} stores; otherwise {@code null}. A
-	 * quantized side of that type holds the host codec's blocks ({@link DeviceKvFormat}); an
-	 * FP16 side holds the FP16 rounding of the host's FP32 rows, so it never does. Lets a prefill
-	 * window download the rows {@link #writeWindowOnDevice} encoded instead of encoding them again
-	 * on the host ({@link ResidentActivation#materializeToKv}).
+	 * byte, the rows a host KV tensor of {@code hostType} stores; otherwise {@code null}. A side
+	 * stored in that type holds the host codec's rows ({@link DeviceKvFormat}: FP16 halves for
+	 * {@code f16}, blocks for {@code q8_0} and {@code q4_0}); an {@code f32} host holds floats the
+	 * device does not, so it never does. Lets a prefill window download the rows
+	 * {@link #writeWindowOnDevice} encoded instead of encoding them again on the host
+	 * ({@link ResidentActivation#materializeToKv}).
 	 */
 	MemorySegment encodedRowsK(KvElementType hostType, int startPos, int count) {
 		return encodedRows(dK, formats.k(), kRowBytes, hostType, startPos, count);
@@ -401,7 +402,7 @@ final class DeviceKvCache implements AutoCloseable {
 		if (startPos < 0 || count < 1 || startPos + count > capacityTokens)
 			throw new IllegalArgumentException("rows [" + startPos + ", " + (startPos + count) + ") outside [0, "
 					+ capacityTokens + ")");
-		if (!format.quantized() || format.hostType() != hostType)
+		if (format.hostType() != hostType)
 			return null;
 		return d.asSlice(startPos * rowBytes, count * rowBytes);
 	}

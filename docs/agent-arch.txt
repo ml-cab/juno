@@ -2,13 +2,25 @@ Juno multi-module Maven project (JDK 25).
 
 Module dependency (excerpt):
   kvcache — CpuKVCache, GpuKVCache, KVCacheManager, PrefixCache,
-        KvElementType / CacheTypeOptions (--cache-type-k/v f16|q8_0|q4_0; f16 = float32
-        path; a serialized block names its types by ordinal, so a new type is appended),
+        KvElementType / CacheTypeOptions (--cache-type-k/v f16|f32|q8_0|q4_0; f16, the
+        default, stores IEEE halves (F16KvCodec: two little-endian bytes a value, Float.
+        floatToFloat16's round-to-nearest-even, read with float16ToFloat: an FP16 device KV
+        row byte for byte); f32 stores float32 rows (storesFloats(); its pages are float
+        arrays, every other type's encoded bytes); a serialized block names its types by
+        ordinal, so F32 is appended (ordinal 3) and an untyped legacy block is f32+f32),
         Q8_0KvCodec and Q4_0KvCodec (GGUF blocks of 32 values: FP16 scale and 32 int8, 34
         bytes; FP16 scale d = max / -8 and 16 bytes of nibbles, element j low and j + 16
         high, decoded d * (q - 8), 18 bytes), KvRowCodec (row size, encode and decode for
         every type in one place: DenseKvTensor, KvBlockPool, PagedKvCodec and the node
-        adapter go through it), DenseKvTensor (in-process K/V; q8_0/q4_0 pack per token).
+        adapter go through it), DenseKvTensor (in-process K/V; f16/q8_0/q4_0 encode per token).
+        Growth toward the request's length: SessionKvLayout.reserve(requestId, positions, k, v)
+        gives a request's dense layers a ceiling (SessionKvTensor.limitGrowth): capacity
+        doubles from 64 up to it and then grows to it, never past it (past it, as for a
+        request longer than announced, doubling resumes); layers that exist take it at once,
+        layers made later through newKLayers/newVLayers(requestId, n) take it then (new ones
+        start at min(64, positions)); forget(requestId) drops one no layers took; a reused
+        tensor starts without one; paged layers ignore it. SessionKvLayout.heapBytes sums
+        SessionKvTensor.heapBytes (dense: the backing array; paged: its pages, whole).
         KvKeyPrecisionNotice: q4_0 keys lose quality on some models (q4_0 values do not), so
         SessionKvLayout.fromEnv logs a once-per-process WARNING for --cache-type-k q4_0 naming
         the loss and q8_0 keys with q4_0 values; ConsoleMain prints the same line.
@@ -26,8 +38,8 @@ Module dependency (excerpt):
         table's pool pages in table order, which KvPageTable keeps current on every
         page change (append, copy-on-write, sharePrefix, truncate, release); a dense
         tensor's is its backing array as one page (KvRows.ONE_PAGE), repointed when
-        it grows. F16 pages are float arrays (kvDim floats per row; KvBlockPool stores
-        F16 pages as float[]), Q8_0 and Q4_0 pages byte arrays of packed rows, decoded
+        it grows. F32 pages are float arrays (kvDim floats per row; KvBlockPool stores
+        F32 pages as float[]), F16, Q8_0 and Q4_0 pages byte arrays of encoded rows, decoded
         one head's slice at a time inside the attention loop (KvRows.decodeRange, which
         calls the type's decodeRange: the values decode gives, bit for bit). Nothing is gathered into a contiguous workspace and no
         dequantization scratch is allocated; KvPageTable.gather and toFloatArray copy
@@ -377,7 +389,13 @@ Module dependency (excerpt):
               quality text prefilled through forwardBatch on CUDA, one window and 128-token windows,
               f16 then q8_0 device KV, each in its own JVM; per width both sides' ms and the q8_0 median
               over the f16 one, a reading; a run whose GPU attention or device prefill region did not
-              open, or whose device KV notice names other formats, fails), ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
+              open, or whose device KV notice names other formats, fails), KvFootprintProbe +
+              KvFootprintRunMain (gpu.kv-footprint.<model>: one request of the quality text's first 2048
+              tokens and 64 greedy tokens, the handler told its length through reserveKv, on CUDA (or the
+              CPU backend) in a JVM with a 12 GiB maximum heap; readings: the request's host KV
+              (hostKvBytes), bytes per position, and the live heap after load and with the request held,
+              each after full collections; a host KV that is not positions x bytes per position fails),
+              ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
               LoraProbe, VisionProbe, LauncherProbe (also: no [DBG] lines; on Windows nothing
               written to the registry, HKCU\Console's last-write time read through FFM by
               ConsoleRegistryKey), GpuKernelTimingProbe (GpuKernelTimings at a 2048-token window
@@ -613,6 +631,19 @@ Prefix cache and KV ownership: resuming from a trie hit is session-scoped (acros
   GenerationLoop.generateBatch() (static multi-request batching) keys each request's KV by
   its own request id and evicts it on completion, so it never reads or writes the session trie.
 
+KV growth toward a request's length: GenerationLoop calls InferencePipeline.reserveKv(key,
+  kvPositions(prompt, max_tokens)) once per request, after any shared prefix is in place and before
+  the prefill, on the single-request path and for each static-batch member (kvPositions adds the
+  n-gram lookahead when speculation is on; a draft model's session is told too). LocalInferencePipeline
+  passes it to each distinct stage handler (ForwardPassHandler.reserveKv, default no-op; the eight
+  host-KV handlers call SessionKvLayout.reserve; VisionAwareForwardPassHandler delegates);
+  FaultTolerantPipeline broadcasts it; ProcessPipelineClient and TensorParallelPipelineClient keep it
+  until the request's next forward pass, which carries it to every node as ForwardRequest.
+  kv_reserve_positions (inference.proto field 10; 0 = not given), applied by EmbeddedNodeServer before
+  that forward. Handlers' evict forgets a reservation no layers took. ForwardPassHandler.hostKvBytes(id)
+  reports a request's host KV heap bytes (the footprint probe's reading). The continuous schedule's
+  paged KV grows a page at a time and is not told.
+
 Shared prompt prefixes (coordinator SharedPrefixPool, --prefix-cache-tokens / kvcache
   SharedPrefixOptions): when a request finishes (generate, generateBatch, ContinuousBatchEngine
   completeSlot; not after a context shift or cut), its prompt's positions are shared into a pool
@@ -777,13 +808,19 @@ GPU FFI (node module — Panama project, JEP 454):
         with the device formats and bytes per position when the copy holds the types, WARNING
         with the reason (head width, or the quantized attention module not loading) when not.
   DeviceKvFormat / DeviceKvFormats — how one side (K or V) of a device KV is stored, and the
-        pair a handler chose. F16 (2 bytes a value), Q8_0 and Q4_0 (the host codecs' 34- and
-        18-byte blocks, byte for byte, so the device holds the host KV's values). code is
+        pair a handler chose. F16 (2 bytes a value: an f16 host row byte for byte, both rounding to
+        nearest even; it also holds an f32 host side, rounded, since the device stores no float32
+        rows), Q8_0 and Q4_0 (the host codecs' 34- and 18-byte blocks, byte for byte, so the device
+        holds the host KV's values). DeviceKvCache.encodedRows hands a prefill window the device rows
+        whenever the side's format is the host's type (f16 included), so the host tensor takes them
+        as stored (writeEncodedRows) instead of FP32 rows to encode. code is
         kv_format.cuh's number; rowBytes the row stride (the Java side's one place for a row's
         address); pack/unpack the host-staged writes and test reads. canHold needs a head width
         that is a multiple of 32 for the quantized formats (a decode lane reads whole blocks).
         select(types, headDim, kernelLoads) asks for the quantized module only for a quantized
-        type; holds(types) is HandlerKvShare's sharing rule; sessionBytes / sessionsThatFit the
+        type; holds(types) is HandlerKvShare's sharing rule (each side's format is its type, or FP16
+        beside an f32 side); an f32 side gets DeviceKvTypeNotice's startup notice that GPU attention
+        reads it in FP16; sessionBytes / sessionsThatFit the
         capacity arithmetic (DeviceScratchBudget, the capacity reading).
   GpuAttentionMirror — the kernel plus per-request DeviceKvCache mirrors for the Phi-3 and Qwen3
         handlers, at their three attention call sites (prefill window, single-token decode,

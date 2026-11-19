@@ -78,12 +78,14 @@ Features:
 
 - Dense KV under `static`; paged KV (`--kv-page-size`) under `continuous`.
   See `docs/howto.md`.
-- Host KV stored as float32 (`f16`, the default), `q8_0` or `q4_0`
-  (`--cache-type-k` / `--cache-type-v`; about 3.8x and 7.1x smaller); CPU
-  attention reads the packed rows in place. For a 4-bit cache, `q8_0` keys with
-  `q4_0` values keep the quality; 4-bit keys lose it on some models and print a
-  startup warning. GPU attention's device copy of the KV is stored in the same
-  types (FP16 for `f16`), read in place by the attention kernel.
+- Host KV stored as IEEE halves (`f16`, the default), float32 (`f32`), `q8_0`
+  or `q4_0` (`--cache-type-k` / `--cache-type-v`; `q8_0` and `q4_0` about 1.9x
+  and 3.6x smaller than `f16`); CPU attention reads the stored rows in place. For
+  a 4-bit cache, `q8_0` keys with `q4_0` values keep the quality; 4-bit keys lose
+  it on some models and print a startup warning. GPU attention's device copy of
+  the KV is stored in the same types (FP16 for `f16` and `f32`), read in place by
+  the attention kernel. Each request's dense KV grows to its prompt plus
+  `max_tokens` and no further, on every stage of a cluster too.
 
 ### Context shifting
 

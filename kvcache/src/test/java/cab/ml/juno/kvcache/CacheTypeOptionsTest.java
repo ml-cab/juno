@@ -27,7 +27,7 @@ class CacheTypeOptionsTest {
 	@Test
 	void parse_aliases() {
 		assertThat(KvElementType.parse("f16")).isEqualTo(KvElementType.F16);
-		assertThat(KvElementType.parse("F32")).isEqualTo(KvElementType.F16);
+		assertThat(KvElementType.parse("F32")).isEqualTo(KvElementType.F32);
 		assertThat(KvElementType.parse("q8_0")).isEqualTo(KvElementType.Q8_0);
 		assertThat(KvElementType.parse("q4_0")).isEqualTo(KvElementType.Q4_0);
 		assertThat(KvElementType.parse(" Q4 ")).isEqualTo(KvElementType.Q4_0);
@@ -53,7 +53,7 @@ class CacheTypeOptionsTest {
 	void parse_rejects_unknown() {
 		assertThatThrownBy(() -> KvElementType.parse("q4_1"))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("f16|q8_0|q4_0");
+				.hasMessageContaining("f16|f32|q8_0|q4_0");
 	}
 
 	@Test

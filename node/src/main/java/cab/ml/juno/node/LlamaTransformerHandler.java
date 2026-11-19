@@ -1081,7 +1081,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @param requestId the request or session identifier
 	 */
 	@Override
+	public void reserveKv(String requestId, int positions) {
+		kvLayout.reserve(requestId, positions, kvCacheK.get(requestId), kvCacheV.get(requestId));
+	}
+
+	@Override
+	public long hostKvBytes(String requestId) {
+		return SessionKvLayout.heapBytes(kvCacheK.get(requestId)) + SessionKvLayout.heapBytes(kvCacheV.get(requestId));
+	}
+
+	@Override
 	public void evict(String requestId) {
+		kvLayout.forget(requestId);
 		SessionKvTensor[] k = kvCacheK.remove(requestId);
 		SessionKvTensor[] v = kvCacheV.remove(requestId);
 		if (inFlight.idle(requestId)) {
@@ -1589,8 +1600,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			String requestId = requestIds.get(i);
 			int pos = positions[i];
 
-			boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
-			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+			boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(requestId, L)) == null;
+			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(k, L));
 			SessionKvTensor[] kCache = kvCacheK.get(requestId);
 			SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
@@ -1821,8 +1832,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 		int lastPos = startPos + W - 1;
 
-		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
-		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(requestId, L)) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(k, L));
 
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
 		SessionKvTensor[] vCache = kvCacheV.get(requestId);
@@ -2560,8 +2571,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
 
-		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
-		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(requestId, L)) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(k, L));
 
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
 		SessionKvTensor[] vCache = kvCacheV.get(requestId);
@@ -2606,12 +2617,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return x;
 	}
 
-	private SessionKvTensor[] newKLayers(int L) {
-		return kvLayout.newKLayers(L);
+	private SessionKvTensor[] newKLayers(String requestId, int L) {
+		return kvLayout.newKLayers(requestId, L);
 	}
 
-	private SessionKvTensor[] newVLayers(int L) {
-		return kvLayout.newVLayers(L);
+	private SessionKvTensor[] newVLayers(String requestId, int L) {
+		return kvLayout.newVLayers(requestId, L);
 	}
 
 	/**

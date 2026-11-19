@@ -1,5 +1,34 @@
 ## Status 
 
+**Session 151** - The host KV cache stores real half floats and grows only to the request's length
+
+- **`f16` stores IEEE halves.** `--cache-type-k/-v f16`, the default, now stores each key and value as a half float,
+  2 bytes, on the dense and the paged host KV alike (it stored 4-byte floats under that name). The float32 rows stay
+  available as `f32`, whose spellings `f32`, `fp32` and `float` already parsed. CPU attention decodes a head's slice of
+  a half row as it reads it, as it does for `q8_0` and `q4_0`; nothing is copied out. On a GPU launch, GPU attention's
+  device copy already held FP16 rows; they are now the host rows byte for byte, so a prefill window's host KV takes the
+  device's rows as they are, half the bytes over the bus and no float copy. Under `f32` the device copy stays FP16, and
+  the launch says so at startup.
+- **Growth toward the request's length.** The server tells every stage how many positions a request can write (its
+  prompt plus `max_tokens`, plus the speculative lookahead), once per request before its prefill; cluster nodes get it
+  with the request's next forward pass (a new optional field of the gRPC forward request). A dense host KV still
+  doubles from 64 positions, but never past that count, so a 2,048-token prompt with 64 more tokens allocates 2,112
+  positions where it allocated 4,096, and a short reply under a large `max_tokens` allocates no more than before. The
+  continuous schedule's paged KV, which grows a page at a time, is unchanged.
+- **Footprint.** On Phi-3.5-mini (CUDA, 2,048 prompt tokens and 64 generated) the request's host KV is 0.83 GB against
+  3.2 GB (0.258x), and the live heap with the request held is 4,543 MiB against 7,103 MiB (0.640x), so a 2,048-token
+  request fits a 6 GiB heap where it needed 8 GiB. Half floats alone would leave 5,567 MiB.
+- **Quality.** Against `f32` host KV on TinyLlama, Qwen2.5-3B, Phi-3.5-mini and Mistral 7B (CPU attention, a fixed
+  2,048-token text): mean NLL 0.99967x to 1.00053x, and greedy agreement over 512 generated tokens 99.02% to 99.80%.
+- **Speed.** Against the previous build, clocks not pinned (TinyLlama and Phi-3.5-mini, CPU and CUDA): prefill 0.97x to
+  1.12x and decode 0.98x to 1.00x. GPU prefill gains most (1.12x at 512 tokens on Phi-3.5-mini), from the host KV taking
+  the device's rows as they are; CPU prefill at 2,048 tokens reads 0.97x, the cost of decoding half rows in CPU
+  attention. The previous build ran out of heap on a 2,048-token prompt in the comparison's 6 GiB heap. Allocation per
+  token in the handler is unchanged. The first request in a process to read `f16` rows runs that code before it is
+  compiled (about 0.1 s once; a `--lora-play` reply after training shows it).
+- **Hardware validation kit.** `gpu.kv-footprint.<model>` reads the host KV and the live heap of that request on each
+  sweep model, and fails if the KV grew past the request's positions.
+
 **Session 150** - GPU decode: the FFN gate and up projections run as one launch
 
 - **One launch for two projections.** In the GPU decode region, a layer's FFN gate and up projections now run as one

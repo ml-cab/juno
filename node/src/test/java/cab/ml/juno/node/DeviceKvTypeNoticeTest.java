@@ -90,6 +90,19 @@ class DeviceKvTypeNoticeTest {
 	}
 
 	@Test
+	@DisplayName("f32 on a GPU launch: told the device copy holds it in FP16; not told where attention reads the host rows")
+	void f32IsToldTheDeviceKeepsFp16() {
+		CacheTypeOptions f32 = CacheTypeOptions.of(KvElementType.F32, KvElementType.F32);
+		String notice = DeviceKvTypeNotice.consoleNotice("llama", 128, false, false, true, f32);
+		assertThat(notice).contains("cache-type-k=f32").contains("FP16").contains("no float32 rows");
+		assertThat(DeviceKvTypeNotice.consoleNotice("phi3", 96, false, false, true,
+				CacheTypeOptions.of(KvElementType.Q8_0, KvElementType.F32))).contains("f32");
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 128, false, true, false, f32)).as("CPU").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("llama", 128, true, false, true, f32)).as("LoRA").isNull();
+		assertThat(DeviceKvTypeNotice.consoleNotice("phi2", 128, false, false, true, f32)).as("phi2").isNull();
+	}
+
+	@Test
 	@DisplayName("a handler whose device KV keeps FP16 under a quantized type warns once per process; none when it holds the type")
 	void handlerLogsOnce() {
 		Logger log = Logger.getLogger(DeviceKvTypeNotice.class.getName());

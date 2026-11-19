@@ -254,8 +254,9 @@ final class ResidentActivation implements AutoCloseable {
 			copyAsync(staging, device, (long) rows * dim * Float.BYTES, GpuBindings.D2H, rows, materializeSite);
 			return;
 		}
-		if (host.type() == KvElementType.F16)
-			throw new IllegalArgumentException("an f16 host KV tensor holds floats; it takes FP32 rows, not encoded ones");
+		if (host.type().storesFloats())
+			throw new IllegalArgumentException("an " + host.type().cliName()
+					+ " host KV tensor holds floats; it takes FP32 rows, not encoded ones");
 		long n = (long) rows * KvRowCodec.rowBytes(host.type(), dim);
 		if (n > bytes)
 			throw new IllegalArgumentException(rows + " encoded rows of " + dim + " values take " + n

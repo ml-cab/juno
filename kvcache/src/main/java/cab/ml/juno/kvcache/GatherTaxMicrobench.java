@@ -151,9 +151,9 @@ public final class GatherTaxMicrobench {
 	}
 
 	public static Cell measureCell(int ctx, int batch, int pageSize, int warmup, int iters) {
-		DenseKvTensor denseK = new DenseKvTensor(KvElementType.F16, KV_DIM, Math.min(ctx, 64));
-		DenseKvTensor denseV = new DenseKvTensor(KvElementType.F16, KV_DIM, Math.min(ctx, 64));
-		PagedKvArena arena = new PagedKvArena(pageSize, KV_DIM, KvElementType.F16, KvElementType.F16);
+		DenseKvTensor denseK = new DenseKvTensor(KvElementType.F32, KV_DIM, Math.min(ctx, 64));
+		DenseKvTensor denseV = new DenseKvTensor(KvElementType.F32, KV_DIM, Math.min(ctx, 64));
+		PagedKvArena arena = new PagedKvArena(pageSize, KV_DIM, KvElementType.F32, KvElementType.F32);
 		PagedKvTensor pagedK = arena.newK();
 		PagedKvTensor pagedV = arena.newV();
 
@@ -202,7 +202,7 @@ public final class GatherTaxMicrobench {
 	}
 
 	/**
-	 * Grouped-query attention into preallocated buffers over {@code F16} rows read in place, walking the pages as
+	 * Grouped-query attention into preallocated buffers over {@code F32} rows read in place, walking the pages as
 	 * the handlers' serial decode attention does. Kept here so the microbench does not depend on node.
 	 */
 	static void gqaInto(float[] q, KvRows k, KvRows v, int seqLen, float[] out, float[] scores) {
@@ -269,7 +269,7 @@ public final class GatherTaxMicrobench {
 				.append(" kvHeads=").append(NUM_KV_HEADS)
 				.append(" headDim=").append(HEAD_DIM)
 				.append(" kvDim=").append(KV_DIM).append(".\n");
-		sb.append("Attention reads both layouts in place: dense F16 rows as one page, paged rows page by page.\n");
+		sb.append("Attention reads both layouts in place: dense F32 rows as one page, paged rows page by page.\n");
 		sb.append("gather_ms is zero by construction (nothing is gathered).\n");
 		sb.append("Gate: paged_vs_dense <= ").append((int) GATE_MAX_PAGED_OVER_DENSE_PCT)
 				.append("% at batch ").append(GATE_BATCH)

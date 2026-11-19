@@ -221,6 +221,21 @@ public final class FaultTolerantPipeline implements InferencePipeline {
 		}
 	}
 
+	/**
+	 * Broadcasts to every node's pipeline, as {@link #evict} does: any of them may serve the request. Best-effort: a
+	 * node that cannot take it keeps doubling its dense KV, which costs memory and never a reply.
+	 */
+	@Override
+	public void reserveKv(String requestId, int positions) {
+		for (NodePipeline node : nodes) {
+			try {
+				node.pipeline().reserveKv(requestId, positions);
+			} catch (Exception e) {
+				log.warning("reserveKv() failed on node " + node.nodeId() + ": " + e.getMessage());
+			}
+		}
+	}
+
 	// ── Health event hooks ────────────────────────────────────────────────────
 
 	/**

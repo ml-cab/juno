@@ -40,8 +40,9 @@ import jdk.incubator.vector.VectorSpecies;
  * pages too. An accumulator is only ever the argument of a lane operation ({@code o0 = term.add(o0)}) and its lanes
  * are read through {@code zero(F).add(o0)}: C2 types a vector carried round a loop inexactly, and a call on one can
  * be bound through the JDK's shared type profile and boxed. Float addition commutes, and an accumulator that starts
- * at zero never holds -0, so both forms give the bits of {@code o0.add(term)}. A quantized key slice is decoded
- * into a per-thread row and scored as one row; quantized value slices are added by the serial loop, whose sums are
+ * at zero never holds -0, so both forms give the bits of {@code o0.add(term)}. An encoded key slice ({@code f16},
+ * {@code q8_0} or {@code q4_0} rows) is decoded into a per-thread row and scored as one row; encoded value slices are
+ * added by the serial loop, whose sums are
  * the register blocks' bit for bit.
  *
  * <p>Loading this class needs {@code jdk.incubator.vector}; {@link GqaMath} calls it only when
@@ -70,7 +71,7 @@ final class GqaVectorHead {
 	static void scoreKeys(float[] q, int qBase, KvRows k, int kBase, int lo, int seqLen, int headDim, int kvDim,
 			float scale, float[] scores) {
 		int perK = k.rowsPerPage();
-		if (k.type() == KvElementType.F16) {
+		if (k.type().storesFloats()) {
 			for (int t = lo; t < seqLen;) {
 				int page = t / perK;
 				int slot = t - page * perK;
@@ -101,7 +102,7 @@ final class GqaVectorHead {
 	 */
 	static void addValues(KvRows v, int kBase, int lo, int seqLen, float[] out, int outBase, int headDim, int kvDim,
 			float[] scores) {
-		if (v.type() != KvElementType.F16) {
+		if (!v.type().storesFloats()) {
 			Arrays.fill(out, outBase, outBase + headDim, 0f);
 			GqaMath.addValues(v, kBase, lo, seqLen, out, outBase, headDim, kvDim, scores);
 			return;

@@ -15,7 +15,9 @@
  */
 package cab.ml.juno.kvcache;
 
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Dual KV path selector for transformer handlers.
@@ -34,6 +36,8 @@ public final class SessionKvLayout {
 	/** Released dense layers kept for the next request (static schedule); unused when paged. */
 	private final DenseKvRecycler retiredK = new DenseKvRecycler();
 	private final DenseKvRecycler retiredV = new DenseKvRecycler();
+	/** {@link #reserve}d positions of requests whose layers are not made yet, taken by {@link #newVLayers(String, int)}. */
+	private final Map<String, Integer> reserved = new ConcurrentHashMap<>();
 
 	private SessionKvLayout(ServeScheduleOptions schedule, KvPageSizeOptions pageSize,
 			CacheTypeOptions cacheTypes, int kvDim, PagedKvArena arena) {
@@ -116,6 +120,65 @@ public final class SessionKvLayout {
 		return reused != null ? reused : DenseKvTensor.layers(layerCount, cacheTypes.typeK(), kvDim);
 	}
 
+	/**
+	 * {@link #newKLayers(int)} for {@code requestId}: layers that grow toward the positions {@link #reserve} gave it,
+	 * if it gave any. Make the K layers first, then the V layers, which take the reservation.
+	 */
+	public SessionKvTensor[] newKLayers(String requestId, int layerCount) {
+		Integer positions = requestId == null ? null : reserved.get(requestId);
+		return limited(layers(layerCount, retiredK, cacheTypes.typeK(), positions), positions);
+	}
+
+	/** As {@link #newKLayers(String, int)}, for V; the reservation is used up. */
+	public SessionKvTensor[] newVLayers(String requestId, int layerCount) {
+		Integer positions = requestId == null ? null : reserved.remove(requestId);
+		return limited(layers(layerCount, retiredV, cacheTypes.typeV(), positions), positions);
+	}
+
+	/** Paged layers, a released request's dense layers, or new ones, starting no larger than {@code positions}. */
+	private SessionKvTensor[] layers(int layerCount, DenseKvRecycler recycler, KvElementType type, Integer positions) {
+		if (usesPaged())
+			return recycler == retiredK ? arenaOrThrow().newKLayers(layerCount) : arenaOrThrow().newVLayers(layerCount);
+		SessionKvTensor[] reused = recycler.take(layerCount, type);
+		if (reused != null)
+			return reused;
+		int initial = positions == null ? DenseKvTensor.INITIAL_SEQ_CAPACITY
+				: Math.min(DenseKvTensor.INITIAL_SEQ_CAPACITY, positions);
+		return DenseKvTensor.layers(layerCount, type, kvDim, initial);
+	}
+
+	/**
+	 * The most positions {@code requestId} can write ({@code positions}: its prompt plus the tokens it may generate),
+	 * so that its dense layers grow toward that count instead of doubling past it ({@link SessionKvTensor#limitGrowth}).
+	 * Layers it already has ({@code k}, {@code v}; either may be null) take it now; layers made for it later, through
+	 * {@link #newKLayers(String, int)} and {@link #newVLayers(String, int)}, take it then. Paged layers ignore it.
+	 */
+	public void reserve(String requestId, int positions, SessionKvTensor[] k, SessionKvTensor[] v) {
+		if (requestId == null)
+			throw new IllegalArgumentException("requestId must not be null");
+		if (positions < 1)
+			throw new IllegalArgumentException("positions must be >= 1 (got " + positions + ")");
+		limited(k, positions);
+		limited(v, positions);
+		if (k == null || v == null)
+			reserved.put(requestId, positions);
+		else
+			reserved.remove(requestId);
+	}
+
+	/** Drops a reservation no layers took (the request ended first). */
+	public void forget(String requestId) {
+		if (requestId != null)
+			reserved.remove(requestId);
+	}
+
+	private static SessionKvTensor[] limited(SessionKvTensor[] layers, Integer positions) {
+		if (layers != null && positions != null)
+			for (SessionKvTensor t : layers)
+				t.limitGrowth(positions);
+		return layers;
+	}
+
 	/** As {@link #newKLayers}, for V. */
 	public SessionKvTensor[] newVLayers(int layerCount) {
 		if (usesPaged())
@@ -190,6 +253,15 @@ public final class SessionKvLayout {
 		if (t instanceof DenseKvTensor d)
 			return d.writtenTokens();
 		return 0;
+	}
+
+	/** Heap bytes of a request's layers ({@link SessionKvTensor#heapBytes}); 0 for null. */
+	public static long heapBytes(SessionKvTensor[] layers) {
+		long sum = 0;
+		if (layers != null)
+			for (SessionKvTensor t : layers)
+				sum += t.heapBytes();
+		return sum;
 	}
 
 	public static void releaseLayers(SessionKvTensor[] layers) {

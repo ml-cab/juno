@@ -360,6 +360,21 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * The most positions request {@code requestId} can write (its prompt plus the tokens it may generate), given once
+	 * per request before its prefill and again on a later turn of a session: a dense host KV grows toward it instead
+	 * of doubling past it. Paged host KV, which grows a page at a time, is unaffected.
+	 *
+	 * <p><b>Correctness-preserving default</b>: no-op, for a handler that keeps no host KV; a wrapper passes it on.
+	 */
+	default void reserveKv(String requestId, int positions) {
+	}
+
+	/** Heap bytes this handler's host KV holds for {@code requestId}, K and V; 0 when it holds none. */
+	default long hostKvBytes(String requestId) {
+		return 0;
+	}
+
+	/**
 	 * Starts {@code toId}'s KV from positions {@code [0, len)} of {@code fromId}'s, as if {@code toId} had computed
 	 * them itself, so its prefill can begin at {@code len}. Whatever {@code toId} held before is released. Returns
 	 * false, changing nothing, where this handler cannot: the caller then prefills {@code toId} in full.

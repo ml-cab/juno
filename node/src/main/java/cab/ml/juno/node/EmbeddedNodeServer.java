@@ -265,6 +265,8 @@ public final class EmbeddedNodeServer {
 							request.getSequencePos());
 				}
 
+				if (request.getKvReservePositions() > 0)
+					handler.reserveKv(request.getRequestId(), request.getKvReservePositions());
 				ForwardResult result = handler.forward(nodeReq, context);
 
 				// ── Encode outgoing activation ──────────────────────────────

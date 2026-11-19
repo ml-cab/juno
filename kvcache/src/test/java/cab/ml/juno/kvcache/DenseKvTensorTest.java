@@ -25,9 +25,9 @@ import org.junit.jupiter.api.Test;
 class DenseKvTensorTest {
 
 	@Test
-	@DisplayName("F16 write is bit-identical in the attention rows, which are the backing array")
-	void f16_bit_identical() {
-		DenseKvTensor t = new DenseKvTensor(KvElementType.F16, 8);
+	@DisplayName("F32 write is bit-identical in the attention rows, which are the backing array")
+	void f32_bit_identical() {
+		DenseKvTensor t = new DenseKvTensor(KvElementType.F32, 8);
 		float[] tok = { 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f };
 		t.writeToken(0, tok);
 		float[] view = t.attentionRows(1).floatPage(0);
@@ -36,11 +36,11 @@ class DenseKvTensorTest {
 	}
 
 	@Test
-	@DisplayName("Q8_0 uses less persistent memory than F16 and roundtrips")
+	@DisplayName("Q8_0 uses less persistent memory than F32 and roundtrips")
 	void q8_smaller_and_roundtrips() {
 		int kvDim = 256;
 		int tokens = 128;
-		DenseKvTensor f16 = new DenseKvTensor(KvElementType.F16, kvDim, tokens);
+		DenseKvTensor f16 = new DenseKvTensor(KvElementType.F32, kvDim, tokens);
 		DenseKvTensor q8 = new DenseKvTensor(KvElementType.Q8_0, kvDim, tokens);
 		assertThat(q8.allocatedBytes() * 2L).isLessThanOrEqualTo(f16.allocatedBytes());
 
@@ -54,11 +54,11 @@ class DenseKvTensorTest {
 	}
 
 	@Test
-	@DisplayName("Q4_0 uses about a seventh of F16's persistent memory and roundtrips within one step")
+	@DisplayName("Q4_0 uses about a seventh of F32's persistent memory and roundtrips within one step")
 	void q4_smaller_and_roundtrips() {
 		int kvDim = 256;
 		int tokens = 128;
-		DenseKvTensor f16 = new DenseKvTensor(KvElementType.F16, kvDim, tokens);
+		DenseKvTensor f16 = new DenseKvTensor(KvElementType.F32, kvDim, tokens);
 		DenseKvTensor q4 = new DenseKvTensor(KvElementType.Q4_0, kvDim, tokens);
 		assertThat(q4.allocatedBytes()).isEqualTo(tokens * Q4_0KvCodec.encodedBytes(kvDim));
 		assertThat(q4.allocatedBytes() * 7L).isLessThanOrEqualTo(f16.allocatedBytes());

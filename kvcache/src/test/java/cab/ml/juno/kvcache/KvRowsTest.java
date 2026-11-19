@@ -168,7 +168,7 @@ class KvRowsTest {
 	@Test
 	@DisplayName("the view's length is checked against the rows written")
 	void lengthIsChecked() {
-		PagedKvTensor t = new PagedKvTensor(new KvBlockPool(4, KV_DIM, KvElementType.F16));
+		PagedKvTensor t = new PagedKvTensor(new KvBlockPool(4, KV_DIM, KvElementType.F32));
 		t.writeToken(0, new float[KV_DIM]);
 		assertThatThrownBy(() -> t.attentionRows(2)).isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> t.attentionRows(0)).isInstanceOf(IllegalArgumentException.class);
@@ -181,7 +181,7 @@ class KvRowsTest {
 		for (int i = 0; i < flat.length; i++)
 			flat[i] = i;
 		KvRows rows = KvRows.of(flat, KV_DIM);
-		assertThat(rows.type()).isEqualTo(KvElementType.F16);
+		assertThat(rows.type()).isEqualTo(KvElementType.F32);
 		assertThat(rows.rowsPerPage()).isEqualTo(KvRows.ONE_PAGE);
 		assertThat(rows.floatPage(0)).isSameAs(flat);
 	}
@@ -204,7 +204,7 @@ class KvRowsTest {
 		int page = t / rows.rowsPerPage();
 		int slot = t - page * rows.rowsPerPage();
 		float[] out = new float[KV_DIM];
-		if (rows.type() == KvElementType.F16)
+		if (rows.type().storesFloats())
 			System.arraycopy(rows.floatPage(page), slot * KV_DIM, out, 0, KV_DIM);
 		else
 			rows.decodeRange(rows.bytePage(page), slot * rows.bytesPerRow(), 0, KV_DIM, out, 0);
@@ -212,7 +212,7 @@ class KvRowsTest {
 	}
 
 	private static boolean samePage(KvRows a, KvRows b, int page) {
-		return a.type() == KvElementType.F16 ? a.floatPage(page) == b.floatPage(page)
+		return a.type().storesFloats() ? a.floatPage(page) == b.floatPage(page)
 				: a.bytePage(page) == b.bytePage(page);
 	}
 

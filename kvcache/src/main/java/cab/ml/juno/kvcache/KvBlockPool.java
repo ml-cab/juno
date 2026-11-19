@@ -27,9 +27,8 @@ import java.util.List;
  * Shared pool of fixed-size KV pages (token slots × {@code kvDim}).
  *
  * <p>Used by the continuous-schedule paged KV path. A page is a float array of
- * {@code kvDim} floats per row for {@link KvElementType#F16} (the current float
- * path) or a byte array of packed rows for {@link KvElementType#Q8_0} and {@link KvElementType#Q4_0}
- * ({@link KvRowCodec}).
+ * {@code kvDim} floats per row for {@link KvElementType#F32} or a byte array of encoded rows for
+ * {@link KvElementType#F16}, {@link KvElementType#Q8_0} and {@link KvElementType#Q4_0} ({@link KvRowCodec}).
  * Attention reads the pages in place ({@link KvRows}), through
  * {@link #floatPage} and {@link #bytePage}.
  *
@@ -60,9 +59,9 @@ public final class KvBlockPool {
 	private final int bytesPerPage;
 
 	private final Object lock = new Object();
-	/** F16 pages, else null. */
+	/** F32 pages, else null. */
 	private final List<float[]> floatPages;
-	/** Q8_0 pages, else null. */
+	/** Encoded pages (F16, Q8_0, Q4_0), else null. */
 	private final List<byte[]> bytePages;
 	/** Holders per page; 0 means free. Indexed by block id, grown with {@link #pages}. */
 	private int[] refs = new int[16];
@@ -90,8 +89,8 @@ public final class KvBlockPool {
 		this.type = type;
 		this.bytesPerToken = KvRowCodec.rowBytes(type, kvDim);
 		this.bytesPerPage = pageSize * bytesPerToken;
-		this.floatPages = type == KvElementType.F16 ? new ArrayList<>() : null;
-		this.bytePages = type == KvElementType.F16 ? null : new ArrayList<>();
+		this.floatPages = type.storesFloats() ? new ArrayList<>() : null;
+		this.bytePages = type.storesFloats() ? null : new ArrayList<>();
 	}
 
 	public int pageSize() {
@@ -266,7 +265,7 @@ public final class KvBlockPool {
 	}
 
 	/**
-	 * The live {@code F16} page {@code blockId} itself: {@code kvDim} floats per row. The caller reads it while it
+	 * The live {@code F32} page {@code blockId} itself: {@code kvDim} floats per row. The caller reads it while it
 	 * holds the page (never across its {@link #free}) and writes it only through {@link #writeToken}.
 	 */
 	float[] floatPage(int blockId) {
@@ -276,7 +275,7 @@ public final class KvBlockPool {
 		}
 	}
 
-	/** As {@link #floatPage}, for a {@code Q8_0} pool's page: {@link #bytesPerToken} bytes per row. */
+	/** As {@link #floatPage}, for an encoded pool's page: {@link #bytesPerToken} bytes per row. */
 	byte[] bytePage(int blockId) {
 		synchronized (lock) {
 			checkLive(blockId);
@@ -285,8 +284,8 @@ public final class KvBlockPool {
 	}
 
 	/**
-	 * A copy of page {@code blockId}'s stored bytes: float32 little-endian rows for {@code F16}, packed rows for
-	 * {@code Q8_0}. For tests that compare page contents.
+	 * A copy of page {@code blockId}'s stored bytes: float32 little-endian rows for {@code F32}, encoded rows
+	 * otherwise. For tests that compare page contents.
 	 */
 	byte[] pageBytes(int blockId) {
 		synchronized (lock) {
@@ -327,11 +326,11 @@ public final class KvBlockPool {
 	 * Copies {@code count} stored rows ({@link #bytesPerToken} bytes each, already in this pool's blocks) from
 	 * {@code src} at byte offset {@code srcOffset} into slots {@code [slot, slot + count)} of page {@code blockId}.
 	 *
-	 * @throws IllegalArgumentException for an {@code F16} pool, whose rows are floats, not blocks
+	 * @throws IllegalArgumentException for an {@code F32} pool, whose rows are floats, not encoded
 	 */
 	public void writeEncodedRows(int blockId, int slot, int count, MemorySegment src, long srcOffset) {
 		if (bytePages == null)
-			throw new IllegalArgumentException("f16 rows are stored as floats, not encoded");
+			throw new IllegalArgumentException(type.cliName() + " rows are stored as floats, not encoded");
 		if (slot < 0 || count < 1 || slot + count > pageSize)
 			throw new IllegalArgumentException("slots [" + slot + ", " + (slot + count) + ") outside a page of "
 					+ pageSize);

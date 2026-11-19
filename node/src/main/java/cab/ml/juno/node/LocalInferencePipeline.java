@@ -156,6 +156,15 @@ public final class LocalInferencePipeline implements InferencePipeline {
 			stage.handler().evict(requestId);
 	}
 
+	/** Every distinct handler once: a handler serving several stages holds all their layers under one id. */
+	@Override
+	public void reserveKv(String requestId, int positions) {
+		Set<ForwardPassHandler> done = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (NodeStage stage : stages)
+			if (done.add(stage.handler()))
+				stage.handler().reserveKv(requestId, positions);
+	}
+
 	/**
 	 * Shares on every distinct handler once (a handler serving several stages holds all their layers under one id).
 	 * If one cannot, {@code toId} is evicted everywhere, so no stage keeps a prefix the others lack.
