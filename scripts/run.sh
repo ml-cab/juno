@@ -238,6 +238,7 @@ cmd_cluster() {
   local schedule="${JUNO_SCHEDULE:-}"
   local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
   local prefix_cache_tokens="${JUNO_PREFIX_CACHE_TOKENS:-}"
+  local session_dir="${JUNO_SESSION_DIR:-}"
   local grammar_file="${JUNO_GRAMMAR_FILE:-}"
   local json_schema_file="${JUNO_JSON_SCHEMA_FILE:-}"
   local use_gpu="true"
@@ -283,6 +284,7 @@ cmd_cluster() {
       --schedule)         schedule="$2";     shift 2 ;;
       --kv-page-size)     kv_page_size="$2"; shift 2 ;;
       --prefix-cache-tokens) prefix_cache_tokens="$2"; shift 2 ;;
+      --session-dir)         session_dir="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -335,6 +337,8 @@ cmd_cluster() {
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
         echo "    --prefix-cache-tokens N    prompt positions kept for shared prefixes (default: context; 0 = off)"
+        echo "    --session-dir PATH         directory for REST session saves and restores (POST /v1/sessions/{id}/save,"
+        echo "                               /restore); without it both answer 400"
         echo "    --prefill-batch N          max prompt tokens per prefill window (default 32)"
         echo ""
         echo "  Backend:"
@@ -477,6 +481,7 @@ cmd_cluster() {
     ${schedule_arg} \
     ${kv_page_size_arg} \
     ${prefix_cache_tokens_arg} \
+    ${session_dir:+--session-dir "$session_dir"} \
     ${grammar_file_arg} \
     ${json_schema_file_arg} \
     ${health_flag} \
@@ -521,6 +526,7 @@ cmd_local() {
   local schedule="${JUNO_SCHEDULE:-}"
   local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
   local prefix_cache_tokens="${JUNO_PREFIX_CACHE_TOKENS:-}"
+  local session_dir="${JUNO_SESSION_DIR:-}"
   local prefill_batch="${JUNO_PREFILL_BATCH:-}"
   local spec_type="${JUNO_SPEC_TYPE:-}"
   local context_shift="${JUNO_CONTEXT_SHIFT:-}"
@@ -577,6 +583,7 @@ cmd_local() {
       --schedule)         schedule="$2";     shift 2 ;;
       --kv-page-size)     kv_page_size="$2"; shift 2 ;;
       --prefix-cache-tokens) prefix_cache_tokens="$2"; shift 2 ;;
+      --session-dir)         session_dir="$2"; shift 2 ;;
       --prefill-batch)    prefill_batch="$2"; shift 2 ;;
       --spec-type)        spec_type="$2";     shift 2 ;;
       --context-shift)    context_shift="$2"; shift 2 ;;
@@ -640,6 +647,8 @@ cmd_local() {
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
         echo "    --prefix-cache-tokens N    prompt positions kept for shared prefixes (default: context; 0 = off)"
+        echo "    --session-dir PATH         directory for REST session saves and restores (POST /v1/sessions/{id}/save,"
+        echo "                               /restore); without it both answer 400"
         echo "    --prefill-batch N          max prompt tokens per prefill window (default: sized to"
         echo "                               the whole prompt on GPU with --schedule static; 32 otherwise)"
         echo "    --context-shift on|off     when a request fills the context, drop the oldest tokens after"
@@ -810,6 +819,7 @@ cmd_local() {
     ${schedule_arg} \
     ${kv_page_size_arg} \
     ${prefix_cache_tokens_arg} \
+    ${session_dir:+--session-dir "$session_dir"} \
     ${prefill_batch_arg} \
     ${spec_type_arg} \
     ${context_shift_arg} \

@@ -30,6 +30,8 @@ import java.util.logging.Logger;
 import cab.ml.juno.api.grpc.ActivationDtype;
 import cab.ml.juno.api.grpc.ForwardResponse;
 import cab.ml.juno.api.grpc.LoadShardRequest;
+import cab.ml.juno.api.grpc.SessionKvRequest;
+import cab.ml.juno.api.grpc.SessionKvResponse;
 import cab.ml.juno.api.grpc.LoadShardResponse;
 import cab.ml.juno.api.grpc.NodeServiceGrpc;
 import cab.ml.juno.api.grpc.NodeStatusRequest;
@@ -215,6 +217,9 @@ public final class EmbeddedNodeServer {
 		private final String loraPlayPath; // null = no LoRA adapter overlay at inference
 		private volatile ForwardPassHandler handler;
 		private volatile ShardContext context;
+		/** The loaded shard's tensor-parallel rank and world size (1 in pipeline mode), for its session file label. */
+		private volatile int tensorRank;
+		private volatile int tensorWorldSize = 1;
 		private volatile GpuContext gpuContext; // non-null only when handler is GPU
 		@SuppressWarnings("unused")
 		private volatile KVCacheManager kvCache;
@@ -296,11 +301,73 @@ public final class EmbeddedNodeServer {
 			}
 		}
 
+		/** This node's label in its session files: its layer range, and its rank on a tensor-parallel node. */
+		String sessionStage() {
+			ShardContext c = context;
+			String label = "layers-" + c.startLayer() + "-" + c.endLayer();
+			return tensorWorldSize > 1 ? label + "-rank-" + tensorRank + "-of-" + tensorWorldSize : label;
+		}
+
+		@Override
+		public void saveSessionKv(SessionKvRequest request, StreamObserver<SessionKvResponse> responseObserver) {
+			sessionCall(request, responseObserver, true);
+		}
+
+		@Override
+		public void restoreSessionKv(SessionKvRequest request, StreamObserver<SessionKvResponse> responseObserver) {
+			sessionCall(request, responseObserver, false);
+		}
+
+		@Override
+		public void dropSessionKv(SessionKvRequest request, StreamObserver<SessionKvResponse> responseObserver) {
+			handler.evict(request.getSessionId());
+			responseObserver.onNext(SessionKvResponse.newBuilder().setStage(sessionStage()).build());
+			responseObserver.onCompleted();
+		}
+
+		/** Writes or reads this node's file under its own session directory; a refusal travels as reason and message. */
+		private void sessionCall(SessionKvRequest request, StreamObserver<SessionKvResponse> responseObserver,
+				boolean save) {
+			String stage = sessionStage();
+			SessionKvResponse.Builder out = SessionKvResponse.newBuilder().setStage(stage);
+			try {
+				java.nio.file.Path dir = cab.ml.juno.kvcache.SessionDirOptions.fromEnv()
+						.orElseThrow(() -> new cab.ml.juno.kvcache.KvSessionFileException(
+								cab.ml.juno.kvcache.KvSessionFileException.Reason.UNSUPPORTED,
+								"node " + nodeId + " has no session directory (set "
+										+ cab.ml.juno.kvcache.SessionDirOptions.ENV + ")"));
+				int[] tokens = request.getTokensList().stream().mapToInt(Integer::intValue).toArray();
+				cab.ml.juno.kvcache.KvSessionStamp stamp = new cab.ml.juno.kvcache.KvSessionStamp(request.getModel(),
+						request.getAdapter(), stage, tokens);
+				String name = SessionKvPart.fileName(request.getSessionId(), stage);
+				java.nio.file.Path file = dir.resolve(name);
+				long bytes;
+				if (save) {
+					java.nio.file.Files.createDirectories(dir);
+					bytes = handler.saveKv(request.getSessionId(), stamp, file);
+				} else {
+					bytes = handler.restoreKv(request.getSessionId(), stamp, file);
+				}
+				out.setFile(name).setBytes(bytes);
+			} catch (cab.ml.juno.kvcache.KvSessionFileException e) {
+				out.setErrorReason(e.reason().name()).setError(e.getMessage());
+			} catch (java.io.IOException | RuntimeException e) {
+				log.log(java.util.logging.Level.WARNING, "Node [" + nodeId + "] session KV " + (save ? "save" : "restore")
+						+ " failed for " + request.getSessionId(), e);
+				out.setErrorReason(e instanceof java.io.IOException ? "IO" : "INTERNAL")
+						.setError("node " + nodeId + ": " + (e.getMessage() != null ? e.getMessage() : e.getClass().getName()));
+			}
+			responseObserver.onNext(out.build());
+			responseObserver.onCompleted();
+		}
+
 		@Override
 		public void loadShard(LoadShardRequest request, StreamObserver<LoadShardResponse> responseObserver) {
 			ShardAssignment assignment = new ShardAssignment(nodeId, "localhost", 0, request.getStartLayer(),
 					request.getEndLayer(), request.getHasEmbeddings(), request.getHasOutputProjection());
 			ShardContext newCtx = ShardContext.from(assignment, VOCAB_SIZE, HIDDEN_DIM, NUM_HEADS);
+			tensorRank = request.getTensorRank();
+			tensorWorldSize = Math.max(1, request.getTensorWorldSize());
 
 			String msg;
 			if (modelPath != null) {

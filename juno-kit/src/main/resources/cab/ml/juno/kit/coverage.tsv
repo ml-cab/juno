@@ -40,6 +40,7 @@ script:compare-vision.sh	Vision latency and decode	vision.moondream2, gpu.vision
 script:smoke-consistency.sh	Batched equals single requests	consistency.tinyllama, gpu.consistency.tinyllama
 script:smoke-context-policy.sh	Context policy	context-policy.*, gpu.context-policy.*
 script:smoke-cpu-hot-path.sh	CPU hot path	cpu.hot-path.*
+script:smoke-kv-cache.sh	KV cache: shared prompts, page reclaim, session save and restore across a restart	consistency.tinyllama, schedule.tinyllama, session.save-restore.*, gpu.session.save-restore.*
 script:smoke-cpu-kernels.sh	CPU kernels against the previous build	cpu.hot-path.*	the two-build comparison is ingest's comparison of the recorded replies with the reference run's
 script:smoke-gpu-residency.sh	GPU residency	gpu.residency.tinyllama
 script:smoke-grammar.sh	Constrained decoding	grammar.tinyllama
@@ -74,3 +75,4 @@ feature:gpu-kernel-watchdog	The longest single GPU kernels at the sweep models' 
 feature:line-endings	Text reads the same on every OS: LF checkouts of fixtures, the quality text and the PTX; CR LF grammar and training files	cpu.unit-tests, quality.*	.gitattributes checks text out with LF on every OS and batch files with CR LF; the unit tests read CR LF grammar and training files as LF ones; the quality probes score the text as checked out
 feature:local-cluster-lifecycle	A local cluster's forked nodes listen on loopback and stop through their shutdown hooks	cpu.unit-tests, cpu.live.*, gpu.live.*	the unit tests fork a node and stop it by closing its standard input; the live checks run local clusters end to end
 feature:windows-launcher-parity	juno.bat and scripts/run.bat take every subcommand, flag and environment override run.sh takes and pass the same options on	cpu.unit-tests, launcher.tinyllama	the unit tests read both scripts and compare them, and hold the batch files to cmd.exe's block rule; the launcher probe runs juno.bat local mode on Windows with no [DBG] output and no registry write
+feature:session-save-restore	A session saved after its first turn over the session directory and restored in a new JVM gives the uninterrupted second turn, served from the restored KV, at f16 and q8_0 host KV	session.save-restore.*, gpu.session.save-restore.*	CPU and CUDA, TinyLlama, through the local server facade; a check (token count read back, a prefix hit on the second turn, the second turn equal token for token)

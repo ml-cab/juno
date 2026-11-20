@@ -82,10 +82,12 @@ public final class JunoPlayer implements AutoCloseable {
 	private final GpuContext gpuContext;
 	/** Context-shift choice for every request this player sends; null leaves the server default. */
 	private final Boolean contextShift;
+	private final cab.ml.juno.coordinator.SessionStore sessions;
 
 	private JunoPlayer(String modelId, SamplingParams samplingParams, String byteOrder, Tokenizer tokenizer,
 			LocalInferencePipeline pipeline, GenerationLoop loop, RequestScheduler scheduler, ModelRegistry registry,
-			List<ForwardPassHandler> handlers, GpuContext gpuContext, Boolean contextShift) {
+			List<ForwardPassHandler> handlers, GpuContext gpuContext, Boolean contextShift,
+			cab.ml.juno.coordinator.SessionStore sessions) {
 		this.modelId = modelId;
 		this.samplingParams = samplingParams;
 		this.byteOrder = byteOrder;
@@ -97,6 +99,7 @@ public final class JunoPlayer implements AutoCloseable {
 		this.handlers = handlers;
 		this.gpuContext = gpuContext;
 		this.contextShift = contextShift;
+		this.sessions = sessions;
 	}
 
 	public static Builder builder(Path modelPath) {
@@ -167,8 +170,17 @@ public final class JunoPlayer implements AutoCloseable {
 
 	public InferenceApiServer startApiServer(int port) {
 		InferenceApiServer server = new InferenceApiServer(scheduler, modelRegistry, byteOrder);
+		server.setSessionStore(sessions);
 		server.start(port);
 		return server;
+	}
+
+	/**
+	 * Session save, restore and delete, in process, over the builder's {@link Builder#sessionDir} (without one, save
+	 * and restore are refused); the same store the API server's {@code /v1/sessions} routes use.
+	 */
+	public cab.ml.juno.coordinator.SessionStore sessions() {
+		return sessions;
 	}
 
 	@Override
@@ -184,6 +196,7 @@ public final class JunoPlayer implements AutoCloseable {
 		private final Path modelPath;
 		private int nodeCount = 3;
 		private Path loraPlayPath;
+		private Path sessionDir;
 		private boolean useGpu = true;
 		private SamplingParams samplingParams = SamplingParams.defaults();
 		private String byteOrder = "BE";
@@ -201,6 +214,12 @@ public final class JunoPlayer implements AutoCloseable {
 
 		public Builder nodeCount(int nodeCount) {
 			this.nodeCount = Math.max(1, nodeCount);
+			return this;
+		}
+
+		/** Directory explicit session saves write to and restores read from ({@code --session-dir}). */
+		public Builder sessionDir(Path dir) {
+			this.sessionDir = dir;
 			return this;
 		}
 
@@ -334,8 +353,13 @@ public final class JunoPlayer implements AutoCloseable {
 					modelPath.toAbsolutePath().toString(), ModelStatus.LOADED, Instant.now());
 			registry.putLoaded(descriptor);
 
+			cab.ml.juno.coordinator.SessionStore sessions = sessionDir == null
+					? cab.ml.juno.coordinator.SessionStore.withoutDirectory(scheduler)
+					: new cab.ml.juno.coordinator.SessionStore(scheduler, sessionDir,
+							cab.ml.juno.coordinator.SessionStore.Identity.of(modelPath,
+									loraPlayPath != null ? loraPlayPath.toString() : null));
 			return new JunoPlayer(inferenceModelId, samplingParams, byteOrder, tokenizer, pipeline, loop, scheduler,
-					registry, List.copyOf(handlers), gpuCtx, contextShift);
+					registry, List.copyOf(handlers), gpuCtx, contextShift, sessions);
 		}
 
 		private static long estimateVramPerLayer(int hiddenDim) {

@@ -37,6 +37,8 @@ tags:
     description: Model lifecycle management
   - name: cluster
     description: Cluster health and node status
+  - name: sessions
+    description: Explicit session save, restore and delete (KV cache to disk and back)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS
@@ -304,6 +306,118 @@ paths:
               schema:
                 $ref: '#/components/schemas/ShardMap'
 
+  # ── Sessions ──────────────────────────────────────────────────────────────
+
+  /sessions/{session_id}/save:
+    post:
+      tags: [sessions]
+      operationId: saveSession
+      summary: Save a session's KV to the server's session directory
+      description: |
+        Writes the KV cache a session (`x_juno_session_id` on chat completions) holds for the positions of its last
+        turn's prompt, so a later process can restore it. Files go only under the directory the server was started
+        with (`--session-dir`, `JUNO_SESSION_DIR`); the request names no path. One file per stage plus a manifest
+        (`<session_id>.session`); in a cluster each node writes its own layers under its own session directory, so
+        a saved session restores on the same nodes, or anywhere the directories are shared. A save replaces an earlier
+        one; a session with a request in flight answers 409. Vision sessions (their KV holds an image) are not saved.
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResult'
+        '400':
+          description: No session directory, a bad id, or a session that may not be saved (one holding an image)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionError'
+        '404':
+          description: The session holds no KV
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionError'
+        '409':
+          description: A request of the session is in flight
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionError'
+
+  /sessions/{session_id}/restore:
+    post:
+      tags: [sessions]
+      operationId: restoreSession
+      summary: Restore a saved session's KV
+      description: |
+        Replaces the session's KV with what a save wrote, after checking the manifest and every stage's file against
+        this server: the same model file (name, size and a SHA-256 of its first MiB), LoRA adapter, cache types, layer
+        ranges and file format. A file written under either schedule restores under either. The next chat turn sends
+        the whole conversation as usual; the restored tokens are the session's prefix, so only the new turn is
+        prefilled. A refusal from a stage leaves the session with no KV; a session with a request in flight answers
+        409.
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      responses:
+        '200':
+          description: Restored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResult'
+        '400':
+          description: No session directory, a bad id, a file of other KV (model, adapter, cache type, layers, format) or a damaged file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionError'
+        '404':
+          description: Nothing saved under this id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionError'
+        '409':
+          description: A request of the session is in flight
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionError'
+
+  /sessions/{session_id}:
+    delete:
+      tags: [sessions]
+      operationId: deleteSession
+      summary: Free a session's KV in memory
+      description: |
+        Releases the KV the session holds on every stage, cluster nodes included. Saved files stay. Needs no session
+        directory. Until this is called, a session's KV is kept for the life of the process.
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      responses:
+        '200':
+          description: Freed (tokens is 0 when the session held none)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResult'
+        '400':
+          description: A bad id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionError'
+        '409':
+          description: A request of the session is in flight
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionError'
+
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPONENTS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -327,6 +441,16 @@ components:
       schema:
         type: string
         format: uuid
+
+    sessionId:
+      name: session_id
+      in: path
+      required: true
+      description: The session's id as chat completions send it in `x_juno_session_id`; 1 to 128 letters, digits, '-', '_' or '.'
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,128}$'
+        example: chat-1
 
   schemas:
 
@@ -843,6 +967,43 @@ components:
           example: 86400
 
     # ── Error models ──────────────────────────────────────────────────────────
+
+    # ── Sessions ──────────────────────────────────────────────────────────────
+
+    SessionResult:
+      type: object
+      required: [session_id, tokens, bytes, elapsed_ms]
+      properties:
+        session_id:
+          type: string
+          example: chat-1
+        tokens:
+          type: integer
+          description: Positions the session's KV covers (its last turn's prompt)
+          example: 63
+        bytes:
+          type: integer
+          format: int64
+          description: Bytes written or read, every stage's file and the manifest; 0 for a delete
+          example: 1421645
+        elapsed_ms:
+          type: integer
+          format: int64
+          example: 41
+
+    SessionError:
+      type: object
+      required: [code, error, message]
+      properties:
+        code:
+          type: integer
+          example: 400
+        error:
+          type: string
+          enum: [BAD_REQUEST, NOT_FOUND, CONFLICT, INTERNAL_ERROR]
+        message:
+          type: string
+          example: "saving and restoring sessions needs a session directory: start the server with --session-dir PATH (or JUNO_SESSION_DIR)"
 
     ApiError:
       type: object

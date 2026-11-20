@@ -16,9 +16,13 @@
 
 package cab.ml.juno.node;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 
 import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.KvSessionFileException;
+import cab.ml.juno.kvcache.KvSessionStamp;
 import cab.ml.juno.kvcache.PagedKvArena;
 
 /**
@@ -190,6 +194,41 @@ public interface InferencePipeline {
 	/** Whether {@link #shareKvPrefix} can succeed on this pipeline; false by default. */
 	default boolean supportsKvPrefixSharing() {
 		return false;
+	}
+
+	/**
+	 * Saves {@code requestId}'s KV, positions {@code [0, stamp.positions())}, one file per stage: a local stage writes
+	 * under {@code dir}, a remote node under its own session directory. {@code stamp}'s stage is replaced by each
+	 * stage's own label ({@link SessionKvPart#fileName}).
+	 *
+	 * <p>Default: refused ({@link KvSessionFileException.Reason#UNSUPPORTED}), so a pipeline that does not override it
+	 * never reports a save it did not make.
+	 *
+	 * @return the files written, in stage order
+	 */
+	default List<SessionKvPart> saveKv(String requestId, KvSessionStamp stamp, Path dir) throws IOException {
+		throw new KvSessionFileException(KvSessionFileException.Reason.UNSUPPORTED,
+				getClass().getSimpleName() + " cannot save session KV");
+	}
+
+	/**
+	 * Restores on every stage what {@link #saveKv} wrote for {@code stamp}, so {@code requestId} continues at position
+	 * {@code stamp.positions()}. If any stage refuses, {@code requestId} is dropped on every stage and the refusal
+	 * passed on. Default: refused, as {@link #saveKv}.
+	 *
+	 * @return the files read, in stage order
+	 */
+	default List<SessionKvPart> restoreKv(String requestId, KvSessionStamp stamp, Path dir) throws IOException {
+		throw new KvSessionFileException(KvSessionFileException.Reason.UNSUPPORTED,
+				getClass().getSimpleName() + " cannot restore session KV");
+	}
+
+	/**
+	 * Frees a finished session's KV on every stage, remote nodes included ({@link #evict} does not reach a remote
+	 * node). Default: {@link #evict}.
+	 */
+	default void dropKv(String requestId) {
+		evict(requestId);
 	}
 
 	/** Host KV bytes one position takes across the whole model, K and V; 0 when unknown (remote stages). */

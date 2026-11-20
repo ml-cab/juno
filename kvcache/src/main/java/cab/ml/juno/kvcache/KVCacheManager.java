@@ -162,6 +162,11 @@ public final class KVCacheManager {
 		return prefixCache.findLongestPrefix(tokens, kvKey);
 	}
 
+	/** The tokens {@code cacheKey}'s prefix entry holds ({@link PrefixCache#entry}); empty when it holds none. */
+	public Optional<int[]> prefixEntry(String cacheKey) {
+		return Optional.ofNullable(prefixCache.entry(cacheKey));
+	}
+
 	/**
 	 * Remove the prefix-trie entry associated with {@code cacheKey}.
 	 *

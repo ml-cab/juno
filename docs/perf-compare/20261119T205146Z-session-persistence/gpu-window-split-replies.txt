@@ -1,0 +1,4 @@
+c-gpu-off-a1: Friction is a term used in physics to describe the force of friction, which is the resistance that objects experience when
+c-gpu-on-a1: Friction is a term used in physics to describe the phenomenon of friction, which occurs when two objects come into
+c-gpu-off-pb1-a1: Friction is a term used in physics to describe the phenomenon of friction, which occurs when two objects come into
+c-gpu-on-pb1-a1: Friction is a term used in physics to describe the phenomenon of friction, which occurs when two objects come into

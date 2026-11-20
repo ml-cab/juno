@@ -67,6 +67,9 @@ public final class RequestScheduler {
 	private final ServeScheduleOptions schedule;
 	private final ContinuousBatchEngine continuousEngine;
 	private final ConcurrentHashMap<String, InflightEntry> inflight = new ConcurrentHashMap<>();
+	/** Sessions a save, restore or delete holds ({@link #withSessionHeld}); guarded with admission by {@link #sessionGate}. */
+	private final java.util.Set<String> heldSessions = ConcurrentHashMap.newKeySet();
+	private final Object sessionGate = new Object();
 
 	private volatile boolean running = true;
 
@@ -138,7 +141,17 @@ public final class RequestScheduler {
 
 		CompletableFuture<GenerationResult> future = new CompletableFuture<>();
 		// Register to inflight BEFORE queue.offer() — no lost-wakeup risk
-		inflight.put(request.requestId(), new InflightEntry(request, consumer, future));
+		InflightEntry entry = new InflightEntry(request, consumer, future);
+		if (request.sessionId() != null) {
+			synchronized (sessionGate) {
+				if (heldSessions.contains(request.sessionId()))
+					throw new SessionBusyException("session " + request.sessionId()
+							+ " is being saved, restored or deleted; retry when that call returns");
+				inflight.put(request.requestId(), entry);
+			}
+		} else {
+			inflight.put(request.requestId(), entry);
+		}
 
 		if (continuousEngine != null) {
 			continuousEngine.submit(request, consumer, future);
@@ -173,6 +186,36 @@ public final class RequestScheduler {
 	 */
 	public void requireContextShiftSupported(InferenceRequest request) {
 		generationLoop.requireContextShiftSupported(request);
+	}
+
+	/** Work done while a session is held ({@link #withSessionHeld}). */
+	@FunctionalInterface
+	public interface SessionCall<T> {
+		T run() throws java.io.IOException;
+	}
+
+	/**
+	 * Runs {@code call} with {@code sessionId} held: no request of the session is in flight when it starts (each
+	 * request leaves the in-flight set only after its turn's KV is settled), and none is admitted until it returns,
+	 * so the session's KV does not change underneath it.
+	 *
+	 * @throws SessionBusyException if a request of the session is in flight or another call holds it
+	 */
+	public <T> T withSessionHeld(String sessionId, SessionCall<T> call) throws java.io.IOException {
+		synchronized (sessionGate) {
+			if (heldSessions.contains(sessionId))
+				throw new SessionBusyException("session " + sessionId + " is held by another save, restore or delete");
+			for (InflightEntry e : inflight.values())
+				if (sessionId.equals(e.request().sessionId()))
+					throw new SessionBusyException("session " + sessionId
+							+ " has a request in flight; retry once its reply has finished");
+			heldSessions.add(sessionId);
+		}
+		try {
+			return call.run();
+		} finally {
+			heldSessions.remove(sessionId);
+		}
 	}
 
 	/** Stop the batch dispatch loop / continuous engine. No-op if neither was started. */

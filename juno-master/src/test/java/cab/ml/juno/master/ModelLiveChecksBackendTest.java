@@ -53,6 +53,6 @@ class ModelLiveChecksBackendTest {
 			assertThat(c.detail()).contains("CUDA requested");
 		});
 		assertThat(ModelLiveChecks.failClosed(EnumSet.allOf(Suite.class), "x")).extracting(LiveCheck::number)
-				.containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+				.containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
 	}
 }

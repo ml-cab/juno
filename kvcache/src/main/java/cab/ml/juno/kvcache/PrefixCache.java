@@ -202,6 +202,20 @@ public final class PrefixCache {
 	}
 
 	/**
+	 * The tokens of the prefix {@code cacheKey} cached last, a copy; null when it holds none. A session save records
+	 * them as the positions its KV rows cover.
+	 */
+	public int[] entry(String cacheKey) {
+		lock.readLock().lock();
+		try {
+			int[] path = entries.get(cacheKey);
+			return path != null ? path.clone() : null;
+		} finally {
+			lock.readLock().unlock();
+		}
+	}
+
+	/**
 	 * Invalidate the prefix {@code cacheKey} cached. Other keys' entries, on the same tokens included, stay.
 	 */
 	public void invalidate(String cacheKey) {

@@ -86,6 +86,37 @@ public final class Qwen2LoraTrainableHandler implements LoraTrainingHandler {
 		delegate.shiftKv(requestId, seqLen, keep, discard);
 	}
 
+	/** The delegate holds the request's KV, so freeing it, sizing it and saving it reach the delegate. */
+	@Override
+	public void evict(String requestId) {
+		delegate.evict(requestId);
+	}
+
+	@Override
+	public void reserveKv(String requestId, int positions) {
+		delegate.reserveKv(requestId, positions);
+	}
+
+	@Override
+	public long hostKvBytes(String requestId) {
+		return delegate.hostKvBytes(requestId);
+	}
+
+	@Override
+	public cab.ml.juno.kvcache.PagedKvArena pagedKvArena() {
+		return delegate.pagedKvArena();
+	}
+
+	@Override
+	public long saveKv(String requestId, cab.ml.juno.kvcache.KvSessionStamp stamp, Path file) throws IOException {
+		return delegate.saveKv(requestId, stamp, file);
+	}
+
+	@Override
+	public long restoreKv(String requestId, cab.ml.juno.kvcache.KvSessionStamp stamp, Path file) throws IOException {
+		return delegate.restoreKv(requestId, stamp, file);
+	}
+
 	@Override
 	public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
 		return delegate.lastRmsHiddenForEmbedding(request, context);

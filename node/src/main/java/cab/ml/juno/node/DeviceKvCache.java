@@ -29,8 +29,8 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
  *
  * <p>Each side (K, V) is stored in its {@link DeviceKvFormat}, chosen by the
  * handler from {@code --cache-type-k/-v} ({@link DeviceKvFormats#select}):
- * real IEEE FP16 (binary16, half the bytes of the host {@code f16} KV, which
- * holds {@code float32}), or the host codecs' {@code q8_0} / {@code q4_0}
+ * real IEEE FP16 (binary16, the same halves the host {@code f16} KV stores,
+ * byte for byte), or the host codecs' {@code q8_0} / {@code q4_0}
  * blocks byte for byte, so a quantized device copy holds exactly the values the
  * host KV of that type holds. Rows are contiguous, one row per position;
  * {@link DeviceKvFormat#rowBytes} is the stride, the one place the Java side

@@ -58,6 +58,19 @@ the finished system.
    rotates its own heads), wire both clients and `FaultTolerantPipeline`, report `contextLimit()` and
    `supportsContextShift()` truthfully, update `inference.proto`, and turn rows 7 and 8 of Tier 02B's
    context-shift column from FAIL-CLOSED to PASS by running `smoke-context-policy.sh` against a cluster.
+6. **Cluster nodes copy every layer's whole KV after each forward pass** (added 2026-11-19, owner decision during
+   Tier 03 step 7). `EmbeddedNodeServer` gives a node's Llama and Phi-3 handlers a `NodeKVCacheAdapter`, and every
+   forward pass, each generated token included, ends with `flush` for every layer: the layer's rows from position 0 to
+   the current length are serialized into a new `byte[]` and put into the node's `KVCacheManager` (Caffeine
+   `CpuKVCache` of 256 blocks and the `GpuKVCache` tier, write-through). The copy is read only for a request id the
+   handler's map lacks (`tryRestore`); since Tier 03 step 7 a session restore drops it before installing rows. Per token
+   the copy grows with the sequence, so over a reply it grows with the square of the reply's length: on TinyLlama at
+   2,048 positions about 46 MB per generated token (estimated from the code, not measured). Local mode and the other
+   handlers carry no adapter. First measure it: allocation per token and decode tps on a pipeline and a tensor-parallel
+   cluster against local mode, at 512 and 2,048 positions, with JFR. Then establish whether anything still needs the
+   copy (the node builds a new `KVCacheManager` at every shard load, so the copy does not outlive the handler's map)
+   and either remove the write-through, leaving the handler's map the only host copy, or write only the rows a pass
+   added. Hot-path gate on a cluster run; `NodeKVCacheAdapterTest` and the cluster ITs keep passing.
 
 ### Out of scope
 

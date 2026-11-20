@@ -202,6 +202,8 @@ final class ProbeCatalog {
 				gpuKvFootprint("qwen2.5-3b", 35, 2),
 				gpuKvFootprint("phi-3.5-mini", 45, 2),
 				gpuKvFootprint("mistral-7b", 60, 2),
+				sessionSaveRestore("tinyllama-1.1b", CPU, 120, 2),
+				sessionSaveRestore("tinyllama-1.1b", GPU, 40, 2),
 				throughput("tinyllama-1.1b", 2048, false, CPU, 6, 465, 2),
 				throughput("tinyllama-1.1b", 128, true, GPU, 6, 10, 2),
 				throughput("qwen2.5-3b", 128, false, CPU, 8, 150, 2),
@@ -314,6 +316,21 @@ final class ProbeCatalog {
 						+ m.title(),
 				ProbeKind.READING, GPU, Requirements.gpu(8L << 30), List.of(modelId), cost, priority, "GpuKvPrefillProbe",
 				Map.of("childHeap", m.heap()), Math.max(3600, 3 * cost), "512m");
+	}
+
+	/**
+	 * A session saved after its first turn and restored in a new JVM continues with the second turn the uninterrupted
+	 * session gives, served from the restored KV, at {@code f16} and {@code q8_0} host KV: a check, CPU or CUDA.
+	 */
+	private static Probe sessionSaveRestore(String modelId, Set<String> suites, int cost, int priority) {
+		CatalogModel m = CatalogModel.byId(modelId);
+		boolean gpu = suites == GPU;
+		return new Probe((gpu ? "gpu." : "") + "session.save-restore." + modelId,
+				"A session saved after its first turn and restored in a new JVM gives the uninterrupted second turn, f16"
+						+ " and q8_0 KV, " + m.title(),
+				ProbeKind.CHECK, suites, gpu ? Requirements.gpu(8L << 30) : Requirements.cpu(8L << 30), List.of(modelId),
+				cost, priority, "SessionProbe", Map.of("childHeap", m.heap(), "gpu", String.valueOf(gpu)),
+				Math.max(3600, 3 * cost), "512m");
 	}
 
 	/**

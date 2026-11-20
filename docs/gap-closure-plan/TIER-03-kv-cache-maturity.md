@@ -17,7 +17,7 @@ cached prompt over positions it never wrote (defect, both schedules), fixed by m
 cached it. Owner decisions 2026-11-11: 1 (b), finished prompts kept under a budget; 2 (a), `static` copies the rows. Step 4 done
 2026-11-11: `SharedPrefixPool` keeps finished requests' prompts as KV nothing writes (paged: pages held again, copy-on-write;
 dense: copied), new requests start from them on all three admission paths, `--prefix-cache-tokens`; replies equal sharing off
-on TinyLlama, CPU and CUDA, both schedules. Exit criterion 3 ticked (3 of 15). Step 5 done 2026-11-11: defragmentation as
+on TinyLlama, CPU and CUDA, both schedules (on CUDA for those prompts: a GPU reply can differ, decision 17, 2026-11-19). Exit criterion 3 ticked (3 of 15). Step 5 done 2026-11-11: defragmentation as
 releasing idle pages (item 3 corrected: the pool has no external fragmentation to compact; it kept every freed page's storage
 forever): `KvBlockPool.reclaimIdle`, run in the background by `KvPageReclaimer` (`-Djuno.kv.reclaimPeriodMs`, default one
 minute); no live page moves; pause met unpinned (0.957 ms added to a decode step, budget 5); health counters; `--lora-play` no
@@ -49,7 +49,7 @@ widths it scores). Owner decisions 7 (a) and 8 (a), 2026-11-15. Decision 7 (a) i
 writes the host KV from the device copy's stored rows (no CPU encode; a quarter of the bytes over the bus), host bytes
 unchanged; prefill `q8_0` over FP16, unpinned, 0.90x to 0.99x in one window and 0.90x to 0.97x in 128-row windows, every
 sweep model; kit probe `gpu.kv-prefill.<model>` in. The owner's pinned prefill gate (decision 8 (a)), 2026-11-16: 0.877x to
-0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned. The owner's gate, 2026-11-17, pinned: `q8_0` decode 0.958x (Qwen2.5-3B) to 0.985x FP16, 4 of 4 at or above 0.95x; exit criterion 7 ticked again (6 of 15). Decision 4 (a) in 2026-11-17 (out of tier): gate and up in one launch (`q4k_gemv_pair`), bit for bit the two launches, 0.63x to 0.97x their device time at nine placements of the input vector, unpinned; LoRA gate and suites pass. The owner's gate, 2026-11-18, pinned: decode after over before, FP16 1.014x (Mistral 7B) to 1.075x (TinyLlama) and `q8_0` 1.015x (Phi-3.5-mini) to 1.045x (Qwen2.5-3B), 8 of 8 over 1.00, no cycle under; `q8_0` over FP16 read 0.951x to 0.978x and bounded at 0.956x or above, so criterion 7 stays met (6 of 15). Item 6 begun 2026-11-18 on `c607e926`: the live-heap bar measured out of reach of its levers (0.68x projected, the float32 embedding and output copies are not KV); owner decisions 10 (a) (bar restated: host KV <= 0.35x, live heap <= 0.75x), 11 (a) (the request's length passed to every stage, a new gRPC field) and 12 (a) (`f16` stores IEEE halves on every host store, the float32 rows kept as `f32`). Item 6 in 2026-11-18 and 2026-11-19 (uncommitted): host KV 0.258x and live heap 0.640x the pre-tier build; `f16` against `f32` NLL 0.99967x to 1.00053x and greedy agreement 99.02% to 99.80% on the four sweep models; throughput against `c607e926` unpinned, pp 0.969x to 1.121x and tg 0.980x to 1.004x; LoRA gate passes; exit criterion 6 ticked (7 of 15). Step 6 done. Next: step 7, disk-backed session save/restore.
+0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned. The owner's gate, 2026-11-17, pinned: `q8_0` decode 0.958x (Qwen2.5-3B) to 0.985x FP16, 4 of 4 at or above 0.95x; exit criterion 7 ticked again (6 of 15). Decision 4 (a) in 2026-11-17 (out of tier): gate and up in one launch (`q4k_gemv_pair`), bit for bit the two launches, 0.63x to 0.97x their device time at nine placements of the input vector, unpinned; LoRA gate and suites pass. The owner's gate, 2026-11-18, pinned: decode after over before, FP16 1.014x (Mistral 7B) to 1.075x (TinyLlama) and `q8_0` 1.015x (Phi-3.5-mini) to 1.045x (Qwen2.5-3B), 8 of 8 over 1.00, no cycle under; `q8_0` over FP16 read 0.951x to 0.978x and bounded at 0.956x or above, so criterion 7 stays met (6 of 15). Item 6 begun 2026-11-18 on `c607e926`: the live-heap bar measured out of reach of its levers (0.68x projected, the float32 embedding and output copies are not KV); owner decisions 10 (a) (bar restated: host KV <= 0.35x, live heap <= 0.75x), 11 (a) (the request's length passed to every stage, a new gRPC field) and 12 (a) (`f16` stores IEEE halves on every host store, the float32 rows kept as `f32`). Item 6 in 2026-11-18 and 2026-11-19 (uncommitted): host KV 0.258x and live heap 0.640x the pre-tier build; `f16` against `f32` NLL 0.99967x to 1.00053x and greedy agreement 99.02% to 99.80% on the four sweep models; throughput against `c607e926` unpinned, pp 0.969x to 1.121x and tg 0.980x to 1.004x; LoRA gate passes; exit criterion 6 ticked (7 of 15). Step 6 done. Step 7 done 2026-11-19 on decisions 13 (a) to 16 (a), tests first: `POST /v1/sessions/{id}/save` and `.../restore` over `--session-dir`, `DELETE /v1/sessions/{id}`; one file per stage (rows as stored, checksum, temp file renamed) and a manifest; cluster nodes save their own layers (`NodeService` save, restore and drop RPCs), node-pinned; every refusal tested (400, 404, 409). A session saved and restored across a new JVM (kit probes, CPU and CUDA, `f16` and `q8_0`), a killed server (smoke, CPU and CUDA) and a restarted cluster (check 11, pipeline and tensor) continues with the uninterrupted second turn, from a prefix hit. Defect fixed: the Qwen2 LoRA handler never freed a request's KV. Exit criteria 8 and 13 ticked (9 of 15). Raised with the owner: decision 17 (on CUDA a reply from a shared prompt can differ from the computed one: GPU prefill depends on the window split), (a) taken 2026-11-19: recorded as a GPU prefill property, step 4's claims corrected, the CUDA smoke compares with `--prefill-batch 1`, window-width invariance a Tier 07 candidate; decision 18 (the Qwen2 LoRA handler's serial prefill), (a) taken 2026-11-19, handed to Tier 12 item 6. Next: step 8, the full smoke matrix and the tier's close, with the owner's standing gate.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -143,6 +143,8 @@ ordering note both withdraw.)*
    complexity that motivated removing the old design.
    *(2026-11-19: the pointer `CHANGELOG.md:1758` has drifted; the simplification it names, three tiers to two with no
    disk IO, is described at `CHANGELOG.md:3560` today, in the design-history section.)*
+   *(2026-11-19, later: done, step 7, on owner decisions 14 (a), 15 (a) and 16 (a): explicit REST calls only, nothing written
+   otherwise; see the execution record.)*
 6. **Host KV footprint: exact growth and real FP16 storage** *(added 2026-10-04 from Tier 01C step 6)*.
    `DenseKvTensor` doubles its capacity, and its `f16` element type stores 32-bit floats. A 2,048-token
    prompt plus one generated token doubles every layer's K and V to 4,096 positions. On Phi-3.5-mini (32
@@ -327,7 +329,11 @@ README execution rule 10.
 - Add:
   - A change, item 2: the consistency probes assert "no prefix-cache hit for stateless traffic". With
     cross-session prefix sharing a shared prefix is meant to hit, so the check becomes: a shared-prefix hit is
-    counted, and the reply equals the unshared reply.
+    counted, and the reply equals the unshared reply. *(2026-11-19, noted at step 7: in since step 4, unrecorded here:
+    `ConsistencyProbe`'s static-batching leg starts its server with `--prefix-cache-tokens 4096` and checks "repeated prompts
+    start from a kept prompt (shared-prefix hits counted; their answers equal the unshared first answer above)" in
+    `consistency.tinyllama` and `gpu.consistency.tinyllama`; "no prefix-cache hit for stateless traffic" stays, since it
+    reads the own-session counter.)*
   - Q4_0 KV (item 4) and the quantized device KV (item 7): mean NLL against F16 KV per sweep model, and batched
     equal to single on the device at each `--cache-type-k`/`--cache-type-v`. *(2026-11-12: item 4's half is in:
     `kv-quality.<model>` on the four sweep models, CPU suite, `QualityRunMain` twice with `f16` and `q4_0` host KV, held
@@ -338,6 +344,11 @@ README execution rule 10.
     device formats; `gpu.consistency.tinyllama` runs its decode batch of eight at each of those types; `coverage.tsv` line
     `feature:device-kv-quant`.)*
   - Session save and restore (item 5): a restored session continues with the reply the unbroken session gives.
+    *(2026-11-19: in, `session.save-restore.<model>` (CPU) and `gpu.session.save-restore.<model>` (CUDA) on TinyLlama:
+    `SessionProbe` launches `SessionRunMain` twice per KV type (`f16`, `q8_0`), a save JVM and a restore JVM; checks the
+    token count read back, a prefix hit, the second turn equal; self-test `SessionProbeTest` (a real save and restore on the
+    synthetic model); `coverage.tsv` line `feature:session-save-restore`, and `script:smoke-kv-cache.sh`. First run both PASS,
+    [`20261119T205146Z-session-persistence`](../perf-compare/20261119T205146Z-session-persistence/INDEX.md).)*
   - Defragmentation (item 3): replies unchanged under page churn, with the compaction counted. *(2026-11-11: in
     `schedule.tinyllama` and `gpu.schedule.tinyllama`, the continuous leg; `coverage.tsv` line `feature:kv-page-reclaim`.)*
   - The host KV footprint per session (item 6), as a reading. *(2026-11-19: in, `gpu.kv-footprint.<model>` on the
@@ -384,6 +395,9 @@ in `models/`.)*
       both host KV types; `SharedPrefixPoolTest` on all three admission paths; on TinyLlama 9 of 9 replies equal sharing off,
       CPU and CUDA, both schedules ([`20261111T192150Z-shared-prefix`](../perf-compare/20261111T192150Z-shared-prefix/INDEX.md));
       vision and `--lora-play` refused and tested.)*
+      *(2026-11-19, decision 17 (a): the CUDA half held for those nine prompts; on a GPU a reply from a shared prompt
+      can differ, because GPU prefill rounds a position by the width of its window and sharing moves the windows. The
+      sharing itself is checked on CUDA with `--prefill-batch 1` (`smoke-kv-cache.sh --gpu`); the CPU equality stands.)*
 - [x] Defragmentation reclaims fragmented pages without corrupting live sessions.
       *(2026-11-11, step 5: idle pages' storage released after a whole period unused, no live or shared page moved or touched
       (item 3's correction says why). `KvBlockPoolReclaimTest` (fragmented pools, live pages' bytes and views unchanged, concurrent
@@ -450,7 +464,13 @@ in `models/`.)*
       pinned, GPU clock recorded and matched per model, read `q8_0` over FP16 at TinyLlama 0.985x, Qwen2.5-3B 0.958x,
       Phi-3.5-mini 0.974x and Mistral 7B 0.972x, 4 of 4 at or above 0.95x, on the tree committed as `9c33ab93` (tree hash
       checked). Every bar of this criterion is met.)*
-- [ ] Disk-backed session save/restore round-trips correctly across a process restart.
+- [x] Disk-backed session save/restore round-trips correctly across a process restart.
+      *(2026-11-19, step 7: on TinyLlama, greedy, the second turn after a restart equals the uninterrupted session's token for
+      token and starts from the restored KV (a prefix hit): across a new JVM (kit probes, CPU and CUDA, `f16` and `q8_0`), a
+      server killed with `SIGKILL` and restarted on the other schedule (`smoke-kv-cache.sh`, CPU and CUDA) and a restarted
+      cluster (`ModelLiveRunnerIT` check 11, pipeline and tensor parallel)
+      ([`20261119T205146Z-session-persistence`](../perf-compare/20261119T205146Z-session-persistence/INDEX.md)); every handler
+      family, schedule pair and host type bit for bit (`KvSessionSnapshotHandlerTest`, 108).)*
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
       *(2026-11-10: open; the owner's pinned run at tier close. Step 3's unpinned A/B met the CPU bars on every lane, evidence
@@ -466,7 +486,9 @@ in `models/`.)*
       each cache type. The tests it would run in the kit exist (`DeviceKvQuantQualityLiveTest`,
       `ResidentBatchDecodeTest`'s quantized cases).)* *(2026-11-18: item 6's probe is in, `gpu.kv-footprint.<model>` (the
       host KV and live heap of a 2,048-token request with 64 generated, failing if the KV grew past the request's
-      positions), with its self-test (`KvFootprintProbeTest`) and `feature:host-kv-footprint`.)*
+      positions), with its self-test (`KvFootprintProbeTest`) and `feature:host-kv-footprint`.)* *(2026-11-19: item 5's probes
+      are in (`session.save-restore.*`, `SessionProbeTest`, `feature:session-save-restore`), and item 2's change was found in
+      since step 4; every **Add** item is in. Open for the **Keep passing** run on the tier's final build, step 8.)*
 - [ ] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
 - [ ] Perf gate published; `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag pause within budget.
       *(2026-11-10: the `paged_vs_dense%` half read -6.35%, unpinned,
@@ -476,8 +498,12 @@ in `models/`.)*
       ctx 8192 / batch 8 / page 16, every sweep model's page count
       ([`20261112T040139Z-kv-page-reclaim`](../perf-compare/20261112T040139Z-kv-page-reclaim/INDEX.md)). Open only for both
       readings retaken on the tier's final build.)*
-- [ ] The session save/restore surface is in `api/src/main/resources/openapi.yaml` and
+- [x] The session save/restore surface is in `api/src/main/resources/openapi.yaml` and
       `juno-api.yaml` alongside the code that serves it (README feature-complete rule).
+      *(2026-11-19, step 7: both carry `POST /v1/sessions/{session_id}/save`, `.../restore` and `DELETE /v1/sessions/{session_id}`
+      with the `SessionResult` and `SessionError` schemas, matching `SessionRoutes` (`SessionRoutesTest`); `juno-api.yaml`'s
+      `x_juno_session_id` no longer calls the delete endpoint future, and its unchecked claim that a session's KV "is evicted
+      automatically under memory pressure" is corrected: nothing evicts it; `inference.proto` carries the three node RPCs.)*
 - [ ] Docs updated, Juno-native language only.
 - [ ] `CHANGELOG.md` entry added.
 
@@ -1193,7 +1219,8 @@ first, settable to 0. 2 (a): on the `static` schedule a request copies the match
 
 **Runs.**
 - Real model ([`20261111T192150Z-shared-prefix`](../perf-compare/20261111T192150Z-shared-prefix/INDEX.md)), TinyLlama,
-  sharing on against the same server with it off, nine requests: 9 of 9 replies equal on CPU and CUDA, both schedules.
+  sharing on against the same server with it off, nine requests: 9 of 9 replies equal on CPU and CUDA, both schedules
+  (2026-11-19: on CUDA a reply can differ for other prompts, decision 17 in step 7's entry).
   After a ~1,000-token system prompt the next request answers in 4.44 s against 47.82 s (CPU `static`), 5.38 against 49.68
   (CPU `continuous`), 0.94 against 1.33 (GTX 1080 `static`), 1.78 against 4.75 (GPU `continuous`), unpinned. Watch item: a
   ~25-position share on GPU `static` reads 0.12 s against 0.09 s (the device copy can cost more than a short prefill).
@@ -3059,3 +3086,203 @@ restore does with the saved tokens. Cluster stages need a node RPC beside `Forwa
 on a commit that holds item 6, so the saved format is the halves `f16` now stores (handoff:
 `docs/infra-plan/PROMPT-session-persistence.md`). The standing gate's scored run stays the owner's
 at the tier's close.
+
+### 2026-11-19, later: step 7 begun: plan against code, and the design (before code)
+
+**Orientation.** HEAD `d205ab67` holds item 6 (the precondition the previous entry named); `git status`: `.github/`
+untracked, not this session's. No gate, sweep or build running. `check-plan-thresholds.sh`: ok (26 tier files). Tier
+02F and 02G stay open on testers' and the Windows evaluation's runs (README rule 1, owner decisions 2026-11-05, -07 and
+-09); Tier 03 is the active tier and step 7 is its next step. Decisions 13 (a) to 16 (a) are in place; the optional f16
+warmup question of the item 6 entry stays at its recommended default, (a), until the owner says otherwise.
+
+**Plan against code.** The previous entry's code claims hold (`kvCacheK`/`kvCacheV` per handler, `HandlerKvShare`,
+`SessionKvLayout.newKLayers(id, n)`, `cachePrefix` at both schedules' turn end, `InferenceApiServer` routes,
+`NodeService`). Four facts the decisions did not spell out, none changing scope or sequence:
+1. **A cluster never evicts on its nodes.** `ProcessPipelineClient.evict` and `TensorParallelPipelineClient.evict` drop
+   only a pending KV reservation; the nodes keep a session's KV for the life of the process. `DELETE` and restore reach
+   the nodes through RPCs of their own.
+2. **Cluster nodes' Llama and Phi-3 handlers carry a `NodeKVCacheAdapter`**, which `HandlerKvShare.supported` refuses.
+   Restore keeps that check's device half (the device KV must hold the host types' values, so rebuilt device rows equal
+   the unbroken session's) and replaces its adapter half: the adapter's copy of the id is dropped before the install.
+   It is read only for an id the handler map lacks, and every forward pass flushes all rows to it, so it never serves
+   the restored rows stale.
+3. **Tensor-parallel nodes all hold layers `[0, total)`** (the node ignores `tensor_rank` when it loads), so a node's
+   file name carries its rank beside its layer range, and nodes sharing one directory do not collide.
+4. **Vision requests never carry a session id** (`VisionChatHandler` builds `InferenceRequest.of`). The refusal sits in
+   `VisionAwareForwardPassHandler`, which knows which request ids had image embeddings registered; a save of such an
+   id is refused whatever route made it.
+And one existing behaviour carried, not changed: with `--lora-play` on the continuous schedule a session's next turn
+never takes its prefix entry (`ContinuousBatchEngine`), so a restored session there is prefilled in full, correctly.
+
+**Design (the executor's, within decisions 14 (a), 15 (a), 16 (a)).**
+- `kvcache`: `KvSessionFile` writes and reads one stage's file: a magic and format version, the stamp (model identity,
+  adapter identity, stage label, the tokens), the layer count, KV width and the two element types, then each layer's K
+  and V rows `[0, n)` exactly as stored (halves, floats, or blocks), read through `KvRows` pages, and a CRC-32 of
+  everything before it. Written to a temporary file renamed into place; read in chunks of rows straight into new
+  layers (`writeEncodedRows`, or `writeToken` for `f32`), so a restore holds no second copy. `KvSessionStamp` (model,
+  adapter, stage, tokens) and `KvSessionFileException` (reason `NOT_FOUND`, `MISMATCH`, `CORRUPT`, `REFUSED`,
+  `UNSUPPORTED`; the coordinator answers 404 for the first and 400 for the rest). `PrefixCache.entry(key)`: the tokens
+  a key's entry holds, which is what a save records.
+- `node`: `ForwardPassHandler.saveKv(id, stamp, file)` / `restoreKv(id, stamp, file)`, defaults throwing `UNSUPPORTED`
+  naming the handler. `HandlerKvSnapshot` does the shared part for the eight host-KV handler classes; a restore
+  installs the layers under the id, closes the id's stale device rows, rebuilds them through
+  `HandlerKvShare.uploadMirrors` and drops the adapter copy. `InferencePipeline.saveKv/restoreKv/dropKv`: local
+  pipeline one file per distinct handler under the session directory; remote pipelines one RPC per node. Two
+  `NodeService` RPCs, `SaveSessionKv` and `RestoreSessionKv`, plus `DropSessionKv` for `DELETE`, each node writing
+  under its own `--session-dir` (`juno.session.dir`), node-pinned.
+- `coordinator`: `SessionStore` (the id check, the directory, the manifest `<id>.session` with format version, model
+  and adapter identity, tokens, cache types and the per-stage files with their bytes; the prefix registration after a
+  restore), `SessionRoutes` (the three routes), and a session hold in `RequestScheduler`: a save, restore or delete
+  holds the id only while no request of it is in flight (409 otherwise), and a chat request for a held id answers 409.
+  Model identity: file name, byte size and a SHA-256 of the file's first MiB (its header and metadata), computed once.
+- `juno-player`: both cluster clients send the RPCs to every node; `--session-dir` in `ConsoleMain`, `run.sh`,
+  `run.bat`; `ClusterHarness` passes the directory to the node JVMs; `JunoHttpClient` gains the three calls.
+- `juno-kit`: `session.save-restore.<model>` (CPU) and `gpu.session.save-restore.<model>` (CUDA, `f16` and `q8_0`): a
+  save run and a restore run in fresh JVMs against an unbroken run, `coverage.tsv` line `feature:session-save-restore`.
+
+### 2026-11-19, latest: step 7 done: sessions saved to disk and restored across a restart; criteria 8 and 13 met; decisions 17 and 18 raised
+
+**What changed** (uncommitted on HEAD `d205ab67`), on decisions 14 (a), 15 (a) and 16 (a) and the design entry above:
+- `kvcache`: `KvSessionFile` (one stage's file: header, the `KvSessionStamp` of model, adapter, stage label and tokens,
+  each layer's K and V rows as stored, CRC-32; temp file forced and renamed; read in 1 MiB chunks straight into new
+  layers, the whole header checked first), `KvSessionStamp`, `KvSessionFileException` (`NOT_FOUND`, `MISMATCH`, `CORRUPT`,
+  `REFUSED`, `UNSUPPORTED`), `SessionDirOptions` (`JUNO_SESSION_DIR`), `PrefixCache.entry` / `KVCacheManager.prefixEntry`.
+- `node`: `ForwardPassHandler.saveKv/restoreKv` (defaults refuse, naming the handler); `HandlerKvSnapshot`, used by the
+  eight host-KV handler classes (restore: the device half of `HandlerKvShare.supported`, new layers, install, the id's
+  stale device rows closed and rebuilt through `uploadMirrors`, a node adapter's copy dropped); `Qwen2LoraTrainableHandler`
+  passes `evict`, `reserveKv`, `hostKvBytes`, `pagedKvArena`, `saveKv` and `restoreKv` to its delegate (defect, below);
+  `InferencePipeline.saveKv/restoreKv/dropKv` (`dropKv` defaults to `evict`), `SessionKvPart`; `LocalInferencePipeline`
+  (one file per distinct handler, `<id>.layers-S-E.kv`; a refused restore evicts the id on every stage);
+  `EmbeddedNodeServer` `SaveSessionKv` / `RestoreSessionKv` / `DropSessionKv` under the node's own `JUNO_SESSION_DIR`,
+  labelled with the layer range and, on a tensor-parallel node, the rank. `api`: the three RPCs and their messages.
+- `vision`: `VisionAwareForwardPassHandler` refuses to save a request that had image embeddings; restore delegates.
+- `coordinator`: `SessionStore` (id check, directory, manifest, model identity, the hold, prefix registration),
+  `SessionRoutes`, `SessionBusyException`; `RequestScheduler.withSessionHeld` and the admission check for held sessions;
+  `OpenAiChatHandler` answers 409 for a held session; `InferenceApiServer.setSessionStore` and the routes;
+  `GenerationLoop.evictSession` calls `dropKv` (reaches cluster nodes).
+- `juno-player`: `NodeSessionKv` and both cluster clients; `ConsoleMain --session-dir` (and both API servers);
+  `ClusterHarness` forwards `JUNO_SESSION_DIR`; `JunoPlayer.Builder.sessionDir`, `JunoPlayer.sessions()`;
+  `JunoHttpClient.withSession/saveSession/restoreSession/deleteSession`. `juno-master`: `CoordinatorMain` configures the
+  store; `ModelLiveChecks` suite `SESSION`, check 11 (`SessionSaveRestoreCheck`).
+- `juno-kit`: `SessionProbe` + `SessionRunMain`, catalog, `ProbeMain`, `coverage.tsv` (`feature:session-save-restore`,
+  `script:smoke-kv-cache.sh`). Scripts: `run.sh`, `run.bat` (`--session-dir`, both subcommands), new `smoke-kv-cache.sh`.
+- Docs: both API specs, `docs/howto.md` (flag row, "Session save and restore", the smoke script), `README.md`,
+  `docs/agent-arch.txt`, `CHANGELOG.md` (Session 152); the "10 checks" of `./juno test` is 11 in `CLAUDE.md`,
+  `docs/howto.md` and `juno-documentation/part8/01-build-and-test.md`.
+
+**Tests first.** Watched failing for the right reason before the code they test: `KvSessionFileTest` 22 of 22 against a
+skeleton (unimplemented); `PrefixCacheEntryTest` 1 of 1 (empty entry); `Qwen2LoraTrainableHandlerTest`'s new case (the
+wrapper reported 0 host KV bytes where its delegate held 8,192); `VisionAwareForwardPassHandlerSessionTest` (the default
+refusal reached it); `LocalInferencePipelineSessionKvTest` 2 of 3 (its `dropKv` case passed on the first run, the default
+already reaching every local stage through `evict`: a regression check); `PipelineClientSessionKvTest` 2 of 2 (default
+refusal); `SessionRoutesTest` 7 of 8 against a skeleton without routes (404; its `notFound` case passed for that wrong
+reason, and passes for the right one since). Written after the code they test, each shown failing on a planted defect,
+the file then restored and checked with `cmp`: `KvSessionSnapshotHandlerTest` (restored K layers installed as V: 108 of
+108 fail), `EmbeddedNodeServerSessionKvTest` (rank left out of the label and drop not evicting: 2 of 2 fail),
+`SessionRoutesTest` (restore without the prefix registration, 404 answered as 400, the hold skipping its in-flight scan:
+`roundTrip`, `notFound` and `conflicts` fail). `ModelLiveChecksBackendTest`'s all-suites expectation now lists check 11.
+
+**Suites.** The full unit suite, every module: 3,521 tests (registry 93, lora 116, kvcache 299, health 23, `node` 1,853
+with 60 skipped, tokenizer 109, sampler 90, coordinator 428 plus the integer-kernel execution 1, vision 99, metrics 86,
+juno-player 164, juno-kit 160), four failures, none from step 7's behaviour. Then `-Dgroups=gpu -pl node`: 452 tests, 12
+skipped, the same three `node` failures. `DeviceUploadOrderingTest` (2 of 4, the known upload race) passes 4 of 4 alone.
+`PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance` fails alone too, and on `d205ab67` with the
+same kind of reading (83,296,256 free bytes against 67,108,864; the GPU also drives the desktop), so it predates step 7.
+`ProbeRunnerTest` refuses to run while other processes use 16% to 22% of the CPU (its own guard; the desktop session),
+also alone; `SessionProbeTest` and `CoverageTest` pass beside it. No GPU allocator, upload or kit runner file changed.
+
+**Readings** ([`20261119T205146Z-session-persistence`](../perf-compare/20261119T205146Z-session-persistence/INDEX.md),
+correctness, not pinned). Second turn after the restart equal to the uninterrupted one, from a prefix hit, in every case:
+kit probes (new JVM) CPU and CUDA at `f16` (63 tokens, 1,421,645 bytes) and `q8_0` (756,372 bytes, 0.532x); `ModelLiveRunnerIT`
+on TinyLlama, 11 of 11, check 11 pipeline 1,421,644 bytes and tensor 4,260,283 bytes across a cluster restart;
+`smoke-kv-cache.sh` part 3 (save under `static`, `SIGKILL`, restore under `continuous`) CPU and CUDA;
+`SessionSaveRestoreLiveTest` 5 of 5 (CPU `f16`, `q8_0`, `f16` static to continuous; CUDA `f16`, `q8_0`, GPU attention on
+the quantized device KV, so the restore's device rows were rebuilt). Stub cluster ITs (`mvn verify -pl juno-master`) 20 of
+20. `smoke-kv-cache.sh` CPU 13 of 13; CUDA 12 of 13, the miss in part 1 (shared prompts), decision 17; CUDA 13 of 13
+after decision 17 (a).
+
+**Perf.** No forward pass, MatVec, KV write or attention code changed: the handlers gained methods, the scheduler takes one
+uncontended lock at admission for session requests only, and the session calls run between turns. No hot-path gate is owed
+for this step; the standing gate's scored run stays the owner's at the tier's close.
+
+**Cross-surface (item 5).**
+
+| Surface | Status |
+|---|---|
+| CPU inference | PASS: kit probe, smoke, live test, handler test |
+| CUDA | PASS: kit probe, smoke, live test (GPU attention, `q8_0` device KV rebuilt from the restored rows), check 11 nodes on CUDA |
+| ROCm | NEEDS-AMD-HARDWARE: attends on the CPU path, whose restore is the CPU one; not run on AMD hardware |
+| Static schedule | PASS: check 11, kit probes, live test; `KvSessionSnapshotHandlerTest` |
+| Continuous schedule | PASS: restore under `continuous` of a `static` save (smoke, live test); every schedule pair in the handler test |
+| Single-node local mode | PASS: smoke, kit probes, live test (local pipeline with several stages: one file each) |
+| Pipeline-parallel cluster | PASS: check 11 across a cluster restart; `PipelineClientSessionKvTest`, `EmbeddedNodeServerSessionKvTest`; node-pinned files, documented |
+| Tensor-parallel cluster | PASS: check 11; each node's rank in its file name |
+| LoRA training | N/A: training keeps ephemeral KV, no session |
+| LoRA playback | PASS by test: the LoRA handlers save and restore (`KvSessionSnapshotHandlerTest`, the three LoRA families), the adapter identity is in the manifest and checked; not run on a real adapter |
+| Vision | FAIL-CLOSED, tested: a request with an image is refused (`VisionAwareForwardPassHandlerSessionTest`); vision requests carry no session id today |
+| OpenAI REST | PASS: the three endpoints; 409 for a chat request on a held session (`SessionRoutesTest`) |
+| Native REST | the endpoints are the server's, shared; `/v1/inference` carries no session id, so there is nothing of its own to save |
+| CLI / REPL | not offered (decision 16 (a)), documented; `--session-dir` in `--help`, `run.sh`, `run.bat` |
+| `JunoPlayer` / `JunoHttpClient` | PASS: `JunoPlayer.sessions()` drives the live test and the kit probe; `JunoHttpClient` session calls, not run against a server |
+
+**Defect found and fixed (KV path, this tier's scope).** `Qwen2LoraTrainableHandler` wraps `LoraTrainableHandler` and passed
+none of `evict`, `reserveKv`, `hostKvBytes` or `pagedKvArena` to it, so with `--lora-play` on a Qwen2 model a stateless
+request's KV was never freed and its length hint never applied. Now passed on, tested.
+
+**Out-of-tier changes.** None.
+
+**Decisions for the owner.**
+- **17. On CUDA, a reply that starts from a shared prompt can differ from the reply computed in full** (found by
+  `smoke-kv-cache.sh --gpu`, part 1; step 4's feature, not step 7's). On TinyLlama the "friction" reply leaves the unshared one
+  at about its thirteenth token, deterministically; with `--prefill-batch 1` on both servers the two are equal, and with the
+  default 32-token windows only the computation from position 0 differs (INDEX section 3). The shared rows are right; the GPU
+  prefill's result depends on where its windows start, which moves when a request starts from a shared prefix. Step 4's
+  record ("replies equal sharing off on TinyLlama, CPU and CUDA", 9 of 9) and `docs/howto.md`'s "its reply is unchanged" hold
+  on the CPU and held on CUDA for those prompts. A restored session is not affected (it resumes where the uninterrupted one
+  does). (a) Recommended: record it as a property of GPU prefill: correct the step 4 record and `docs/howto.md` (on CUDA a
+  reply from a shared prompt can differ after the first token where the window split moves a rounding), and make the
+  smoke's CUDA equality check run both servers with `--prefill-batch 1` so it tests the sharing itself; window-split
+  invariance of GPU prefill becomes a candidate for a later tier. (b) Make GPU prefill independent of the window split in
+  this tier before it closes (kernel work in the prefill attention and GEMM paths, with hot-path gates). (c) Keep the
+  strict check and leave criterion 3's evidence as it stands, the CUDA smoke failing until (b) is done elsewhere.
+- **18. `Qwen2LoraTrainableHandler` does not pass `forwardBatch`** (nor the batched decode and verify calls) to its
+  delegate, so `--lora-play` on a Qwen2 model prefills one token at a time through the interface's serial default. Speed
+  only; replies are correct. (a) Recommended: hand it to [Tier 12](TIER-12-lora.md) (LoRA), which owns playback speed, with a
+  LoRA gate on Qwen2.5-3B. (b) Pass them on here, with `compare-lora.sh` on a Qwen2 model.
+
+**Owner decision 2026-11-19.** 18 (a): handed to [Tier 12](TIER-12-lora.md), scope item 6. Correction to the
+decision's text: `LoraTrainableHandler` implements `forward` and `forwardBatch` only (its verify and multi-decode calls are
+the interface's defaults too), so the one call the Qwen2 wrapper loses is `forwardBatch`. Decision 17: the owner asked
+for its cause first. From the code, on CUDA with packed K-quant weights (TinyLlama `Q4_K_M`): a window of at most 8
+rows (`CudaMatVec.HALF_SGEMM_BATCH_MAX`, `PrefillWindowRegion.MAX_HOST_WINDOW`) runs each row through the decode GEMV
+(`q4k_gemv.cu`: the FP32 activation quantized to Q8_1, four warps splitting the super-blocks, a tree reduction); a wider
+one stages the window as FP16, quantizes that to Q8_1 (`quantize_q8_1_half`) and runs the tiled integer GEMM
+(`kquant_gemm.cu`: each thread sums its super-blocks in sequence). FP16-weight matrices take `cublasGemmEx`
+(`CUBLAS_GEMM_DEFAULT`) there instead. Attention also differs: a window's rows read their keys in 32-row tiles, one
+slot each, where a single row uses the decode kernel (`gqa_attention.cu`). A position's values therefore depend on the
+width of the window it lands in, and a shared prefix moves the windows. The same prompt shows it without sharing:
+default windows give "force", `--prefill-batch 1` gives "phenomenon" (INDEX section 3).
+
+**Owner decision 2026-11-19 (later).** 17 (a): a property of GPU prefill, recorded. Done in this entry:
+- dated corrections beside step 4's status phrase, exit criterion 3's evidence and step 4's runs (each claim held on
+  CUDA for the prompts it ran);
+- `docs/howto.md`'s `--prefix-cache-tokens` row: unchanged on the CPU, can differ on a GPU, unchanged there with
+  `--prefill-batch 1`; the smoke section and `CHANGELOG.md` (Session 152, "Corrected") say the same;
+- `smoke-kv-cache.sh --gpu` runs part 1's two servers with `--prefill-batch 1`, so the equality tests the sharing
+  itself; the CPU run is unchanged. Rerun on CUDA, same build: 13 of 13 (INDEX section 3, note); the unshared reply is
+  the one-position-window one, so the setting took effect;
+- window-width invariance of GPU prefill is a candidate under [Tier 07](TIER-07-continuous-batching.md) item 6, whose
+  load-dependent chunk sizing would otherwise make a CUDA reply depend on the server's load.
+
+**Owner decisions 2026-11-19 (latest), from a walk through the KV storage.** Recorded out of tier: cluster nodes'
+`NodeKVCacheAdapter.flush` serializes every layer's whole KV after each forward pass (about 46 MB per generated token on
+TinyLlama at 2,048 positions, estimated, not measured), now [Tier 13](TIER-13-server-surface-clustering.md) item 6.
+Fixed in tier: `DeviceKvCache`'s class javadoc still said the host `f16` KV holds float32 (true before step 6); it now
+says the device FP16 side holds the same halves, byte for byte. Comment only.
+
+**Plan check.** `scripts/performance-tests/check-plan-thresholds.sh`: ok (26 tier files) after this entry.
+
+**Next for the executor:** step 8, the full smoke matrix (every earlier tier's smoke scripts unmodified, `smoke-kv-cache.sh`,
+the kit's **Keep passing** list on the tier's final build) and the tier's remaining criteria (decisions 17 and 18
+taken 2026-11-19).
+The owner's: the standing throughput and allocation gate, pinned, against the pre-tier jar.

@@ -122,6 +122,14 @@ gate is measured on Tier 02H's batched region.
    for `continuous` (interleaving disappears). An explicit `--prefill-batch N` keeps meaning a fixed `N`
    on `continuous`. `PrefillChunkDefaults` (coordinator) is where the default lives today; its
    `continuous` reason and `docs/howto.md`'s `--prefill-batch` row change in the same change.
+   - *Candidate, added 2026-11-19 by owner decision (Tier 03 decision 17 (a)): GPU prefill independent of the window
+     width.* On CUDA a window of more than 8 rows runs a different matmul kernel from a narrower one (activations staged
+     as FP16 before the 8-bit quantization, sums in another order) and a different attention kernel, so a position's
+     values depend on the window it is computed in. Today that moves a greedy reply when a shared prefix moves the
+     windows (TinyLlama, [`20261119T205146Z-session-persistence`](../perf-compare/20261119T205146Z-session-persistence/INDEX.md)
+     section 3); with this item's load-dependent chunks it would make a CUDA reply depend on the server's load. CPU
+     replies matched in every shared-prompt check so far. Scope if taken: the wide and narrow paths give one row the same bits (or chunk
+     boundaries stay on a fixed grid from position 0), a test of one prompt across window widths, and the hot-path gate.
 
 ### Out of scope
 

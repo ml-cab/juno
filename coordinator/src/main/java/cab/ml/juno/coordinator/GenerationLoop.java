@@ -765,7 +765,7 @@ public final class GenerationLoop {
 	public void evictSession(String sessionId) {
 		kvCache.evict(sessionId);
 		kvCache.invalidatePrefix(sessionId);
-		pipeline.evict(sessionId);
+		pipeline.dropKv(sessionId); // reaches remote nodes too, which evict() does not
 	}
 
 	/**

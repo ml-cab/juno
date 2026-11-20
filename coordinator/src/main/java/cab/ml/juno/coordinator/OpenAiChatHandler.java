@@ -202,6 +202,8 @@ public final class OpenAiChatHandler {
 
 			ctx.header("X-Juno-Latency-Ms", Long.toString(result.latency().toMillis()));
 			ctx.status(200).json(root);
+		} catch (SessionBusyException e) {
+			sessionBusy(ctx, e, false);
 		} catch (RequestScheduler.QueueFullException e) {
 			queueFull(ctx, e);
 		} catch (Exception e) {
@@ -254,6 +256,8 @@ public final class OpenAiChatHandler {
 					chunkChoice(0, Map.of("content", ""), OpenAiAdapter.toOpenAiFinishReason(result.stopReason())))));
 			writer.write("data: [DONE]\n\n");
 			writer.flush();
+		} catch (SessionBusyException e) {
+			sessionBusy(ctx, e, true);
 		} catch (RequestScheduler.QueueFullException e) {
 			writeJsonQueueFull(ctx, e);
 		} catch (Exception e) {
@@ -310,6 +314,8 @@ public final class OpenAiChatHandler {
 			}
 			writer.write("data: [DONE]\n\n");
 			writer.flush();
+		} catch (SessionBusyException e) {
+			sessionBusy(ctx, e, true);
 		} catch (RequestScheduler.QueueFullException e) {
 			writeJsonQueueFull(ctx, e);
 		} catch (Exception e) {
@@ -463,6 +469,17 @@ public final class OpenAiChatHandler {
 		if (param != null)
 			err.put("param", param);
 		ctx.status(status).json(Map.of("error", err));
+	}
+
+	/** HTTP 409: the session is held by a save, restore or delete; on a stream, before any chunk is written. */
+	private static void sessionBusy(Context ctx, SessionBusyException e, boolean streaming) {
+		if (streaming) {
+			try {
+				ctx.res().resetBuffer();
+			} catch (Exception ignored) {
+			}
+		}
+		openAiError(ctx, 409, "conflict", "session_busy", e.getMessage(), "x_juno_session_id");
 	}
 
 	private void queueFull(Context ctx, RequestScheduler.QueueFullException e) {

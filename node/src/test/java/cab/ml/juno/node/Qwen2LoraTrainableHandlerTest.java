@@ -170,6 +170,33 @@ class Qwen2LoraTrainableHandlerTest {
 		assertThat(analytic).isCloseTo(numeric, within(5e-2f));
 	}
 
+	@Test
+	@DisplayName("the wrapper passes KV state to its delegate: bytes held, evict, save and restore")
+	void kvStateReachesTheDelegate(@TempDir Path tmp) throws IOException {
+		Path gguf = buildSyntheticQwen2Gguf(tmp, filled(H, 0.01f), filled(KV_HEADS * (H / HEADS), -0.02f));
+		ShardContext ctx = new ShardContext("n0", 0, LAYERS, true, true, VOCAB, H, HEADS);
+		LoraAdapterSet adapters = LoraInitializer.create(
+				LlamaConfig.from(GgufReader.open(gguf)), LoraProjection.qv(), 2, 2f, new Random(1));
+		Qwen2LoraTrainableHandler h = Qwen2LoraTrainableHandler.load(gguf, ctx, adapters, CpuMatVec.INSTANCE);
+		for (int pos = 0; pos < 3; pos++)
+			h.forward(ForwardRequest.withTokens("r", new int[] { 3 + pos }, pos), ctx);
+		assertThat(h.delegate().hostKvBytes("r")).isPositive();
+		assertThat(h.hostKvBytes("r")).isEqualTo(h.delegate().hostKvBytes("r"));
+
+		cab.ml.juno.kvcache.KvSessionStamp stamp = new cab.ml.juno.kvcache.KvSessionStamp("m", "a", "layers-0-1",
+				new int[] { 3, 4, 5 });
+		Path file = tmp.resolve("r.kv");
+		assertThat(h.saveKv("r", stamp, file)).isPositive();
+		float[] next = h.forward(ForwardRequest.withTokens("r", new int[] { 9 }, 3), ctx).logits();
+
+		h.evict("r");
+		assertThat(h.delegate().hostKvBytes("r")).as("evict reaches the delegate").isZero();
+		h.restoreKv("r2", stamp, file);
+		assertThat(h.forward(ForwardRequest.withTokens("r2", new int[] { 9 }, 3), ctx).logits()).isEqualTo(next);
+		h.evict("r2");
+		assertThat(h.delegate().hostKvBytes("r2")).isZero();
+	}
+
 	private static void zeroAdapters(LoraAdapterSet adapters) {
 		for (var e : adapters.asMap().entrySet()) {
 			LoraAdapter a = e.getValue();

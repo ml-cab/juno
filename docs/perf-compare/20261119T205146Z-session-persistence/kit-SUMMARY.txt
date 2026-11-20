@@ -1,0 +1,21 @@
+Juno hardware validation kit 0.1.2, Juno d205ab67b5edd26508f682964018303c745000a8 (modified tree)
+Suite custom, started 20261119T205146Z, finished 20261119T205336Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+JFR clock: the operating system's; kernel clock source hpet
+
+session.save-restore.tinyllama-1.1b PASS     0:59
+    ok   f16: the restore reads back the saved session: saved 63 tokens, 1421645 bytes; restored 63 tokens, 1421645 bytes
+    ok   f16: the second turn starts from the restored KV: prefix hit
+    ok   f16: the second turn after the restart equals the uninterrupted one
+    ok   q8_0: the restore reads back the saved session: saved 63 tokens, 756372 bytes; restored 63 tokens, 756372 bytes
+    ok   q8_0: the second turn starts from the restored KV: prefix hit
+    ok   q8_0: the second turn after the restart equals the uninterrupted one
+gpu.session.save-restore.tinyllama-1.1b PASS     0:24, GPU 942 MiB, GPU busy
+    ok   f16: the restore reads back the saved session: saved 63 tokens, 1421645 bytes; restored 63 tokens, 1421645 bytes
+    ok   f16: the second turn starts from the restored KV: prefix hit
+    ok   f16: the second turn after the restart equals the uninterrupted one
+    ok   q8_0: the restore reads back the saved session: saved 63 tokens, 756372 bytes; restored 63 tokens, 756372 bytes
+    ok   q8_0: the second turn starts from the restored KV: prefix hit
+    ok   q8_0: the second turn after the restart equals the uninterrupted one

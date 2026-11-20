@@ -62,7 +62,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--cache-type-k f16\|f32\|q8_0\|q4_0` | `f16` | cluster, local, lora | K-cache element type (`JUNO_CACHE_TYPE_K`). `f16` (the default) stores each value as an IEEE half float, 2 bytes; `f32` keeps float32 rows, 4 bytes (on a GPU launch GPU attention's device copy still holds them in FP16, and the launch is told so at startup). `q8_0` packs keys in blocks of 32 values with an FP16 scale and 8-bit steps (34 bytes per 32 values, ~1.9× smaller than `f16`); `q4_0` uses 4-bit steps (18 bytes per 32 values, ~3.6× smaller). CPU attention reads the stored rows in place, decoding each head's slice inside the attention loop (`f32` rows are read as they are), so no float copy of the cache is made. Slight quality tradeoff vs float32 rows for `q8_0`, larger for `q4_0`: over a fixed 2,048-token text on the CPU (mean NLL against float32 rows, and the share of 512 greedy tokens where both pick the same token), `q4_0` keys and values read 1.006x and 99.0% on Mistral 7B, 1.030x and 97.1% on TinyLlama 1.1B, 1.035x and 98.1% on Phi-3.5-mini, and 2.02x and 83.6% on Qwen2.5-3B, which falls apart with 4-bit keys. The keys are the lossy half: `q8_0` keys with `q4_0` values read 0.997x to 1.006x the float32 NLL and 98.8% to 99.8% agreement on all four (`q8_0` keys and values 0.999x to 1.001x, 99.2% to 99.8%), so for a 4-bit cache use `--cache-type-k q8_0 --cache-type-v q4_0`: it keeps the quality and stores 0.76x of `q8_0`'s bytes. `--cache-type-k q4_0` stays available, since some models lose little with it, and prints a startup warning naming the loss and this alternative. On a GPU launch these types also set the device copy of each request's KV that GPU attention (`--gpu-attention`, CUDA) reads: it is stored as the same blocks, so the layers attending on the GPU read the values the host KV holds, dequantized inside the attention kernel, and the copy takes 0.53x the FP16 copy's device memory at `q8_0`, 0.41x at `q8_0` keys with `q4_0` values and 0.28x at `q4_0` (on Mistral 7B, 22 sessions of 2,048 tokens fit beside the weights on an 8 GB card against 11 or 12 with `f16`). On the GPU, greedy agreement with the FP16 copy over 512 tokens reads 99.4% to 100% at `q8_0` and 98.6% to 99.6% at `q8_0` keys with `q4_0` values on TinyLlama, Qwen2.5-3B, Phi-3.5-mini and Mistral 7B, with mean NLL within 0.5% of `f16`; decode rows over either copy run the same 256-thread attention block, and the quantized copy's loop loads each key's blocks before it uses them and unpacks them without conversion instructions, so at 2,048 keys its attention launch takes 0.65x (Phi-3.5-mini) to 0.97x (TinyLlama) the FP16 launch's time, and at a 2,048-token context decode with `q8_0` reads 0.96x (Qwen2.5-3B) to 0.99x (TinyLlama) the FP16 copy's rate, clocks pinned; the prefill attention over the quantized copy takes 0.90x to 0.95x of the FP16 kernel's time, and the host copy of the KV takes the blocks the device already encoded instead of encoding them again on the CPU (at `f16`, the device's FP16 rows, which are the host's rows byte for byte), so a 2,048-token prefill with `q8_0` takes 0.88x (Phi-3.5-mini) to 0.96x (TinyLlama) the FP16 prefill time in one window and 0.88x to 0.96x in 128-token chunks, clocks pinned: the type costs no time to first token. A model whose head width is not a multiple of 32 keeps an FP16 device copy, and the launch prints a startup warning saying so. Prompt sharing between requests (`--prefix-cache-tokens`) works beside GPU attention with every type whose device copy holds it. Where attention runs on the CPU (the CPU backend, ROCm, `--gpu-attention off`, the Phi-2 and Qwen3-MoE handlers, `--lora-play`) the type applies in full. On `juno lora` **training**, teacher-forced forward keeps ephemeral float KV (startup WARNING); the quantized types apply to inference / `--lora-play` maps. |
 | `--cache-type-v f16\|f32\|q8_0\|q4_0` | `f16` | cluster, local, lora | V-cache element type (`JUNO_CACHE_TYPE_V`). Same semantics as `--cache-type-k`. With the `static` schedule each request's host KV grows toward the most positions the request can write, its prompt plus `max_tokens` (doubling from 64 positions up to that count, and never past it; every stage is told, cluster nodes included), so a request holds no more than it can use. On Phi-3.5-mini `f16` K and V take 0.39 MB per position: a 2,048-token prompt with 64 generated tokens holds 0.83 GB of host KV, where float32 rows doubled to 4,096 positions held 3.2 GB, and the live heap at that request (CUDA, weights included) falls from 6.9 GiB to 4.4 GiB. The host KV of a finished request is kept for the next one rather than allocated again (on a GPU, a 512-token Phi-3.5-mini prompt window took 21% less time with this and the direct K/V write together), so an idle server holds one request's host KV on the heap, at the capacity that request reached; the next request reuses it, so the peak does not grow. |
 | `--schedule static\|continuous` | `static` | cluster, local, lora | Serving schedule (`JUNO_SCHEDULE`). `static` = dense KV + static micro-batch (SSE isolated). `continuous` = paged KV + running-set batching (SSE shares steps) on **local / in-process only**. Under continuous, long prompts advance in `--prefill-batch` ubatch chunks mixed into the same engine steps as other requests’ decode; when the step slot budget is full, **decode is preferred** so short replies are not starved. Cluster, TP, and PP launchers **auto-fallback to static** with a startup WARNING. On `juno lora` **training**, continuous is an explicit no-op (ephemeral float KV + REPL WARNING; no running-set engine). Per-request `x_juno_loras` is not wired on any schedule yet and is rejected on both `static` and `continuous` (use process-wide `--lora-play`, which now supports multiple adapters and per-file scales). A session resumes from its own earlier turns' KV (`x_juno_session_id`). Across requests and sessions, a prompt that starts like a finished request's prompt starts from that prompt's kept KV (`--prefix-cache-tokens`), on both schedules and in static batches. Tools / LoRA play that change the tokenized prefix invalidate cross-turn hits. `--parallel` caps the continuous running set (default cap 8 when parallel is 1). |
-| `--prefix-cache-tokens N` | a quarter of the heap, at most one context | local | Prompt positions of finished requests kept as KV (`JUNO_PREFIX_CACHE_TOKENS`), so that a later request whose prompt starts the same way (one system prompt across many clients, two users opening with the same message) starts from that KV instead of computing it; its reply is unchanged. Held prompts are released least recently used first past the budget; `0` turns this off. The startup line states the budget and its size in MiB, or why sharing is off. On the paged KV (`continuous`) a request shares the kept pages, copied only when written; on the dense KV (`static`) the rows are copied. With GPU attention the shared rows are copied into the request's device KV, so the device skips the prefix too. Never shared: requests with an image, `--lora-play`, a cluster's remote nodes, and a `q8_0` host KV beside GPU attention; a value above 0 there fails at startup. `/v1/cluster/health` reports `sharedPrefixHits`, `sharedPrefixTokens`, `sharedPrefixHeldTokens` and `sharedPrefixBudget`. |
+| `--prefix-cache-tokens N` | a quarter of the heap, at most one context | local | Prompt positions of finished requests kept as KV (`JUNO_PREFIX_CACHE_TOKENS`), so that a later request whose prompt starts the same way (one system prompt across many clients, two users opening with the same message) starts from that KV instead of computing it. On the CPU its reply is unchanged. On a GPU it can differ: a prefill window of more than eight positions runs a different kernel from a narrower one (activations staged as half floats, sums taken in another order), so a position's values depend on the width of the window it is computed in, and starting from a kept prompt moves the windows; once a rounding difference changes a chosen token, the rest of the reply follows it. With `--prefill-batch 1` the reply is unchanged on a GPU too. Held prompts are released least recently used first past the budget; `0` turns this off. The startup line states the budget and its size in MiB, or why sharing is off. On the paged KV (`continuous`) a request shares the kept pages, copied only when written; on the dense KV (`static`) the rows are copied. With GPU attention the shared rows are copied into the request's device KV, so the device skips the prefix too. Never shared: requests with an image, `--lora-play`, a cluster's remote nodes, and a `q8_0` host KV beside GPU attention; a value above 0 there fails at startup. `/v1/cluster/health` reports `sharedPrefixHits`, `sharedPrefixTokens`, `sharedPrefixHeldTokens` and `sharedPrefixBudget`. |
+| `--session-dir PATH` | none | cluster, local | Directory for explicit session saves and restores over REST (`JUNO_SESSION_DIR`): `POST /v1/sessions/{id}/save` writes a session's KV there and `.../restore` reads it back, in the same or a later process (see "Session save and restore" below). Without it both answer 400 naming the flag. Nothing else writes to it, and only these calls touch the disk. In a cluster each node writes its own layers under the same path on its own host (the launcher passes it to the node processes; a standalone node reads `JUNO_SESSION_DIR`), so a saved session restores on the same nodes, or anywhere the directories are shared. |
 | `--kv-page-size N` | `16` | cluster, local, lora | Tokens per KV page when `schedule=continuous` (`JUNO_KV_PAGE_SIZE`). Ignored under `static` (dense; startup note). CPU attention reads the pages in place, page by page, and gives the same output bits as over dense KV at every page size; nothing is copied into a contiguous buffer before attention. A page every request has released stays in the pool and is reused first; pages left unused for a whole reclaim period give their memory back to the heap, from a background thread, so a burst of long requests does not keep its KV memory after the load drops. The period is one minute (`-Djuno.kv.reclaimPeriodMs=MS`, read under `continuous`, which alone has pages; `0` turns this off, and a value that is not a whole number of milliseconds stops startup with an error naming it). Pages in use, and pages a session or a kept prompt holds, are never moved or touched. `/v1/cluster/health` reports `kvPagesLive`, `kvPagesIdle`, `kvPagesReclaimed` (since startup) and `kvPageBytes` (heap the live and idle pages hold); all are 0 on `static`. |
 | `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching. Requests that arrive within `--batch-window-ms` of a batch's first request decode together, up to N. On the CPU, `8` suits an API server: 8 concurrent clients read 1.08x to 1.17x the aggregate throughput of `1`, at lower mean latency, on a 6-core host. On the GPU, `8` suits an API server too: a decode batch runs in the device-resident decode region, and 8 concurrent clients read 1.77x to 2.32x the aggregate throughput of `1`, at 0.43x to 0.58x its mean latency, on a GTX 1080 (`docs/perf-compare/20261031T041246Z-cpu-parallel-window/`, `docs/perf-compare/20261109T005616Z-gpu-batched-decode-parallel/`). On the CPU with the default integer kernels, batching does not change a request's output: every request in a decode batch is computed with the arithmetic it gets when it runs alone, bit for bit, so a greedy answer does not depend on what else the server is serving (the continuous schedule's decode steps likewise). On the GPU, every layer the device region runs whole decodes a batch row for row as it decodes one request, bit for bit, so a greedy answer does not depend on what else is being served; a layer on the host-driven batch path (a handler without the region, or `JUNO_BATCH_DECODE_REGION=off`) can differ from a single request in the last bits. On a cluster keep `1`: a batch decodes one request at a time on each node, because the batched device decode runs in local mode only, and startup says so. Replies do not change, and with 8 concurrent clients `8` read 0.38x (pipeline) and 0.81x (tensor) the aggregate throughput of `1` on TinyLlama on the GPU (`docs/perf-compare/20261109T151847Z-gpu-batched-decode-cross-surface/`). |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`): a static batch dispatches M ms after its first request, or as soon as `--parallel` requests have arrived; a request with no company waits up to M ms. |
@@ -661,7 +662,7 @@ curl http://localhost:8080/v1/models
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `x_juno_priority` | string | `NORMAL` | Scheduler priority: `HIGH` / `NORMAL` / `LOW` |
-| `x_juno_session_id` | string | — | Stable session ID; enables KV-cache reuse across turns. A session resumes only from the KV of its own earlier turns; its first turn may start from a finished request's kept prompt (`--prefix-cache-tokens`), which is a copy no other request writes |
+| `x_juno_session_id` | string | — | Stable session ID; enables KV-cache reuse across turns. A session resumes only from the KV of its own earlier turns; its first turn may start from a finished request's kept prompt (`--prefix-cache-tokens`), which is a copy no other request writes. The session's KV is kept until `DELETE /v1/sessions/{id}`, and can be saved and restored (see "Session save and restore") |
 | `x_juno_top_k` | integer | `50` | Top-K sampling cutoff (0 = disabled) |
 | `x_juno_grammar` | string | — | Raw GBNF. Cannot be combined with `response_format` `json_object` / `json_schema` or with `tools`. |
 
@@ -743,6 +744,54 @@ The full OpenAPI 3.0 specification is at `api/src/main/resources/juno-api.yaml`.
 | `POST` | `/v1/inference/stream` | SSE stream; each `data:` line is JSON `{"token":"…","isComplete":false}` until terminal event |
 
 ---
+
+### Session save and restore (`--session-dir`)
+
+A session (`x_juno_session_id`) keeps its KV in memory between turns, so each turn prefills only what is new.
+Three endpoints manage that KV explicitly; the id is the session id the chat requests carry (1 to 128 letters,
+digits, `-`, `_` or `.`), and the client never sends a path or a file name.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /v1/sessions/{id}/save` | Writes the session's KV under `--session-dir`: one file per stage holding its layers' rows exactly as stored (halves for `f16`, floats for `f32`, blocks for `q8_0`/`q4_0`), then a manifest `{id}.session`. A save replaces an earlier one. |
+| `POST /v1/sessions/{id}/restore` | Replaces the session's KV with the saved one, in this process or a later one. The next chat turn sends the whole conversation as usual; the restored tokens are the session's prefix, so only the new turn is prefilled, and its reply is the one the uninterrupted session gives. |
+| `DELETE /v1/sessions/{id}` | Frees the session's KV in memory on every stage, cluster nodes included. Saved files stay; no session directory is needed. |
+
+Each answers `{"session_id", "tokens", "bytes", "elapsed_ms"}`: the positions the KV covers (the last turn's prompt),
+the bytes written or read, and the time taken.
+
+```bash
+./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf --api-port 8080 --session-dir ~/juno-sessions
+curl -s localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"tinyllama","x_juno_session_id":"chat-1","messages":[{"role":"user","content":"Name three colors."}]}'
+curl -s -X POST localhost:8080/v1/sessions/chat-1/save      # {"session_id":"chat-1","tokens":...,"bytes":...}
+# ... restart the server with the same --session-dir ...
+curl -s -X POST localhost:8080/v1/sessions/chat-1/restore
+# the next turn sends the conversation so far plus the new message, with the same x_juno_session_id
+curl -s -X DELETE localhost:8080/v1/sessions/chat-1         # free its memory when the conversation ends
+```
+
+What a restore checks, and refuses with 400 naming the difference, before it changes anything: the model file (its
+name, size and a SHA-256 of its first MiB), the `--lora-play` adapters, the K and V cache types and the file format.
+Each stage then checks its own file: its layer range (and rank on a tensor-parallel node), KV width and the tokens,
+and a checksum over the whole file; a stage that refuses leaves the session with no KV. Files are written to a
+temporary name and renamed into place, so a reader never sees half a file. Rows are stored by position, so a session
+saved under `--schedule static` restores under `continuous` and the other way round.
+
+Status codes: 400 without `--session-dir`, for a bad id, for a file of other KV or a damaged one, and for a session
+that may not be saved (one whose KV holds an image); 404 when nothing is saved under the id, or a save of a session
+holding no KV; 409 when a request of the session is in flight (and a chat request for a session being saved,
+restored or deleted answers 409 too, so the KV never changes under a save).
+
+In a cluster each node writes its own layers under its own session directory and the coordinator writes the
+manifest. A restore needs the same layer split and each node's files: on the same hosts, or with the session
+directory on shared storage. A different split answers 400 naming the stages the session was saved on.
+
+Saves and restores are explicit and never automatic: nothing is written to disk unless a client asks. The embedding
+facade reaches the same store: `JunoPlayer.builder(model).sessionDir(dir)`, then `player.sessions().save(id)`,
+`.restore(id)`, `.delete(id)`; `JunoHttpClient.withSession(id)` sends `x_juno_session_id`, and `saveSession`,
+`restoreSession` and `deleteSession` call the endpoints. The interactive prompt (`./juno local`, `./juno cluster`)
+has no save command: sessions are saved over REST.
 
 ### Embeddings API (`--embeddings`, `--pooling`)
 
@@ -1486,6 +1535,23 @@ and leave no node process behind. Requires a CUDA device; run it on an otherwise
 # -> target/gpu-residency-smoke/<stamp>/summary.md
 ```
 
+### KV cache smoke test
+
+Three parts on TinyLlama over REST, each against a fresh local server: shared prompts (two concurrent
+requests whose prompts start with a finished request's system prompt must both start from it, counted by
+`sharedPrefixHits`, and reply as with `--prefix-cache-tokens 0`; with `--gpu` both servers run
+`--prefill-batch 1`, the setting under which a GPU reply does not depend on where the prefill windows fall); page reclaim (a churn of requests on the
+`continuous` schedule must leave idle pages that the background pass releases, `kvPagesReclaimed`, and a fixed
+request must reply the same before and after); and a session saved over `--session-dir`, the server killed, a
+new server on the `continuous` schedule restoring it, whose next turn must equal the uninterrupted one and start
+from the restored KV, with the 400 and 404 refusals checked. Exits 1 on any failure.
+
+```bash
+./scripts/performance-tests/smoke-kv-cache.sh            # CPU
+./scripts/performance-tests/smoke-kv-cache.sh --gpu      # CUDA
+# -> target/kv-cache-smoke/<stamp>/
+```
+
 ### Long-prompt prefill smoke test
 
 Drives `/v1/chat/completions` with long prompts on TinyLlama and Mistral 7B, on the `static` and
@@ -1597,7 +1663,7 @@ mvn verify -pl juno-master -Pintegration -DMODELS=/abs/a.gguf,/abs/b.gguf
                                        # and on the GPU a 2048-token one (capped to the model's context),
                                        # and a context-shift run past a 192-token limit on both schedules
 
-./juno test --model-path /path/to/model.gguf   # real-model smoke test (10 checks, exits 0/1)
+./juno test --model-path /path/to/model.gguf   # real-model smoke test (11 checks, exits 0/1)
 ```
 
 **Windows (Command Prompt):**

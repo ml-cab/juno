@@ -46,6 +46,12 @@ public final class JunoHttpClient {
 	private final ObjectMapper json = new ObjectMapper();
 	/** Context-shift choice sent with every request; null sends none (the server default applies). */
 	private final Boolean contextShift;
+	/** Session id sent with every chat completion ({@code x_juno_session_id}); null for stateless requests. */
+	private final String sessionId;
+
+	/** What a session call answers: the session, its token count, the bytes written or read, and the time taken. */
+	public record SessionResult(String sessionId, int tokens, long bytes, long elapsedMs) {
+	}
 
 	public JunoHttpClient(URI base) {
 		String s = base.toString();
@@ -53,11 +59,13 @@ public final class JunoHttpClient {
 			s = s.substring(0, s.length() - 1);
 		baseV1 = s.endsWith("/v1") ? s : s + "/v1";
 		contextShift = null;
+		sessionId = null;
 	}
 
-	private JunoHttpClient(String baseV1, Boolean contextShift) {
+	private JunoHttpClient(String baseV1, Boolean contextShift, String sessionId) {
 		this.baseV1 = baseV1;
 		this.contextShift = contextShift;
+		this.sessionId = sessionId;
 	}
 
 	/**
@@ -68,7 +76,48 @@ public final class JunoHttpClient {
 	 * the limit whatever the server default.
 	 */
 	public JunoHttpClient withContextShift(boolean shift) {
-		return new JunoHttpClient(baseV1, shift);
+		return new JunoHttpClient(baseV1, shift, sessionId);
+	}
+
+	/**
+	 * A client whose chat completions belong to session {@code id} ({@code x_juno_session_id}): the server keeps the
+	 * session's KV between turns, so each turn prefills only what is new. The session can then be saved, restored and
+	 * deleted with {@link #saveSession}, {@link #restoreSession} and {@link #deleteSession}.
+	 */
+	public JunoHttpClient withSession(String id) {
+		if (id == null || id.isBlank())
+			throw new IllegalArgumentException("session id must not be blank");
+		return new JunoHttpClient(baseV1, contextShift, id);
+	}
+
+	/** {@code POST /v1/sessions/{id}/save}: the server needs {@code --session-dir}; fails on any non-200. */
+	public SessionResult saveSession(String id) throws Exception {
+		return sessionResult(send(HttpRequest.newBuilder(URI.create(baseV1 + "/sessions/" + id + "/save"))
+				.POST(HttpRequest.BodyPublishers.noBody()).build()));
+	}
+
+	/** {@code POST /v1/sessions/{id}/restore}; the next turn sends the whole conversation as usual. */
+	public SessionResult restoreSession(String id) throws Exception {
+		return sessionResult(send(HttpRequest.newBuilder(URI.create(baseV1 + "/sessions/" + id + "/restore"))
+				.POST(HttpRequest.BodyPublishers.noBody()).build()));
+	}
+
+	/** {@code DELETE /v1/sessions/{id}}: frees the session's KV in the server's memory; saved files stay. */
+	public SessionResult deleteSession(String id) throws Exception {
+		return sessionResult(send(HttpRequest.newBuilder(URI.create(baseV1 + "/sessions/" + id)).DELETE().build()));
+	}
+
+	private SessionResult sessionResult(String body) throws Exception {
+		var n = json.readTree(body);
+		return new SessionResult(n.path("session_id").asText(), n.path("tokens").asInt(), n.path("bytes").asLong(),
+				n.path("elapsed_ms").asLong());
+	}
+
+	private String send(HttpRequest req) throws Exception {
+		HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+		if (res.statusCode() != 200)
+			throw new IllegalStateException("HTTP " + res.statusCode() + ": " + res.body());
+		return res.body();
 	}
 
 	/**
@@ -256,6 +305,8 @@ public final class JunoHttpClient {
 				root.put("temperature", temperature);
 			if (contextShift != null)
 				root.put("x_juno_context_shift", contextShift);
+			if (sessionId != null)
+				root.put("x_juno_session_id", sessionId);
 			return json.writeValueAsString(root);
 		} catch (Exception e) {
 			throw new IllegalStateException(e);

@@ -15,13 +15,17 @@
  */
 package cab.ml.juno.node;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import cab.ml.juno.kvcache.KvSessionStamp;
 import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
@@ -181,6 +185,62 @@ public final class LocalInferencePipeline implements InferencePipeline {
 			}
 		}
 		return true;
+	}
+
+	/** Every distinct handler once, under {@code dir}, labelled by the layers it holds ({@link #stageLabels}). */
+	@Override
+	public List<SessionKvPart> saveKv(String requestId, KvSessionStamp stamp, Path dir) throws IOException {
+		List<SessionKvPart> parts = new ArrayList<>();
+		for (StageLabel e : stageLabels()) {
+			String label = e.label();
+			String name = SessionKvPart.fileName(requestId, label);
+			long bytes = e.handler().saveKv(requestId, stamp.forStage(label), dir.resolve(name));
+			parts.add(new SessionKvPart(label, name, bytes));
+		}
+		return parts;
+	}
+
+	/** As {@link #saveKv}; a refusal on any handler drops {@code requestId} on every stage before it is passed on. */
+	@Override
+	public List<SessionKvPart> restoreKv(String requestId, KvSessionStamp stamp, Path dir) throws IOException {
+		List<SessionKvPart> parts = new ArrayList<>();
+		try {
+			for (StageLabel e : stageLabels()) {
+				String label = e.label();
+				String name = SessionKvPart.fileName(requestId, label);
+				long bytes = e.handler().restoreKv(requestId, stamp.forStage(label), dir.resolve(name));
+				parts.add(new SessionKvPart(label, name, bytes));
+			}
+		} catch (IOException | RuntimeException | Error ex) {
+			evict(requestId);
+			throw ex;
+		}
+		return parts;
+	}
+
+	/**
+	 * Each distinct handler, in stage order, with the label its session files carry: {@code layers-S-E} over the first
+	 * and last layer of the stages it serves.
+	 */
+	private List<StageLabel> stageLabels() {
+		Map<ForwardPassHandler, int[]> spans = new IdentityHashMap<>();
+		List<ForwardPassHandler> order = new ArrayList<>();
+		for (NodeStage stage : stages) {
+			int[] span = spans.get(stage.handler());
+			if (span == null) {
+				spans.put(stage.handler(), new int[] { stage.context().startLayer(), stage.context().endLayer() });
+				order.add(stage.handler());
+			} else {
+				span[0] = Math.min(span[0], stage.context().startLayer());
+				span[1] = Math.max(span[1], stage.context().endLayer());
+			}
+		}
+		List<StageLabel> labels = new ArrayList<>(order.size());
+		for (ForwardPassHandler h : order) {
+			int[] span = spans.get(h);
+			labels.add(new StageLabel(h, "layers-" + span[0] + "-" + span[1]));
+		}
+		return labels;
 	}
 
 	/** Summed over distinct handlers, as each holds its own layers' KV. */
@@ -359,5 +419,8 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	// ── Inner type ────────────────────────────────────────────────────────────
 
 	private record NodeStage(ShardContext context, ForwardPassHandler handler) {
+	}
+
+	private record StageLabel(ForwardPassHandler handler, String label) {
 	}
 }

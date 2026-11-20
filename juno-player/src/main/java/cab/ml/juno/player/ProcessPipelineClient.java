@@ -128,6 +128,31 @@ public final class ProcessPipelineClient implements InferencePipeline {
 		pendingKvReserve.remove(requestId);
 	}
 
+	/** Every node saves its own layers under its own session directory; {@code dir} is not used. */
+	@Override
+	public List<cab.ml.juno.node.SessionKvPart> saveKv(String requestId, cab.ml.juno.kvcache.KvSessionStamp stamp,
+			java.nio.file.Path dir) throws java.io.IOException {
+		return NodeSessionKv.save(blockingStubs(), requestId, stamp);
+	}
+
+	/** Every node restores its own layers from its own session directory; a refusal drops the session everywhere. */
+	@Override
+	public List<cab.ml.juno.node.SessionKvPart> restoreKv(String requestId, cab.ml.juno.kvcache.KvSessionStamp stamp,
+			java.nio.file.Path dir) throws java.io.IOException {
+		return NodeSessionKv.restore(blockingStubs(), requestId, stamp);
+	}
+
+	/** Frees the session's KV on every node, which {@link #evict} does not reach. */
+	@Override
+	public void dropKv(String requestId) {
+		pendingKvReserve.remove(requestId);
+		NodeSessionKv.drop(blockingStubs(), requestId);
+	}
+
+	private List<cab.ml.juno.api.grpc.NodeServiceGrpc.NodeServiceBlockingStub> blockingStubs() {
+		return stubs.stream().map(s -> s.blockingStub).toList();
+	}
+
 	@Override
 	public int vocabSize() {
 		return vocabSize;

@@ -522,6 +522,8 @@ public final class ClusterHarness implements AutoCloseable {
 		forwardSysProp(cmd, cab.ml.juno.node.GpuResidencyOptions.ENV_PROPERTY);
 		forwardSysProp(cmd, cab.ml.juno.node.PrefillRegionOptions.ENV_PROPERTY);
 		forwardSysProp(cmd, cab.ml.juno.node.BatchDecodeRegionOptions.ENV_PROPERTY);
+		// Session saves: each node writes its own layers under the coordinator's --session-dir (node-pinned files).
+		forwardSysProp(cmd, cab.ml.juno.kvcache.SessionDirOptions.ENV);
 		// NodeMain's backend switch (default true: the GPU wherever one is usable), so a caller can keep the
 		// forked nodes on the CPU.
 		forwardSysProp(cmd, "JUNO_USE_GPU");

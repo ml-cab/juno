@@ -268,6 +268,7 @@ public final class ConsoleMain {
 	private static String schedule = null; // null → env or default static
 	private static String kvPageSize = null; // null → env or default 16
 	private static String prefixCacheTokens = null; // null → env or default (one context)
+	private static String sessionDir = null; // null → env or none (session save/restore refused)
 	private static Integer parallel = null; // null → env or default 1
 	private static Long batchWindowMs = null; // null → env or default when parallel > 1
 	private static String grammarFile = null;
@@ -476,6 +477,8 @@ public final class ConsoleMain {
 			System.setProperty(cab.ml.juno.kvcache.KvPageSizeOptions.ENV, kvPageSize);
 		if (prefixCacheTokens != null)
 			System.setProperty(cab.ml.juno.kvcache.SharedPrefixOptions.ENV, prefixCacheTokens);
+		if (sessionDir != null)
+			System.setProperty(cab.ml.juno.kvcache.SessionDirOptions.ENV, sessionDir);
 		if (loraPlayPath != null)
 			System.setProperty(cab.ml.juno.node.LoraMmqPolicy.PLAY_PATH_PROPERTY, loraPlayPath);
 		System.setProperty("juno.byteOrder", byteOrder);
@@ -659,6 +662,11 @@ public final class ConsoleMain {
 			String env = System.getenv(cab.ml.juno.kvcache.KvPageSizeOptions.ENV);
 			if (env != null && !env.isBlank())
 				kvPageSize = env.strip();
+		}
+		if (sessionDir == null) {
+			String env = System.getenv(cab.ml.juno.kvcache.SessionDirOptions.ENV);
+			if (env != null && !env.isBlank())
+				sessionDir = env.strip();
 		}
 		if (prefixCacheTokens == null) {
 			String env = System.getenv(cab.ml.juno.kvcache.SharedPrefixOptions.ENV);
@@ -915,6 +923,11 @@ public final class ConsoleMain {
 					throw new IllegalArgumentException("--schedule requires static|continuous");
 				schedule = args[++i];
 				cab.ml.juno.kvcache.ServeScheduleOptions.parse(schedule);
+				break;
+			case "--session-dir":
+				if (i + 1 >= args.length || args[i + 1].isBlank())
+					throw new IllegalArgumentException("--session-dir requires a directory path");
+				sessionDir = args[++i].strip();
 				break;
 			case "--prefix-cache-tokens":
 				if (i + 1 >= args.length)
@@ -1211,6 +1224,10 @@ public final class ConsoleMain {
 		System.out.println("                             prompt starts the same way skips computing that part (default:");
 		System.out.println("                             the model's context length; 0 = off). Local mode; a cluster or");
 		System.out.println("                             --lora-play refuses a value above 0. env JUNO_PREFIX_CACHE_TOKENS");
+		System.out.println("  --session-dir PATH         Directory for explicit session saves and restores over REST");
+		System.out.println("                             (POST /v1/sessions/{id}/save and /restore); without it both");
+		System.out.println("                             answer 400. Nothing else writes there. In a cluster each node");
+		System.out.println("                             saves its own layers under its own directory. env JUNO_SESSION_DIR");
 		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled);");
 		System.out.println("                             under continuous, caps the running set (default cap 8 if N=1)");
 		System.out.println("                             env JUNO_PARALLEL; 8 suits a local API server, keep 1 on a cluster");
@@ -2510,6 +2527,7 @@ public final class ConsoleMain {
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder, cliGrammar,
 					embeddingsEnabled, PoolingMode.parse(pooling));
 			registerVisionRoutes(apiServer, scheduler, registry, visionBuilt);
+			configureSessionStore(apiServer, scheduler);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Local API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
@@ -2622,6 +2640,19 @@ public final class ConsoleMain {
 	 * {@code apiServer} exists; the handler wrap itself must already have
 	 * happened via {@link #prepareVisionHandler}, before the pipeline was built.
 	 */
+	/**
+	 * Session save and restore routes over the {@code --session-dir} directory, if one is set; without it they answer
+	 * 400 naming the flag. A cluster's nodes write their own layers under the same path on their hosts.
+	 */
+	private static void configureSessionStore(cab.ml.juno.coordinator.InferenceApiServer apiServer,
+			cab.ml.juno.coordinator.RequestScheduler scheduler) throws java.io.IOException {
+		var store = cab.ml.juno.coordinator.SessionStore.configure(scheduler, java.nio.file.Path.of(modelPath),
+				loraPlayPath);
+		apiServer.setSessionStore(store);
+		store.directory().ifPresent(d -> print(Color.GREEN + "  Session saves and restores under " + d
+				+ " (POST /v1/sessions/{id}/save, /restore)" + Color.RESET));
+	}
+
 	private static void registerVisionRoutes(cab.ml.juno.coordinator.InferenceApiServer apiServer,
 			cab.ml.juno.coordinator.RequestScheduler scheduler, ModelRegistry registry,
 			LlavaHandlerFactory.Built built) {
@@ -2779,6 +2810,7 @@ public final class ConsoleMain {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder, cliGrammar,
 					embeddingsEnabled, PoolingMode.parse(pooling));
+			configureSessionStore(apiServer, scheduler);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Cluster API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);

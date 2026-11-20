@@ -67,6 +67,7 @@ public final class ProbeMain {
 		case "PackedKquantProbe" -> new PackedKquantProbe();
 		case "GpuKernelTimingProbe" -> new GpuKernelTimingProbe();
 		case "KvFootprintProbe" -> new KvFootprintProbe();
+		case "SessionProbe" -> new SessionProbe();
 		case "UnitTestsProbe" -> new UnitTestsProbe();
 		case "ConsistencyProbe" -> new ConsistencyProbe();
 		case "GrammarProbe" -> new GrammarProbe();

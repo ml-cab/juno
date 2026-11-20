@@ -49,6 +49,13 @@ interim one).
    measure it with `compare-lora.sh` (playback wall-clock tps `>= 0.80x` as a floor; the speed-up is
    reported) and a parity test against the per-row path at widths 9, 64 and 512.
 
+6. **Qwen2 playback passes batched prefill to its delegate** *(added 2026-11-19, owner decision 18 (a) during Tier 03
+   step 7)*. `Qwen2LoraTrainableHandler` wraps `LoraTrainableHandler` and passes `forward` to it but not `forwardBatch`,
+   so `--lora-play` on a Qwen2 model prefills one token at a time through `ForwardPassHandler`'s serial default (replies
+   are correct; speed only). Pass it on, with a test that a batch reaches the delegate's `forwardBatch` and gives the
+   per-row path's logits, and measure with `compare-lora.sh` on Qwen2.5-3B (the standing gate's thresholds; the prefill
+   speed-up reported).
+
 ### Out of scope
 
 - Removing or changing the existing Juno-native `.lora` format — native GGUF-LoRA inference is

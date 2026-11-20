@@ -59,6 +59,7 @@ public final class InferenceApiServer {
 	private final RequestScheduler scheduler;
 	private final ModelRegistry modelRegistry;
 	private final OpenAiChatHandler openAiChatHandler;
+	private SessionStore sessionStore;
 	private final EmbeddingsHandler embeddingsHandler;
 	private final GbnfGrammar defaultGrammar;
 	private Javalin app;
@@ -113,6 +114,15 @@ public final class InferenceApiServer {
 				defaultPooling != null ? defaultPooling : PoolingMode.MEAN);
 	}
 
+	/**
+	 * The store behind the session routes ({@code /v1/sessions/{id}/save}, {@code .../restore},
+	 * {@code DELETE /v1/sessions/{id}}). Without one, save and restore answer 400 naming {@code --session-dir} and
+	 * delete still frees a session's memory. Call before {@link #start(int)}.
+	 */
+	public void setSessionStore(SessionStore store) {
+		this.sessionStore = store;
+	}
+
 	public void start(int port) {
 		app = Javalin.create(config -> {
 			config.useVirtualThreads = true;
@@ -136,6 +146,9 @@ public final class InferenceApiServer {
 		app.post("/v1/chat/completions", openAiChatHandler::handleChatCompletion);
 		app.post("/v1/embeddings", embeddingsHandler::handleEmbeddings);
 
+		// ── Sessions ──────────────────────────────────────────────────────────
+		new SessionRoutes(sessionStore != null ? sessionStore : SessionStore.withoutDirectory(scheduler)).register(app);
+
 		// ── Models ────────────────────────────────────────────────────────────
 		app.get("/v1/models", openAiChatHandler::handleListModels);
 		app.get("/v1/models/{modelId}", openAiChatHandler::handleGetModel);
@@ -145,6 +158,9 @@ public final class InferenceApiServer {
 		app.get("/v1/cluster/health", this::handleClusterHealth);
 
 		// ── Error handlers ────────────────────────────────────────────────────
+		app.exception(SessionBusyException.class, (e, ctx) -> {
+			ctx.status(409).json(Map.of("code", 409, "error", "CONFLICT", "message", e.getMessage()));
+		});
 		app.exception(RequestScheduler.QueueFullException.class, (e, ctx) -> {
 			ctx.status(429).json(Map.of("code", 429, "error", "QUEUE_FULL", "message", e.getMessage(), "retryAfterMs",
 					e.retryAfterSeconds() * 1000));

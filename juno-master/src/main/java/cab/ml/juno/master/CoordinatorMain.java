@@ -189,6 +189,9 @@ public final class CoordinatorMain {
 
 		// ── Start REST server ─────────────────────────────────────────────
 		InferenceApiServer apiServer = new InferenceApiServer(scheduler, registry, byteOrderStr);
+		// Session save/restore over JUNO_SESSION_DIR; each node saves its own layers under its own JUNO_SESSION_DIR.
+		apiServer.setSessionStore(cab.ml.juno.coordinator.SessionStore.configure(scheduler, Path.of(modelPath),
+				System.getProperty("juno.lora.play.path")));
 
 		// Wire health dashboard and per-request latency reporter into the coordinator's
 		// Javalin server so nodes POST probes to /health/probe on port 8080 and the

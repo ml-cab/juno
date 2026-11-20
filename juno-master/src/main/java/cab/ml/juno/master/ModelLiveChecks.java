@@ -92,7 +92,9 @@ public final class ModelLiveChecks {
 		/** Check 9, in-process long-prompt prefill. */
 		PREFILL,
 		/** Check 10, in-process context shift past the context limit. */
-		CONTEXT_SHIFT
+		CONTEXT_SHIFT,
+		/** Check 11, a session saved on a cluster and restored after the cluster restarts, both parallel modes. */
+		SESSION
 	}
 
 	/** One check's outcome. */
@@ -116,6 +118,7 @@ public final class ModelLiveChecks {
 	private static final String[] TENSOR_NAMES = { "tensor-parallel generation", "tensor-parallel greedy determinism" };
 	private static final String PREFILL_NAME = "long-prompt prefill, both schedules";
 	private static final String CONTEXT_SHIFT_NAME = "context shift past the context limit, both schedules";
+	private static final String SESSION_NAME = "session save and restore across a cluster restart, pipeline and tensor";
 
 	private static final Set<String> GREETING_WORDS = Set.of("how", "are", "you", "hello", "hi", "help", "doing",
 			"today", "there", "welcome", "assist", "can", "i", "what", "do", "hola", "hey", "greetings", "good",
@@ -184,6 +187,20 @@ public final class ModelLiveChecks {
 					() -> longPromptPrefill(modelPath, cfg, tokenizer, contextLength, cuda));
 		if (suites.contains(Suite.CONTEXT_SHIFT))
 			record(results, progress, 10, CONTEXT_SHIFT_NAME, () -> ContextShiftCheck.run(modelPath, cfg, tokenizer, cuda));
+		if (suites.contains(Suite.SESSION)) {
+			String nodeGpuSession = nodeUseGpu(backend);
+			String savedGpu = System.getProperty(NODE_USE_GPU);
+			try {
+				if (nodeGpuSession != null)
+					System.setProperty(NODE_USE_GPU, nodeGpuSession);
+				record(results, progress, 11, SESSION_NAME, () -> SessionSaveRestoreCheck.run(modelPath, cfg, tokenizer));
+			} finally {
+				if (savedGpu == null)
+					System.clearProperty(NODE_USE_GPU);
+				else
+					System.setProperty(NODE_USE_GPU, savedGpu);
+			}
+		}
 		return results;
 	}
 
@@ -217,6 +234,8 @@ public final class ModelLiveChecks {
 			out.add(new LiveCheck(9, PREFILL_NAME, false, reason));
 		if (suites.contains(Suite.CONTEXT_SHIFT))
 			out.add(new LiveCheck(10, CONTEXT_SHIFT_NAME, false, reason));
+		if (suites.contains(Suite.SESSION))
+			out.add(new LiveCheck(11, SESSION_NAME, false, reason));
 		return out;
 	}
 

@@ -86,6 +86,11 @@ Features:
   the KV is stored in the same types (FP16 for `f16` and `f32`), read in place by
   the attention kernel. Each request's dense KV grows to its prompt plus
   `max_tokens` and no further, on every stage of a cluster too.
+- Sessions saved and restored explicitly over REST (`--session-dir`;
+  `POST /v1/sessions/{id}/save`, `.../restore`, `DELETE /v1/sessions/{id}`): a
+  session's KV written to disk and read back in a later process, so its next turn
+  prefills only what is new. Checked against the model, adapter, cache types and
+  layers before it is used; a cluster's nodes keep their own layers' files.
 
 ### Context shifting
 

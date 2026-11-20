@@ -28,6 +28,7 @@ import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KvRows;
 import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.KvSessionStamp;
 import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
@@ -1559,6 +1560,33 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 					this::layerOnDevice);
 		}
 		return true;
+	}
+
+	@Override
+	public long saveKv(String requestId, KvSessionStamp stamp, java.nio.file.Path file) throws java.io.IOException {
+		return HandlerKvSnapshot.save("Phi-3", kvCacheK, kvCacheV, requestId, stamp, file);
+	}
+
+	/**
+	 * Host rows from the file through {@link HandlerKvSnapshot}; with GPU attention, copied into the request's device
+	 * mirror on the layers that attend there, as a shared prefix is. The KV adapter's copy of the request, if any, is
+	 * dropped: the next forward pass flushes every row to it again.
+	 */
+	@Override
+	public long restoreKv(String requestId, KvSessionStamp stamp, java.nio.file.Path file) throws java.io.IOException {
+		GpuAttentionMirror g = gpuAttention;
+		HandlerKvSnapshot.requireReproducible("Phi-3", kvLayout, g != null ? g.formats() : null);
+		HandlerKvSnapshot.Restored r = HandlerKvSnapshot.read(kvLayout, endLayer - startLayer, requestId, stamp, file);
+		HandlerKvSnapshot.install(kvCacheK, kvCacheV, requestId, r);
+		if (g != null) {
+			g.evict(requestId);
+			HandlerKvShare.uploadMirrors("Phi-3", g.layersFor(requestId), r.k(), r.v(), stamp.positions(),
+					this::layerOnDevice);
+		}
+		NodeKVCacheAdapter a = kvAdapter;
+		if (a != null)
+			a.evict(requestId);
+		return r.bytes();
 	}
 
 	@Override

@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KvRows;
+import cab.ml.juno.kvcache.KvSessionStamp;
 import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
@@ -750,6 +751,22 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
     @Override
     public boolean shareKvPrefix(String fromId, String toId, int len) {
         return supportsKvPrefixSharing() && HandlerKvShare.shareHost(kvCacheK, kvCacheV, kvLayout, fromId, toId, len);
+    }
+
+    @Override
+    public long saveKv(String requestId, KvSessionStamp stamp, java.nio.file.Path file) throws java.io.IOException {
+        return HandlerKvSnapshot.save("Phi-2", kvCacheK, kvCacheV, requestId, stamp, file);
+    }
+
+    /** Host rows from the file through {@link HandlerKvSnapshot}; this handler attends on the CPU only. The KV adapter's copy of the request, if any, is dropped. */
+    @Override
+    public long restoreKv(String requestId, KvSessionStamp stamp, java.nio.file.Path file) throws java.io.IOException {
+        HandlerKvSnapshot.Restored r = HandlerKvSnapshot.read(kvLayout, endLayer - startLayer, requestId, stamp, file);
+        HandlerKvSnapshot.install(kvCacheK, kvCacheV, requestId, r);
+        NodeKVCacheAdapter a = kvAdapter;
+        if (a != null)
+            a.evict(requestId);
+        return r.bytes();
     }
 
     @Override

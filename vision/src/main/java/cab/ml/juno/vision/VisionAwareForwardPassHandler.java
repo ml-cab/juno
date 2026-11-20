@@ -20,6 +20,8 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.KvSessionFileException;
+import cab.ml.juno.kvcache.KvSessionStamp;
 import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.node.BatchForwardRequest;
 import cab.ml.juno.node.BatchForwardResult;
@@ -388,6 +390,24 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
     @Override
     public long hostKvBytes(String requestId) {
         return textHandler.hostKvBytes(requestId);
+    }
+
+    /**
+     * Delegates for a text-only request. A request whose KV holds an image is refused: the image's activations belong
+     * to that request and are not in the file, so a restored session could not be continued faithfully.
+     */
+    @Override
+    public long saveKv(String requestId, KvSessionStamp stamp, java.nio.file.Path file) throws java.io.IOException {
+        if (requestsWithImages.contains(requestId))
+            throw new KvSessionFileException(KvSessionFileException.Reason.REFUSED,
+                    "session " + requestId + " holds an image; sessions with images are not saved");
+        return textHandler.saveKv(requestId, stamp, file);
+    }
+
+    @Override
+    public long restoreKv(String requestId, KvSessionStamp stamp, java.nio.file.Path file) throws java.io.IOException {
+        requestsWithImages.remove(requestId); // the restored KV is text only
+        return textHandler.restoreKv(requestId, stamp, file);
     }
 
     @Override

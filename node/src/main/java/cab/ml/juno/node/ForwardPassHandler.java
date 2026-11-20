@@ -19,9 +19,13 @@
 
 package cab.ml.juno.node;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Optional;
 
 import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.KvSessionFileException;
+import cab.ml.juno.kvcache.KvSessionStamp;
 import cab.ml.juno.kvcache.PagedKvArena;
 
 /**
@@ -389,6 +393,37 @@ public interface ForwardPassHandler {
 	/** Whether {@link #shareKvPrefix} can succeed on this handler; false by default. */
 	default boolean supportsKvPrefixSharing() {
 		return false;
+	}
+
+	/**
+	 * Writes positions {@code [0, stamp.positions())} of {@code requestId}'s host KV, every layer this handler holds,
+	 * to {@code file} ({@link cab.ml.juno.kvcache.KvSessionFile}), replacing it. The request must not be written
+	 * meanwhile.
+	 *
+	 * @return the file's size in bytes
+	 * @throws KvSessionFileException {@link KvSessionFileException.Reason#UNSUPPORTED} by default (a handler that
+	 *                                keeps no KV it can save), {@link KvSessionFileException.Reason#REFUSED} where
+	 *                                this request's KV may not be saved
+	 */
+	default long saveKv(String requestId, KvSessionStamp stamp, Path file) throws IOException {
+		throw new KvSessionFileException(KvSessionFileException.Reason.UNSUPPORTED,
+				getClass().getSimpleName() + " keeps no KV it can save");
+	}
+
+	/**
+	 * Replaces {@code requestId}'s KV with what {@link #saveKv} wrote to {@code file}, after checking the file holds
+	 * exactly this handler's KV for {@code stamp}, so the request continues at position {@code stamp.positions()} as
+	 * the saved one would have. On any failure the request holds no KV here.
+	 *
+	 * @return the file's size in bytes
+	 * @throws KvSessionFileException {@link KvSessionFileException.Reason#UNSUPPORTED} by default; otherwise as
+	 *                                {@link cab.ml.juno.kvcache.KvSessionFile#read} and
+	 *                                {@link KvSessionFileException.Reason#REFUSED} where the restored rows could not
+	 *                                equal the saved session's
+	 */
+	default long restoreKv(String requestId, KvSessionStamp stamp, Path file) throws IOException {
+		throw new KvSessionFileException(KvSessionFileException.Reason.UNSUPPORTED,
+				getClass().getSimpleName() + " keeps no KV it can restore");
 	}
 
 	/** Host KV bytes one position takes across this handler's layers, K and V; 0 when unknown. */

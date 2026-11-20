@@ -258,6 +258,8 @@ Module dependency (excerpt):
         long prompts emit --prefill-batch ubatch chunks mixed with decode;
         decode preferred when the step slot budget is full;
         GET /v1/cluster/health exposes schedule + prefixLookups/Hits/HitRate
+        SessionStore / SessionRoutes / SessionBusyException — explicit session save,
+        restore and delete over --session-dir (see "Session save and restore" below)
         SpeculativeDecodeOptions / DraftProposer / NgramDraftCache /
         DraftModelSession / SpeculationEvent — speculative decoding
         (--spec-type none|ngram-simple|draft-simple), sharing one draft/verify
@@ -670,6 +672,55 @@ Shared prompt prefixes (coordinator SharedPrefixPool, --prefix-cache-tokens / kv
   same for every image). Tests: SessionKvLayoutShareTest, KvPrefixShareHandlerTest (every family,
   both schedules and host types, bit for bit), SharedPrefixPoolTest, PrefixCacheOwnerTest,
   SharedPrefixOptionsTest, VisionAwareForwardPassHandlerShareTest.
+
+Session save and restore (coordinator SessionStore / SessionRoutes, --session-dir / kvcache
+  SessionDirOptions, JUNO_SESSION_DIR): explicit REST calls only, nothing written otherwise.
+  POST /v1/sessions/{id}/save, POST /v1/sessions/{id}/restore, DELETE /v1/sessions/{id}
+  (SessionRoutes over SessionStore; registered by InferenceApiServer.start, a store without a
+  directory refusing save/restore with 400). Each call holds the session
+  (RequestScheduler.withSessionHeld: refused with SessionBusyException, HTTP 409, while a request
+  of the session is in flight; a chat request for a held session is refused the same way at
+  submit). A save reads the session's prefix entry (KVCacheManager.prefixEntry / PrefixCache.entry:
+  the last turn's prompt tokens, the positions the KV covers), calls InferencePipeline.saveKv(id,
+  stamp, dir) and then writes the manifest <id>.session (JSON: format, model and adapter identity,
+  cache types, tokens, per-stage file and bytes; temp file renamed into place; the old manifest is
+  deleted first, so a failed save leaves nothing restorable). Model identity
+  (SessionStore.Identity): file name, size, SHA-256 of the first MiB; each --lora-play file the same
+  way with its scale. A restore checks the manifest (format, model, adapter, cache types) before it
+  changes anything, calls InferencePipeline.restoreKv and registers the tokens with cachePrefix, so
+  the next turn prefills only its new tokens. DELETE: GenerationLoop.evictSession, whose pipeline
+  call is now InferencePipeline.dropKv (default evict; the cluster clients send DropSessionKv,
+  since evict does not reach a node).
+  kvcache KvSessionFile: one stage's file: magic JUNOKVS1, FORMAT_VERSION, the KvSessionStamp
+  (model, adapter, stage label, tokens), layer count, KV width, K/V type names, then each layer's K
+  and V rows [0, n) as stored (KvRows pages: halves, blocks, or little-endian floats for f32), then
+  a CRC-32. Written through a temp file, forced and renamed; read in 1 MiB chunks straight into new
+  layers (writeEncodedRows, writeToken for f32), the whole header checked before a row is written.
+  Rows by position, so dense and paged restore into each other. KvSessionFileException reasons
+  NOT_FOUND (404), MISMATCH, CORRUPT, REFUSED, UNSUPPORTED (400).
+  Node side: ForwardPassHandler.saveKv / restoreKv (defaults refuse UNSUPPORTED, naming the
+  handler); the eight host-KV handler classes go through HandlerKvSnapshot (save: the request's
+  layers to the file; restore: requireReproducible, the device half of HandlerKvShare.supported, then
+  read into new SessionKvLayout layers, install under the id, close the id's stale device rows,
+  HandlerKvShare.uploadMirrors, and drop a NodeKVCacheAdapter's copy, which every forward flushes
+  whole again). Qwen2LoraTrainableHandler passes evict, reserveKv, hostKvBytes, pagedKvArena,
+  saveKv and restoreKv to its delegate. VisionAwareForwardPassHandler refuses (REFUSED) to save a
+  request that had image embeddings. LocalInferencePipeline: one file per distinct handler,
+  <id>.layers-S-E.kv under the directory; a refused restore evicts the id on every stage.
+  Cluster: NodeService SaveSessionKv / RestoreSessionKv / DropSessionKv (SessionKvRequest: id,
+  model, adapter, tokens; SessionKvResponse: stage, file, bytes, error_reason, error);
+  EmbeddedNodeServer writes under its own JUNO_SESSION_DIR, labelled layers-S-E (plus
+  -rank-R-of-W on a tensor-parallel node); juno-player NodeSessionKv sends them from
+  ProcessPipelineClient and TensorParallelPipelineClient to every node (a refused restore drops the
+  session everywhere). ClusterHarness forwards JUNO_SESSION_DIR to forked nodes. Files are
+  node-pinned unless the directories are shared. Facade: JunoPlayer.Builder.sessionDir,
+  JunoPlayer.sessions(); JunoHttpClient.withSession / saveSession / restoreSession / deleteSession.
+  Tests: KvSessionFileTest, PrefixCacheEntryTest, KvSessionSnapshotHandlerTest (every family, every
+  save/restore schedule pair, three host types, bit for bit), LocalInferencePipelineSessionKvTest,
+  EmbeddedNodeServerSessionKvTest, PipelineClientSessionKvTest, SessionRoutesTest,
+  VisionAwareForwardPassHandlerSessionTest, Qwen2LoraTrainableHandlerTest, SessionSaveRestoreLiveTest
+  (-Djuno.test.sessionLive=true), ModelLiveChecks check 11 (SessionSaveRestoreCheck), kit probes
+  session.save-restore.* (SessionProbe / SessionRunMain), scripts/performance-tests/smoke-kv-cache.sh.
 
 Generation failures and prompt encoding: every dispatch path (RequestScheduler's single and
   batch paths and its batch collector, ContinuousBatchEngine's admit, slot finish and engine loop)

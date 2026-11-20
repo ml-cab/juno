@@ -25,6 +25,7 @@ import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
 import cab.ml.juno.kvcache.KvRows;
+import cab.ml.juno.kvcache.KvSessionStamp;
 import cab.ml.juno.kvcache.PagedKvArena;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
@@ -619,6 +620,19 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		kvLayout.forget(requestId);
 		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
 		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
+	}
+
+	@Override
+	public long saveKv(String requestId, KvSessionStamp stamp, java.nio.file.Path file) throws java.io.IOException {
+		return HandlerKvSnapshot.save("LoRA", kvCacheK, kvCacheV, requestId, stamp, file);
+	}
+
+	/** Host rows from the file through {@link HandlerKvSnapshot}; this handler attends on the CPU only. */
+	@Override
+	public long restoreKv(String requestId, KvSessionStamp stamp, java.nio.file.Path file) throws java.io.IOException {
+		HandlerKvSnapshot.Restored r = HandlerKvSnapshot.read(kvLayout, endLayer - startLayer, requestId, stamp, file);
+		HandlerKvSnapshot.install(kvCacheK, kvCacheV, requestId, r);
+		return r.bytes();
 	}
 
 	@Override

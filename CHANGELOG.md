@@ -1,5 +1,45 @@
 ## Status 
 
+**Session 152** - Sessions saved to disk and restored in a later process, over REST
+
+- **Endpoints.** `POST /v1/sessions/{id}/save` writes a session's KV (the session `x_juno_session_id` names) under the
+  directory the server is started with, `--session-dir PATH` (`JUNO_SESSION_DIR`); `POST /v1/sessions/{id}/restore`
+  reads it back, in the same process or a later one; `DELETE /v1/sessions/{id}` frees the session's KV in memory (the
+  endpoint the API had promised). Each answers the session id, its token count, the bytes written or read and the time
+  taken. Without `--session-dir`, save and restore answer 400 naming the flag. The client never sends a path; the id is
+  1 to 128 letters, digits, `-`, `_` or `.`. Nothing touches the disk except these calls.
+- **What is saved.** One file per stage holding that stage's layers' rows exactly as the host KV stores them (halves
+  for `f16`, floats for `f32`, blocks for `q8_0` and `q4_0`), with a checksum, and a manifest. Files are written to a
+  temporary name and renamed into place. Rows are stored by position, so a session saved under one schedule restores
+  under the other. After a restore the next turn sends the whole conversation as usual and only its new tokens are
+  prefilled; on TinyLlama its reply equals the uninterrupted session's, token for token, on the CPU and on CUDA (where
+  the restored rows are copied into GPU attention's device KV), at `f16` and `q8_0`, across a new JVM, a killed and
+  restarted server, and a restarted cluster.
+- **Refusals.** A restore checks the manifest before it changes anything: the model file (name, size and a SHA-256 of
+  its first MiB), the `--lora-play` adapters, the cache types and the format version; each stage then checks its layer
+  range, KV width, tokens and checksum. Any difference answers 400 naming it, a missing session 404, and a session with
+  a request in flight 409 (a chat request for a session being saved, restored or deleted answers 409 too). A session
+  whose KV holds an image is not saved.
+- **Cluster.** Each node saves its own layers under its own session directory (new node calls beside the forward pass)
+  and the coordinator keeps the manifest, so a saved session restores on the same nodes, or anywhere the directories
+  are shared; the launcher passes the directory to the node processes. Deleting a session now frees its KV on the
+  nodes too, which ending a session did not.
+- **Embedding.** `JunoPlayer.builder(model).sessionDir(dir)` and `player.sessions()` reach the same store in process;
+  `JunoHttpClient.withSession(id)` sends the session id, and `saveSession`, `restoreSession` and `deleteSession` call the
+  endpoints. The interactive prompt has no save command.
+- **Fixed.** With `--lora-play` on a Qwen2 model, a request's KV was never freed: the Qwen2 LoRA handler did not pass
+  `evict` (or the KV length hint) to the handler that holds the KV.
+- **Corrected.** Session 141 said a reply that starts from a kept prompt is unchanged on CUDA. It is unchanged on the
+  CPU; on a GPU it can differ, because a GPU prefill window of more than eight positions runs a different kernel from a
+  narrower one and a kept prompt moves the windows (on TinyLlama one reply in the smoke test changes after about a
+  dozen tokens). With `--prefill-batch 1` it is unchanged on a GPU too, and the smoke test's GPU run compares sharing
+  that way.
+- **Checks.** `./juno test` and the real-model integration test run an eleventh check, a session saved on a cluster and
+  restored after the cluster restarts, pipeline and tensor parallel. New `scripts/performance-tests/smoke-kv-cache.sh`
+  drives shared prompts, page reclaim and a save, kill and restore over REST. Hardware validation kit:
+  `session.save-restore.<model>` (CPU) and `gpu.session.save-restore.<model>` (CUDA) save in one JVM and restore in a
+  new one.
+
 **Session 151** - The host KV cache stores real half floats and grows only to the request's length
 
 - **`f16` stores IEEE halves.** `--cache-type-k/-v f16`, the default, now stores each key and value as a half float,

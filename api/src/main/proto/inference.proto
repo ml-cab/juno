@@ -95,6 +95,17 @@ service NodeService {
 
     // Get current node status and GPU health
     rpc GetNodeStatus(NodeStatusRequest) returns (NodeStatusResponse);
+
+    // Write this node's layers of a session's KV to the node's own session directory
+    // (JUNO_SESSION_DIR); the coordinator keeps the session's manifest.
+    rpc SaveSessionKv(SessionKvRequest) returns (SessionKvResponse);
+
+    // Replace a session's KV on this node with what SaveSessionKv wrote, after checking the
+    // file matches this node's layers, cache types and the request's stamp.
+    rpc RestoreSessionKv(SessionKvRequest) returns (SessionKvResponse);
+
+    // Free a session's KV on this node (the session was deleted). Only session_id is read.
+    rpc DropSessionKv(SessionKvRequest) returns (SessionKvResponse);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +149,24 @@ message ForwardResponse {
     bool           is_last_node = 3;  // if true, activation contains final logits
     string         error        = 4;  // non-empty if forward pass failed
     ActivationDtype dtype       = 5;  // encoding of the activation bytes field
+}
+
+// A session's KV on one node: what SaveSessionKv writes and RestoreSessionKv checks.
+message SessionKvRequest {
+    string session_id     = 1;  // letters, digits, '-', '_' and '.'; part of the file name
+    string model          = 2;  // the model file's identity, recorded in and checked against the file
+    string adapter        = 3;  // the LoRA adapter's identity; empty without one
+    repeated int32 tokens = 4;  // the tokens whose positions the saved rows hold
+}
+
+message SessionKvResponse {
+    string stage        = 1;  // this node's label: its layer range, and its rank on a tensor-parallel node
+    string file         = 2;  // the file's name in this node's session directory
+    int64  bytes        = 3;  // the file's size
+    // Empty on success; otherwise NOT_FOUND, MISMATCH, CORRUPT, REFUSED or UNSUPPORTED (the
+    // request cannot be served as asked), or IO or INTERNAL (the node failed).
+    string error_reason = 4;
+    string error        = 5;
 }
 
 message LoadShardRequest {
