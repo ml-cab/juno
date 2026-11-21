@@ -1,0 +1,283 @@
+baseline jar sha256: 21109a3a8fd317c8
+candidate jar sha256: 2ceed60ef9139b7a
+head 71099a85a036522b187cad715237abda9b9b2c45
+diff 12ed7cb77c8fa20b
+=== gpu-ab: baseline 1 (07:49:38)
+    exit=0  (log: dist/kv-cache-close/runs/gpu-ab-baseline-1.log)
+=== gpu-ab: candidate 1 (07:52:21)
+    exit=0  (log: dist/kv-cache-close/runs/gpu-ab-candidate-1.log)
+=== gpu-ab: baseline 2 (07:54:55)
+    exit=0  (log: dist/kv-cache-close/runs/gpu-ab-baseline-2.log)
+=== gpu-ab: candidate 2 (07:57:31)
+    exit=0  (log: dist/kv-cache-close/runs/gpu-ab-candidate-2.log)
+=== gpu-ab: baseline 3 (08:00:03)
+    exit=0  (log: dist/kv-cache-close/runs/gpu-ab-baseline-3.log)
+=== gpu-ab: candidate 3 (08:02:37)
+    exit=0  (log: dist/kv-cache-close/runs/gpu-ab-candidate-3.log)
+
+gpu-ab: clock_pinned across the six runs: true (must be only: true)
+model              pp_A       pp_B  pp_B/A       tg_A     tg_B  tg_B/A    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama       3107.91    3177.21   1.022     148.88   162.86   1.094         547378       427105  0.780       0.0     0.0
+qwen2.5         1270.57    1279.39   1.007      58.26    61.88   1.062        1521118      1478428  0.972       0.0     0.0
+Phi              857.21     915.07   1.067      57.95    59.09   1.020         515467       426009  0.826       0.0     0.0
+mistral          561.96     584.13   1.039      38.89    39.66   1.020         755489       536713  0.710       0.0     0.0
+
+gpu-ab: candidate against the reference tool (median of 3 each, same runs), reported not gated
+model           pp_juno     pp_ref    pp_x    tg_juno   tg_ref    tg_x
+tinyllama       3177.21    4067.22   0.781     162.86   191.11   0.852
+qwen2.5         1279.39    1529.66   0.836      61.88    68.86   0.899
+Phi              915.07    1165.50   0.785      59.09    58.90   1.003
+mistral          584.13     663.60   0.880      39.66    35.99   1.102
+
+gpu-ab: greedy output (temperature 0), reported not gated: candidate vs baseline per run; candidate run 1 vs runs 1..3
+  tinyllama: candidate equals baseline in 0 of 3 runs; candidate equals its run 1 in 3 of 3
+  qwen2.5: candidate equals baseline in 3 of 3 runs; candidate equals its run 1 in 3 of 3
+  Phi: candidate equals baseline in 3 of 3 runs; candidate equals its run 1 in 3 of 3
+  mistral: candidate equals baseline in 0 of 3 runs; candidate equals its run 1 in 3 of 3
+=== cpu-ab: baseline 1 (08:05:13)
+    exit=0  (log: dist/kv-cache-close/runs/cpu-ab-baseline-1.log)
+=== cpu-ab: candidate 1 (08:16:43)
+    exit=0  (log: dist/kv-cache-close/runs/cpu-ab-candidate-1.log)
+=== cpu-ab: baseline 2 (08:28:14)
+    exit=0  (log: dist/kv-cache-close/runs/cpu-ab-baseline-2.log)
+=== cpu-ab: candidate 2 (08:39:43)
+    exit=0  (log: dist/kv-cache-close/runs/cpu-ab-candidate-2.log)
+=== cpu-ab: baseline 3 (08:51:15)
+    exit=0  (log: dist/kv-cache-close/runs/cpu-ab-baseline-3.log)
+=== cpu-ab: candidate 3 (09:02:49)
+    exit=0  (log: dist/kv-cache-close/runs/cpu-ab-candidate-3.log)
+
+cpu-ab: clock_pinned across the six runs: true (must be only: true)
+model              pp_A       pp_B  pp_B/A       tg_A     tg_B  tg_B/A    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama         33.11      33.52   1.012      11.25    11.38   1.012         304747       309359  1.015       0.0     0.0
+qwen2.5           11.79      11.88   1.008       3.97     4.02   1.013        1269360      1289163  1.016       0.0     0.0
+Phi                9.28       9.44   1.017       2.88     2.89   1.004         358741       347850  0.970       0.0     0.0
+  mistral: generation withheld by the harness on every run of one side (0 and 2 of 3 scorable); request-timed api_token_gen_tps median: 1.8601 -> 1.8511
+mistral            5.13       5.10   0.995       0.00     0.00   0.000         347919       347984  1.000       0.0     0.0
+  FAIL: mistral generation below 0.95x
+
+cpu-ab: candidate against the reference tool (median of 3 each, same runs), reported not gated
+model           pp_juno     pp_ref    pp_x    tg_juno   tg_ref    tg_x
+tinyllama         33.52      59.80   0.561      11.38    17.99   0.633
+qwen2.5           11.88      24.43   0.486       4.02     7.66   0.525
+Phi                9.44      17.77   0.531       2.89     6.65   0.435
+mistral            5.10      10.74   0.475       1.99     4.02   0.496
+
+cpu-ab: greedy output (temperature 0), reported not gated: candidate vs baseline per run; candidate run 1 vs runs 1..3
+  tinyllama: candidate equals baseline in 0 of 3 runs; candidate equals its run 1 in 3 of 3
+  qwen2.5: candidate equals baseline in 3 of 3 runs; candidate equals its run 1 in 3 of 3
+  Phi: candidate equals baseline in 3 of 3 runs; candidate equals its run 1 in 3 of 3
+  mistral: candidate equals baseline in 3 of 3 runs; candidate equals its run 1 in 3 of 3
+
+CPU lane, top 10 hot methods (jdk.ExecutionSample), run 1 of each jar, reported not gated:
+--- tinyllama baseline
+346.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+293.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+198.0	java_util_Objects_checkIndex
+120.0	cab_ml_juno_node_CpuWorkerPool_forEach
+119.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+54.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+51.0	cab_ml_juno_node_GgufReader_f16ToF32
+40.0	cab_ml_juno_node_GqaMath_attend
+39.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+31.0	cab_ml_juno_node_CpuIntegerGemm_fourRows16
+--- tinyllama candidate
+321.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+273.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+192.0	java_util_Objects_checkIndex
+124.0	cab_ml_juno_node_CpuWorkerPool_forEach
+113.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+59.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+53.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+44.0	cab_ml_juno_node_GgufReader_f16ToF32
+34.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+30.0	cab_ml_juno_node_CpuIntegerGemm_fourRows16
+--- qwen2.5 baseline
+898.0	java_util_Objects_checkIndex
+825.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+797.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+360.0	cab_ml_juno_node_CpuWorkerPool_forEach
+134.0	cab_ml_juno_node_GgufReader_f16ToF32
+128.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+108.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+96.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+73.0	cab_ml_juno_node_GqaMath_attend
+67.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+--- qwen2.5 candidate
+1017.0	java_util_Objects_checkIndex
+817.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+808.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+349.0	cab_ml_juno_node_CpuWorkerPool_forEach
+144.0	cab_ml_juno_node_GgufReader_f16ToF32
+136.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+103.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+84.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+81.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+43.0	cab_ml_juno_node_CpuIntegerGemm_fourRows16
+--- Phi baseline
+1304.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+794.0	cab_ml_juno_node_CpuIntegerKernels_q5kRow
+702.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+533.0	cab_ml_juno_node_CpuWorkerPool_forEach
+310.0	java_util_Objects_checkIndex
+280.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecInto_0
+229.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+222.0	cab_ml_juno_node_GgufReader_f16ToF32
+170.0	cab_ml_juno_node_GqaMath_attend
+132.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+--- Phi candidate
+1229.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+799.0	cab_ml_juno_node_CpuIntegerKernels_q5kRow
+662.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+555.0	cab_ml_juno_node_CpuWorkerPool_forEach
+360.0	java_util_Objects_checkIndex
+301.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecInto_0
+240.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+189.0	cab_ml_juno_node_GgufReader_f16ToF32
+150.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+103.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+--- mistral baseline
+3183.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+2000.0	java_util_Objects_checkIndex
+1355.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+664.0	cab_ml_juno_node_CpuWorkerPool_forEach
+366.0	cab_ml_juno_node_GgufReader_f16ToF32
+302.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+194.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+148.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+139.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+115.0	jdk_internal_misc_Unsafe_park
+--- mistral candidate
+3091.0	cab_ml_juno_node_CpuIntegerKernels_q4kRow
+1947.0	java_util_Objects_checkIndex
+1327.0	cab_ml_juno_node_CpuWorkerPool_Worker_run
+632.0	cab_ml_juno_node_CpuWorkerPool_forEach
+396.0	cab_ml_juno_node_GgufReader_f16ToF32
+315.0	cab_ml_juno_node_CpuIntegerGemm_fourRows32
+204.0	cab_ml_juno_node_CpuIntegerKernels_Q8Activation_quantizeFrom
+163.0	cab_ml_juno_node_CpuIntegerGemm_unpack
+139.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+115.0	jdk_internal_misc_Unsafe_park
+
+GPU lane, top 10 hot methods (jdk.ExecutionSample), run 1 of each jar, reported not gated:
+--- tinyllama baseline
+1.0	cab_ml_juno_node_ResidentLayerTail_issue
+1.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	java_lang_ThreadLocal_get
+1.0	java_util_ArrayList_sort
+1.0	jdk_internal_foreign_abi_DowncallStub_0x0000000037055c00_invoke
+--- tinyllama candidate
+2.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	cab_ml_juno_tokenizer_GgufTokenizer_mergeInPlace
+--- qwen2.5 baseline
+9.0	cab_ml_juno_sampler_SoftmaxStep_apply
+2.0	cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch
+2.0	jdk_internal_foreign_SegmentFactories_initNativeMemory
+1.0	java_lang_invoke_LambdaForm_MH_0x0000000041341400_invoke
+1.0	java_util_concurrent_ConcurrentHashMap_get
+1.0	jdk_internal_foreign_AbstractMemorySegmentImpl_isAlignedForElement
+1.0	jdk_internal_foreign_SharedSession_SharedResourceList_add
+1.0	jdk_internal_foreign_abi_DowncallStub_0x0000000041099800_invoke
+1.0	jdk_internal_foreign_abi_SharedUtils_unboxSegment
+1.0	jdk_internal_misc_ScopedMemoryAccess_copyMemoryInternal
+--- qwen2.5 candidate
+11.0	cab_ml_juno_sampler_SoftmaxStep_apply
+6.0	cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch
+1.0	cab_ml_juno_coordinator_EosOutputFilter_accept
+1.0	cab_ml_juno_sampler_SampleStep_greedy
+1.0	com_fasterxml_jackson_core_io_IOContext_allocTokenBuffer
+1.0	java_lang_invoke_LambdaForm_MH_0x000000001d0e9400_invoke
+1.0	java_util_concurrent_ConcurrentHashMap_get
+1.0	jdk_jfr_internal_PlatformRecorder_flush
+--- Phi baseline
+1.0	cab_ml_juno_kvcache_GpuKVCache_evict
+1.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	jdk_internal_foreign_abi_SharedUtils_unboxSegment
+--- Phi candidate
+5.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	cab_ml_juno_node_ResidentActivation_markWritten
+1.0	cab_ml_juno_node_ResidentQkvPath_run
+1.0	java_util_Collection_stream
+1.0	jdk_jfr_internal_event_EventConfiguration_timestamp
+--- mistral baseline
+5.0	cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch
+3.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	cab_ml_juno_node_LlamaTransformerHandler_rmsNormInto
+1.0	cab_ml_juno_node_ResidentQkvPath_runOn
+1.0	cab_ml_juno_sampler_SampleStep_greedy
+1.0	cab_ml_juno_sampler_Sampler_sample
+1.0	java_lang_invoke_LambdaFormEditor_spreadArgumentsForm
+1.0	jdk_internal_foreign_AbstractMemorySegmentImpl_copy
+1.0	jdk_internal_foreign_SegmentFactories_initNativeMemory
+1.0	jdk_internal_foreign_abi_DowncallStub_0x000000003b099800_invoke
+--- mistral candidate
+4.0	cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch
+2.0	cab_ml_juno_sampler_SoftmaxStep_apply
+1.0	cab_ml_juno_node_CudaMatVec_sgemvRowsInto
+1.0	cab_ml_juno_node_ForwardPassEvent_isEnabled
+1.0	java_lang_invoke_LambdaForm_MH_0x0000000076342400_invoke
+1.0	jdk_internal_foreign_SharedSession_SharedResourceList_add
+1.0	jdk_internal_misc_Unsafe_checkPrimitiveArray
+
+GPU lane, top 10 native methods (jdk.NativeMethodSample), run 1 of each jar, reported not gated:
+--- tinyllama baseline
+15.0	java_io_FileInputStream_readBytes
+15.0	sun_nio_ch_EPoll_wait
+4.0	java_lang_invoke_LambdaForm_MH_0x0000000037350800_invoke
+2.0	java_lang_invoke_LambdaForm_MH_0x0000000037344400_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x0000000037350000_invoke
+--- tinyllama candidate
+15.0	java_io_FileInputStream_readBytes
+15.0	sun_nio_ch_EPoll_wait
+3.0	java_lang_invoke_LambdaForm_MH_0x000000008434f400_invoke
+2.0	java_lang_invoke_LambdaForm_MH_0x000000008434ec00_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x0000000084343400_invoke
+--- qwen2.5 baseline
+30.0	java_io_FileInputStream_readBytes
+30.0	sun_nio_ch_EPoll_wait
+7.0	java_lang_invoke_LambdaForm_MH_0x0000000041341c00_invoke
+6.0	java_lang_invoke_LambdaForm_MH_0x0000000041342000_invoke
+4.0	java_lang_invoke_LambdaForm_MH_0x0000000041341400_invoke
+--- qwen2.5 candidate
+28.0	java_io_FileInputStream_readBytes
+28.0	sun_nio_ch_EPoll_wait
+7.0	java_lang_invoke_LambdaForm_MH_0x000000001d34a400_invoke
+6.0	java_lang_invoke_LambdaForm_MH_0x000000001d349800_invoke
+3.0	java_lang_invoke_LambdaForm_MH_0x000000001d34a000_invoke
+--- Phi baseline
+27.0	java_io_FileInputStream_readBytes
+26.0	sun_nio_ch_EPoll_wait
+16.0	java_lang_invoke_LambdaForm_MH_0x000000008434ac00_invoke
+3.0	java_lang_invoke_LambdaForm_MH_0x0000000084341800_invoke
+--- Phi candidate
+28.0	sun_nio_ch_EPoll_wait
+27.0	java_io_FileInputStream_readBytes
+13.0	java_lang_invoke_LambdaForm_MH_0x000000009234a800_invoke
+3.0	java_lang_invoke_LambdaForm_MH_0x0000000092342000_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x00000000920e8000_invoke
+--- mistral baseline
+39.0	sun_nio_ch_EPoll_wait
+38.0	java_io_FileInputStream_readBytes
+22.0	java_lang_invoke_LambdaForm_MH_0x000000003b347800_invoke
+3.0	java_lang_invoke_LambdaForm_MH_0x000000003b347400_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x000000003b346c00_invoke
+--- mistral candidate
+38.0	java_io_FileInputStream_readBytes
+37.0	sun_nio_ch_EPoll_wait
+18.0	java_lang_invoke_LambdaForm_MH_0x0000000076348400_invoke
+5.0	java_lang_invoke_LambdaForm_MH_0x0000000076347800_invoke
+4.0	java_lang_invoke_LambdaForm_MH_0x0000000076348000_invoke
+1.0	java_lang_invoke_LambdaForm_MH_0x00000000760e8c00_invoke
+
+=== Part M: the tier's microbench bars, candidate tree, CPU pinned (09:14:22)
+pinned: governor performance, no_turbo 1
+clocks restored (governor schedutil)
+gather-tax-microbench exit=0 (2 = paged_vs_dense over 2% at the gate cell); report: dist/kv-cache-close/runs/gather-tax/gather-tax-20261120T151422Z.md
+Gate: paged_vs_dense <= 2% at batch 8 / ctx 8192.
+| 8192 | 8 | 16 | 415.771 | 0.000 | 401.492 | 0.00 | -3.43 |
+[gather-tax] gate ctx=8192 batch=8 page=16 pagedVsDensePct=-3.43 (budget <= 2)
+kv-reclaim-microbench exit=0 (2 = a pass over 5 ms); report: dist/kv-cache-close/runs/kv-reclaim/kv-reclaim-20261120T152341Z.md
+# KV page reclaim pause
+Budget: a reclaim pass adds at most 5.0 ms to any decode step it overlaps (added_ms: the longest overlapping step less the median step alone).
+[kv-reclaim] gate: most added to a decode step 3.691 ms (budget <= 5.0 ms)
+GATES MISSED (see FAIL lines)

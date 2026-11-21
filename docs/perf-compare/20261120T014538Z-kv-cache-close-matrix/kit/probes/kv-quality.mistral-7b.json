@@ -1,0 +1,37 @@
+{
+  "id" : "kv-quality.mistral-7b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "q8_0/q4_0 KV NLL at most 1.02x the f16 KV NLL",
+    "passed" : true,
+    "detail" : "ratio 0.99748 (1.52598 over 1.52983)"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, f16 KV",
+    "unit" : "nats",
+    "values" : [ 1.5298300791545567 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0/q4_0 KV",
+    "unit" : "nats",
+    "values" : [ 1.525975309619279 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 98.4375 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "kernels" : "integer where the Vector API is present",
+    "f16Seconds" : 432.292475584,
+    "tokens" : 2048,
+    "quantizedRunKv" : "cache-type-k=q8_0 cache-type-v=q4_0",
+    "quantizedSeconds" : 465.957372861,
+    "f16RunKv" : "cache-type-k=f16 cache-type-v=f16"
+  }
+}

@@ -1,6 +1,6 @@
 # Tier 03: KV cache maturity
 
-Status: in progress (begun 2026-11-09 by owner decision while Tiers 02F and 02G stay open; README execution rule 1). Step 0
+Status: **complete** (2026-11-20). Every exit criterion is checked (15 of 15). Begun 2026-11-09 by owner decision while Tiers 02F and 02G stay open (README execution rule 1). Step 0
 done 2026-11-09: on `Phi-3.1-mini-4k-instruct-Q4_K_M.gguf` (window 2047, every layer) the KV oracle passes at 3,000 tokens on
 CPU and CUDA under both schedules, and teacher-forced NLL past position 2047 reads 2.634 with the window against 10.529 without
 it (CPU; CUDA 2.634 against 10.524). Exit criterion 1 ticked (1 of 15). Step 1 done 2026-11-10 (tests only): the gather oracle,
@@ -49,7 +49,7 @@ widths it scores). Owner decisions 7 (a) and 8 (a), 2026-11-15. Decision 7 (a) i
 writes the host KV from the device copy's stored rows (no CPU encode; a quarter of the bytes over the bus), host bytes
 unchanged; prefill `q8_0` over FP16, unpinned, 0.90x to 0.99x in one window and 0.90x to 0.97x in 128-row windows, every
 sweep model; kit probe `gpu.kv-prefill.<model>` in. The owner's pinned prefill gate (decision 8 (a)), 2026-11-16: 0.877x to
-0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned. The owner's gate, 2026-11-17, pinned: `q8_0` decode 0.958x (Qwen2.5-3B) to 0.985x FP16, 4 of 4 at or above 0.95x; exit criterion 7 ticked again (6 of 15). Decision 4 (a) in 2026-11-17 (out of tier): gate and up in one launch (`q4k_gemv_pair`), bit for bit the two launches, 0.63x to 0.97x their device time at nine placements of the input vector, unpinned; LoRA gate and suites pass. The owner's gate, 2026-11-18, pinned: decode after over before, FP16 1.014x (Mistral 7B) to 1.075x (TinyLlama) and `q8_0` 1.015x (Phi-3.5-mini) to 1.045x (Qwen2.5-3B), 8 of 8 over 1.00, no cycle under; `q8_0` over FP16 read 0.951x to 0.978x and bounded at 0.956x or above, so criterion 7 stays met (6 of 15). Item 6 begun 2026-11-18 on `c607e926`: the live-heap bar measured out of reach of its levers (0.68x projected, the float32 embedding and output copies are not KV); owner decisions 10 (a) (bar restated: host KV <= 0.35x, live heap <= 0.75x), 11 (a) (the request's length passed to every stage, a new gRPC field) and 12 (a) (`f16` stores IEEE halves on every host store, the float32 rows kept as `f32`). Item 6 in 2026-11-18 and 2026-11-19 (uncommitted): host KV 0.258x and live heap 0.640x the pre-tier build; `f16` against `f32` NLL 0.99967x to 1.00053x and greedy agreement 99.02% to 99.80% on the four sweep models; throughput against `c607e926` unpinned, pp 0.969x to 1.121x and tg 0.980x to 1.004x; LoRA gate passes; exit criterion 6 ticked (7 of 15). Step 6 done. Step 7 done 2026-11-19 on decisions 13 (a) to 16 (a), tests first: `POST /v1/sessions/{id}/save` and `.../restore` over `--session-dir`, `DELETE /v1/sessions/{id}`; one file per stage (rows as stored, checksum, temp file renamed) and a manifest; cluster nodes save their own layers (`NodeService` save, restore and drop RPCs), node-pinned; every refusal tested (400, 404, 409). A session saved and restored across a new JVM (kit probes, CPU and CUDA, `f16` and `q8_0`), a killed server (smoke, CPU and CUDA) and a restarted cluster (check 11, pipeline and tensor) continues with the uninterrupted second turn, from a prefix hit. Defect fixed: the Qwen2 LoRA handler never freed a request's KV. Exit criteria 8 and 13 ticked (9 of 15). Raised with the owner: decision 17 (on CUDA a reply from a shared prompt can differ from the computed one: GPU prefill depends on the window split), (a) taken 2026-11-19: recorded as a GPU prefill property, step 4's claims corrected, the CUDA smoke compares with `--prefill-batch 1`, window-width invariance a Tier 07 candidate; decision 18 (the Qwen2 LoRA handler's serial prefill), (a) taken 2026-11-19, handed to Tier 12 item 6. Next: step 8, the full smoke matrix and the tier's close, with the owner's standing gate.
+0.961x at both widths, 8 of 8 under 1.10x. Decision 5 (a) in 2026-11-16 (out of tier): the FP16 decode attention on the wide decode block, the launch 0.30x to 0.68x its old time at 2,048 keys, FP16 decode tg 1.07x to 1.30x unpinned; `q8_0` over the faster FP16 decode 0.955x to 0.977x; the owner's gate, 2026-11-16, pinned: FP16 decode after over before 1.067x to 1.281x, 4 of 4 over 1.00, prefill unchanged; `q8_0` over the new FP16 decode 0.963x, 0.975x, 0.977x and Qwen2.5-3B **0.938x**, so exit criterion 7 is open again (5 of 15). Owner decision 9 (a), 2026-11-16: the quantized decode loop takes up-front loads, before decision 4. Decision 9 (a) in 2026-11-17: K and V loaded up front, quant bytes unpacked without conversion instructions, no branch per block; the launch 0.74x to 0.99x its old time at 2,048 keys and under the FP16 launch on every sweep model; `q8_0` decode 0.971x to 0.983x FP16 unpinned. The owner's gate, 2026-11-17, pinned: `q8_0` decode 0.958x (Qwen2.5-3B) to 0.985x FP16, 4 of 4 at or above 0.95x; exit criterion 7 ticked again (6 of 15). Decision 4 (a) in 2026-11-17 (out of tier): gate and up in one launch (`q4k_gemv_pair`), bit for bit the two launches, 0.63x to 0.97x their device time at nine placements of the input vector, unpinned; LoRA gate and suites pass. The owner's gate, 2026-11-18, pinned: decode after over before, FP16 1.014x (Mistral 7B) to 1.075x (TinyLlama) and `q8_0` 1.015x (Phi-3.5-mini) to 1.045x (Qwen2.5-3B), 8 of 8 over 1.00, no cycle under; `q8_0` over FP16 read 0.951x to 0.978x and bounded at 0.956x or above, so criterion 7 stays met (6 of 15). Item 6 begun 2026-11-18 on `c607e926`: the live-heap bar measured out of reach of its levers (0.68x projected, the float32 embedding and output copies are not KV); owner decisions 10 (a) (bar restated: host KV <= 0.35x, live heap <= 0.75x), 11 (a) (the request's length passed to every stage, a new gRPC field) and 12 (a) (`f16` stores IEEE halves on every host store, the float32 rows kept as `f32`). Item 6 in 2026-11-18 and 2026-11-19 (uncommitted): host KV 0.258x and live heap 0.640x the pre-tier build; `f16` against `f32` NLL 0.99967x to 1.00053x and greedy agreement 99.02% to 99.80% on the four sweep models; throughput against `c607e926` unpinned, pp 0.969x to 1.121x and tg 0.980x to 1.004x; LoRA gate passes; exit criterion 6 ticked (7 of 15). Step 6 done. Step 7 done 2026-11-19 on decisions 13 (a) to 16 (a), tests first: `POST /v1/sessions/{id}/save` and `.../restore` over `--session-dir`, `DELETE /v1/sessions/{id}`; one file per stage (rows as stored, checksum, temp file renamed) and a manifest; cluster nodes save their own layers (`NodeService` save, restore and drop RPCs), node-pinned; every refusal tested (400, 404, 409). A session saved and restored across a new JVM (kit probes, CPU and CUDA, `f16` and `q8_0`), a killed server (smoke, CPU and CUDA) and a restarted cluster (check 11, pipeline and tensor) continues with the uninterrupted second turn, from a prefix hit. Defect fixed: the Qwen2 LoRA handler never freed a request's KV. Exit criteria 8 and 13 ticked (9 of 15). Raised with the owner: decision 17 (on CUDA a reply from a shared prompt can differ from the computed one: GPU prefill depends on the window split), (a) taken 2026-11-19: recorded as a GPU prefill property, step 4's claims corrected, the CUDA smoke compares with `--prefill-batch 1`, window-width invariance a Tier 07 candidate; decision 18 (the Qwen2 LoRA handler's serial prefill), (a) taken 2026-11-19, handed to Tier 12 item 6. Step 8 done 2026-11-20 on the final build: every earlier smoke script unmodified, 10 of 11 pass; `smoke-gpu-residency.sh` fails one check (TinyLlama, residency on against off, greedy parts at the 32nd and last token since decision 5 (a)'s wide decode block, bisected to `9c33ab93`; the howto corrected to 31 tokens; decision 19). LoRA gate (playback 0.874x, bar 0.80x) and vision gate pass, median of three against the pre-tier jar; `paged_vs_dense%` -4.37% and a reclaim pass at most 2.328 ms on a decode step, unpinned; live check 12 (prompts shared across requests, both schedules; the tier's owed `ModelLiveRunnerIT` check) added tests first, passes on CPU and CUDA and is shown able to fail; `./juno test` 12 of 12. Kit, 50 probes: 41 pass, 8 readings, `gpu.unit-tests` fails on two known device tests that are not this tier's (one fails on the pre-tier build, one passes alone; decision 20). Exit criteria 11, 12, 14 and 15 ticked (13 of 15); open: the kit criterion (decision 20) and the standing gate, the owner's, prepared in `dist/kv-cache-close/`. Owner decisions 19 (a) and 20 (a), 2026-11-20: the residency smoke fails TinyLlama only within its first 24 generated tokens, reporting all 32 (`--hard-n-gen`); a Keep passing probe whose failures fail on the pre-tier build or pass alone on unchanged code counts as passing (a standing note under README rule 10); the kit criterion ticked (14 of 15). The owner's gate, pinned, 2026-11-20: GPU lane met on every model (tg 1.020x to 1.094x, allocation 0.710x to 0.972x), CPU lane met on every row but Mistral 7B's generation, which the harness's span check withheld on every baseline run (request-timed 0.995x, decode-derived 0.996x); pinned microbenches met (-3.43%, 3.691 ms). The residency smoke after decision 19 (a): 13 of 13, and shown failing at 32 tokens. Owner decision 21 (b), 2026-11-20: the CPU lane re-run on Mistral 7B alone, pinned, prepared in `dist/kv-cache-close-mistral-cpu/`. The owner's re-run, pinned, 2026-11-20: generation 1.004x (request-timed 1.002x, decode-derived 1.000x), prefill 0.985x, allocation 1.013x, no GC pause, met; the standing gate is met on every row and ticked (15 of 15). The tier is complete.
 Gap analysis refs: §1.3
 
 ## Objective
@@ -471,14 +471,24 @@ in `models/`.)*
       cluster (`ModelLiveRunnerIT` check 11, pipeline and tensor parallel)
       ([`20261119T205146Z-session-persistence`](../perf-compare/20261119T205146Z-session-persistence/INDEX.md)); every handler
       family, schedule pair and host type bit for bit (`KvSessionSnapshotHandlerTest`, 108).)*
-- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
+- [x] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
       *(2026-11-10: open; the owner's pinned run at tier close. Step 3's unpinned A/B met the CPU bars on every lane, evidence
       only.)* *(2026-11-18: item 6's unpinned A/B, against `c607e926` rather than the pre-tier build, met the throughput bars
       on every lane (pp 0.969x to 1.121x, tg 0.980x to 1.004x) and read allocation per token 0.958x to 1.048x where the
       reading is stable, no GC pause in a token span
       ([`20261118T232702Z-host-kv-half-ab`](../perf-compare/20261118T232702Z-host-kv-half-ab/INDEX.md)); evidence only.)*
-- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      *(2026-11-20, step 8: open for the owner's pinned run, prepared in `dist/kv-cache-close/` (`run-gate.sh`, the pre-tier jar
+      `21109a3a8fd317c8` against the final build's `2ceed60ef9139b7a`, A B A B A B on the four sweep models, GPU and CPU lanes).)*
+      *(2026-11-20, later: the owner's run, pinned: every row meets every bar but Mistral 7B's CPU generation, which the
+      harness withheld on every baseline run (request-timed 0.995x, decode-derived 0.996x)
+      ([`20261120T134937Z-kv-cache-close-gate`](../perf-compare/20261120T134937Z-kv-cache-close-gate/INDEX.md)). Open on decision 21,
+      taken (b): the owner re-runs that row pinned, `dist/kv-cache-close-mistral-cpu/`.)* *(2026-11-20, the owner's re-run of
+      that row alone, pinned, the same jars and bars: generation 1.004x (the harness's rate, 2 of 3 runs a side; request-timed
+      1.002x, decode-derived 1.000x), prefill 0.985x, allocation per token 1.013x, no GC pause; met
+      ([`20261120T190622Z-kv-cache-close-mistral-cpu`](../perf-compare/20261120T190622Z-kv-cache-close-mistral-cpu/INDEX.md)).
+      Every row of the gate is met.)*
+- [x] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
       self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
       *(2026-11-13: item 4's probe is in, `kv-quality.<model>`, with its self-test and `feature:kv-q4-0`, scoring `q8_0` keys with
       `q4_0` values since owner decision (a); item 7's half, item 5's and item 6's are owed with those items.)* *(2026-11-13,
@@ -489,8 +499,18 @@ in `models/`.)*
       positions), with its self-test (`KvFootprintProbeTest`) and `feature:host-kv-footprint`.)* *(2026-11-19: item 5's probes
       are in (`session.save-restore.*`, `SessionProbeTest`, `feature:session-save-restore`), and item 2's change was found in
       since step 4; every **Add** item is in. Open for the **Keep passing** run on the tier's final build, step 8.)*
-- [ ] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
-- [ ] Perf gate published; `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag pause within budget.
+      *(2026-11-20, step 8: run on the final build, 50 probes; every **Keep passing** probe passes but `gpu.unit-tests`: 452 tests,
+      3 failures, `PrefillReserveDeviceTest`'s free-memory bound (fails alone and on the pre-tier build) and
+      `DeviceUploadOrderingTest` 2 of 4 (4 of 4 alone; no file it exercises changed in this tier)
+      ([`20261120T014538Z-kv-cache-close-matrix`](../perf-compare/20261120T014538Z-kv-cache-close-matrix/INDEX.md), section 5).
+      Open on decision 20.)* *(2026-11-20, later: met by owner decision 20 (a): both failures are of the kinds the decision
+      counts as passing, with their readings in the step 8 entry.)*
+- [x] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
+      *(2026-11-20, step 8: the final table in the step 8 entry; every row PASS, FAIL-CLOSED and tested, N/A or
+      NEEDS-AMD-HARDWARE (ROCm, which attends on the CPU path); the vision exclusion tested for sharing and for saving
+      (`VisionAwareForwardPassHandlerShareTest`, `VisionAwareForwardPassHandlerSessionTest`), LoRA playback refused for sharing
+      (`SharedPrefixPoolTest.lora_playback_is_never_shared`, an explicit budget failing at startup).)*
+- [x] Perf gate published; `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag pause within budget.
       *(2026-11-10: the `paged_vs_dense%` half read -6.35%, unpinned,
       [`20261111T051528Z-paged-kv-in-place`](../perf-compare/20261111T051528Z-paged-kv-in-place/INDEX.md); open for the
       defrag pause, owed by the executor at step 5, and the reading is retaken on the tier's final build.)* *(2026-11-11, step 5:
@@ -498,14 +518,22 @@ in `models/`.)*
       ctx 8192 / batch 8 / page 16, every sweep model's page count
       ([`20261112T040139Z-kv-page-reclaim`](../perf-compare/20261112T040139Z-kv-page-reclaim/INDEX.md)). Open only for both
       readings retaken on the tier's final build.)*
+      *(2026-11-20, step 8: both retaken on the final build and published, unpinned: `paged_vs_dense%` -4.37% at ctx 8192 /
+      batch 8 / page 16, a reclaim pass at most 2.328 ms on an overlapping decode step
+      ([`20261120T014538Z-kv-cache-close-matrix`](../perf-compare/20261120T014538Z-kv-cache-close-matrix/INDEX.md), section 3);
+      the owner's gate retakes both pinned.)*
 - [x] The session save/restore surface is in `api/src/main/resources/openapi.yaml` and
       `juno-api.yaml` alongside the code that serves it (README feature-complete rule).
       *(2026-11-19, step 7: both carry `POST /v1/sessions/{session_id}/save`, `.../restore` and `DELETE /v1/sessions/{session_id}`
       with the `SessionResult` and `SessionError` schemas, matching `SessionRoutes` (`SessionRoutesTest`); `juno-api.yaml`'s
       `x_juno_session_id` no longer calls the delete endpoint future, and its unchecked claim that a session's KV "is evicted
       automatically under memory pressure" is corrected: nothing evicts it; `inference.proto` carries the three node RPCs.)*
-- [ ] Docs updated, Juno-native language only.
-- [ ] `CHANGELOG.md` entry added.
+- [x] Docs updated, Juno-native language only.
+      *(2026-11-20, step 8: `docs/howto.md`, `README.md`, `docs/agent-arch.txt`, `CLAUDE.md` and the build-and-test chapter carry
+      every item's surface (each step's docs list in the record) and the step 8 corrections; scanned for product names and plan
+      tier numbers.)*
+- [x] `CHANGELOG.md` entry added.
+      *(2026-11-20: every step's session entry; step 8's is Session 153.)*
 
 ## Execution record
 
@@ -3286,3 +3314,255 @@ says the device FP16 side holds the same halves, byte for byte. Comment only.
 the kit's **Keep passing** list on the tier's final build) and the tier's remaining criteria (decisions 17 and 18
 taken 2026-11-19).
 The owner's: the standing throughput and allocation gate, pinned, against the pre-tier jar.
+
+### 2026-11-20: step 8: the smoke matrix, the looser gates, live check 12 and the kit on the final build; one smoke check fails (decision 19); `gpu.unit-tests` fails on two known device tests (decision 20); the owner's gate prepared
+
+**Plan against code.** No drift that changes scope. Three doc drifts, fixed: `docs/howto.md` listed a `q8_0` or `q4_0`
+host KV beside GPU attention as never shared, true before item 7 put the device KV in the host's types
+(`HandlerKvShare.supported`: refused only where the device copy stays FP16, a head width not a multiple of 32);
+`SharedPrefixPool`'s startup refusal said the same, now "beside an FP16 GPU attention KV"; the README's KV section did not
+mention shared prompts or idle page reclaim, now it does. One owed test found: the tier's test list asks for a
+`ModelLiveRunnerIT` check of cross-session sharing (step 4 recorded it for step 8); check 12 below.
+
+**Live check 12, tests first.** `ModelLiveRunnerTest` (the pipeline and tensor modes select `SHARED_PREFIX`) and
+`ModelLiveChecksBackendTest` (all suites fail closed as checks 1 to 12) edited first and seen failing under Maven (compile:
+`Suite.SHARED_PREFIX` absent); then `SharedPrefixCheck` (new) and its wiring in `ModelLiveChecks` and `ModelLiveRunner`;
+both pass (3 of 3, 8 of 8). The check: per schedule, on one loaded model, a first request alone, then two that open with
+the same system prompt submitted together (the static schedule batches them, the continuous one runs them in one running
+set), with `--prefix-cache-tokens` 0 and then 4,096; with sharing on both later requests must start from the first one's
+kept prompt (2 hits; 0 with it off) and every reply must equal the unshared reply token for token. On CUDA both runs
+prefill one position at a time (decision 17). In process, in every `-DpType` mode, like checks 9 and 10.
+- TinyLlama, CPU: PASS in 90 s, both schedules 2 hits, 126 positions shared, prompt tokens 87/92/90, replies equal;
+  CUDA: PASS in 137 s, the same.
+- Shown able to fail: `SharedPrefixPool.shareInto` made to share one position fewer than it reports, rebuilt, run: FAIL
+  (static, reply 2 "A refrigerator keeps food cold by circulating cold air ..." against "A refrigerator is a device that
+  ..."); the source restored, its SHA-256 equal to the saved one, the jar's `shareInto` bytecode checked.
+- `./juno test` on TinyLlama: 12 of 12 in 268 s. `mvn -o verify -pl juno-master -am` (stub ITs): `ThreeNodeClusterIT` 8,
+  `TensorParallelClusterIT` 5, `InProcessClusterIT` 6, `UnsupportedArchitectureClusterIT` 1, all pass.
+
+**Smoke matrix, every script unmodified, tree HEAD `71099a85`**
+([`20261120T014538Z-kv-cache-close-matrix`](../perf-compare/20261120T014538Z-kv-cache-close-matrix/INDEX.md)):
+`smoke-kv-cache.sh` CPU 13 of 13 and `--gpu` 13 of 13; `smoke-consistency.sh` 56 of 56 (19 shared-prefix hits on the
+repeated prompts, answers equal); `smoke-grammar.sh` 19; `smoke-tools.sh` 14; `smoke-long-prompt-prefill.sh --gpu` 36 and
+`--cpu --lengths "128 512"` 24; `smoke-packed-kquant-matmul.sh` 48; `smoke-context-policy.sh --gpu` 7;
+`smoke-cpu-hot-path.sh` 31; all pass. **`smoke-gpu-residency.sh` 12 of 13**: TinyLlama, residency on against off, greedy
+parts at the 32nd and last token ("... innovative technique" on, "... technology" off). Mistral 7B and LLaMA-30B match,
+the cluster runs equal local mode, memory checks pass. Bisected, each commit built from `git archive`: the pre-tier jar
+and every commit to `637751b0` keep on equal to off over 32 tokens; `9c33ab93` (decision 5 (a), the FP16 decode attention
+on the wide decode block) and every later commit part at token 32; over 31 tokens HEAD's two are equal; with
+`--prefill-batch 1` on both servers the split stays, so it is not decision 17's window split. Both paths reach the same
+wide decode entry; the region's norms sum in a different order from the CPU's (documented), so on and off were never
+bit for bit equal, and the wide block's summation order moved that difference across a near tie. The 2026-11-16 entry
+recorded the wide block as changing rounding against `--gpu-attention off` and left the howto's counts unmeasured; the
+residency smoke was not run then. Decision 19.
+
+**Looser gates, median of three, A B A B A B against the pre-tier jar** (`e16748ad`, `21109a3a8fd317c8`):
+`compare-lora.sh --gpu`: train 1.000x (bar <= 1.25x), playback **0.874x** (bar >= 0.80x; 11.49 against 13.16 t/s, seven
+tokens, every run), recall equal, 15 passes, loss 1.1797 both. `compare-vision.sh`: GPU latency 1.041x, decode t/s 0.973x;
+CPU 1.022x, 0.976x; 741 prompt tokens, HTTP 200, the same reply in all twelve runs. Both pass.
+
+**The tier's microbench bars, final build, unpinned.** `gather-tax-microbench.sh`: paged_vs_dense **-4.37%** at ctx 8,192,
+batch 8, page 16 (bar <= 2%). `kv-reclaim-microbench.sh`: a reclaim pass adds at most **2.328 ms** to an overlapping
+decode step (TinyLlama; bar <= 5 ms). The owner's gate retakes both pinned.
+
+**Kit, tree with check 12.**
+`./juno-kit.sh --yes --skip-build --models-dir models --probes <50>`: the **Keep passing** list, every **Add** probe, the
+live checks on the five sweep models on both backends, and the LoRA, vision, grammar, tools and launcher probes; 8 h 42
+min; 41 pass, 8 readings, 1 fails (section 5 of the INDEX, the kit's reports beside it).
+- **Keep passing**, all pass but one: `schedule.tinyllama` and `gpu.schedule.tinyllama` (8 of 8 on both schedules, idle
+  pages reclaimed with replies unchanged), `mixed-prefill.*` and `gpu.mixed-prefill.tinyllama`, `long-prompt.*` and
+  `gpu.long-prompt.*` (to 2,048 tokens), `context-policy.*` and `gpu.context-policy.*`, `consistency.tinyllama` and
+  `gpu.consistency.tinyllama` (19 shared-prefix hits on repeated prompts, answers equal; no hit for stateless traffic; the
+  GPU decode batch of 8 equal to single at `f16`, `q8_0` and `q8_0`/`q4_0`), `cpu.unit-tests` (2,888 tests, 0 failures).
+  **`gpu.unit-tests` fails**: 452 tests, 3 failures, 12 skipped, the two known device tests of every suite run in this
+  record:
+  - `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`: 91,029,504 bytes reported free with
+    the device full against 67,108,864. Re-run alone on this tree, twice: fails (89,063,424). Alone on the pre-tier build
+    (`e16748ad` from `git archive`): fails (87,883,776). It predates the tier; the GPU also drives the desktop.
+  - `DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix`, 2 of 4 (Q5_K, Q6_K): re-run alone, twice: 4 of
+    4. It entered the tree mid-tier (`6ad5c728`, out of tier), so the pre-tier build has none; this tier changed no file
+    it exercises (`DeviceQ4KMatrix`, `CudaMatVec`, the bindings, the contexts, the single-matrix GEMV kernel). Step 5's
+    finding 4 routed the race to Tier 02F/02G.
+  Neither loosened. Decision 20.
+- **Add**: `kv-quality.*` (host `q8_0`/`q4_0` NLL 0.997x to 1.006x `f16`, bar 1.02x) and `gpu.kv-quality.*` (device `q8_0`
+  0.999x to 1.001x, `q8_0`/`q4_0` 0.997x to 1.004x; stored as selected) pass on the four sweep models;
+  `session.save-restore.tinyllama-1.1b` and its GPU twin pass at `f16` and `q8_0`; `gpu.kv-footprint.*` read the host KV
+  at 2,112 positions, the request's own, on every model; `gpu.kv-prefill.*` readings, NOISY under the kit's CPU guard
+  (other processes 6% to 7%).
+- Live `cpu.live.*` and `gpu.live.*`, five models each: checks 1 to 10 pass (the kit runs check 12 nowhere; section 4 ran
+  it). `lora.*`, `vision.*`, `grammar.tinyllama`, `tools.qwen2.5-3b`, `launcher.tinyllama`, `gpu.kernel-timing` pass.
+
+**Cross-surface, the tier's final table** (compiled from the item tables above and this step's runs):
+
+| # | Surface | Status |
+|---|---|---|
+| 1 | CPU inference | PASS: attention reads paged and dense KV in place (steps 1 and 3, gather oracle on all 8 handler classes); sharing, reclaim, `q4_0` KV, `f16` halves, save/restore; `smoke-kv-cache.sh`, check 12, kit CPU probes |
+| 2 | CUDA | PASS: device KV in the cache types (item 7, gates pinned), sharing with GPU attention (refused only beside an FP16 copy of a quantized host KV), save/restore with the device KV rebuilt; `smoke-kv-cache.sh --gpu`, check 12 (one-position prefill, decision 17), kit GPU probes. One smoke check fails: decision 19 |
+| 3 | ROCm | NEEDS-AMD-HARDWARE: attends on the CPU path, so items 1 to 6 apply as on the CPU; item 7 N/A, a quantized `--cache-type` keeps its host meaning, said at startup; not run on AMD hardware |
+| 4 | Static schedule | PASS: the dense KV copies a shared prefix (step 4); check 12 static (two requests batched), `smoke-consistency.sh` static-batch leg, check 11 |
+| 5 | Continuous schedule | PASS: shared pages counted and copied on write (step 4), reclaim (`schedule.*` probes), check 12 continuous (one running set) |
+| 6 | Single-node local mode | PASS: every smoke and check above runs local; save/restore in one process and across a restart |
+| 7 | Pipeline-parallel cluster | Sharing FAIL-CLOSED, tested: a node KV adapter refuses, off by default, an explicit budget fails at startup (`SharedPrefixPoolTest`); paged reads in place on the nodes; save/restore PASS, node-pinned, documented (check 11); checks 1 to 6 pass |
+| 8 | Tensor-parallel cluster | as 7: sharing refused; check 11 and checks 7 and 8 pass |
+| 9 | LoRA training | N/A: training keeps its own ephemeral KV |
+| 10 | LoRA playback | Sharing FAIL-CLOSED, tested (`SharedPrefixPoolTest.lora_playback_is_never_shared`; an explicit budget fails at startup); the cross-turn rule the row asks to keep is unchanged in code (under `--lora-play` the continuous schedule never takes a session's prefix entry, `ContinuousBatchEngine`); its KV freed per request (defects fixed in steps 5 and 7); `smoke-grammar.sh` and `smoke-tools.sh` `--lora-play` legs pass; LoRA gate recall equal |
+| 11 | Vision | FAIL-CLOSED, tested: a request with an image is never shared (`VisionAwareForwardPassHandlerShareTest`) nor saved (`VisionAwareForwardPassHandlerSessionTest`), documented; vision gate passes on GPU and CPU, replies equal |
+| 12 | OpenAI REST | PASS: shared prompts counted on `/v1/cluster/health`; `/v1/sessions/{id}/save`, `/restore`, `DELETE` (`SessionRoutesTest`, smoke) |
+| 13 | Native REST | the session endpoints are the server's, shared; `/v1/inference` carries no session id |
+| 14 | CLI / REPL | `--prefix-cache-tokens` and `--session-dir` in `--help`, `run.sh` and `run.bat`; the reclaim period a system property (`-Djuno.kv.reclaimPeriodMs`), documented in the howto; the REPL has no save command (decision 16 (a)) |
+
+**Owner's gate prepared** (`dist/kv-cache-close/`): `run-gate.sh` runs the standing gate pinned, Part A (GPU lane,
+`--n-prompt 512`) and Part C (CPU lane, 128), A B A B A B on the four sweep models against `baseline-shaded.jar` (the
+pre-tier `e16748ad`, `21109a3a8fd317c8`), scoring tg and pp >= 0.95x, allocation per token <= 1.10x and GC pause <= 1.25x;
+greedy output, the reference-tool ratio and hot methods reported only; Part M retakes the two microbench bars pinned.
+`candidate-shaded.jar` is the tree's jar, `2ceed60ef9139b7a`; `run-gate.sh` checks the tree's jar equals it.
+`wait-and-run.sh` starts it once `READY` exists.
+
+**Out-of-tier changes.** None. (`ModelLiveChecks` and `SharedPrefixCheck` are the tier's owed test; the refusal message is
+this tier's code.)
+
+**Docs.** `docs/howto.md` (the never-shared list; `--gpu-residency`: TinyLlama's on/off match is 31 tokens on the smoke
+prompt; "12 checks"), `README.md` (shared prompts, idle page reclaim), `docs/agent-arch.txt` (check 12, "twelve"),
+`CLAUDE.md` and `juno-documentation/part8/01-build-and-test.md` ("12 checks"), `CHANGELOG.md` (Session 153),
+`docs/perf-compare/README.md`.
+
+**Exit criteria:** 13 of 15. Ticked on this entry: the cross-surface checklist (the table above), the perf gate (both
+readings retaken on the final build and published), docs, `CHANGELOG.md`. Open: the standing gate, the owner's, and the kit
+criterion (`gpu.unit-tests`, decision 20).
+
+**Decisions for the owner.**
+- **19. `smoke-gpu-residency.sh` fails its TinyLlama comparison since decision 5 (a)'s wide decode block**: on and off
+  part at the 32nd and last generated token (31 equal), deterministically; the other two models match. The cause is a
+  summation-order change on a path that was already not bit for bit equal (the region's GPU norms against the CPU's),
+  not a defect in either path. Step 8 asks every earlier smoke to pass unmodified. (a) Recommended: record it as a
+  rounding consequence of decision 5 (a): the howto now says 31 tokens for TinyLlama (done in this entry, a fact of
+  the build), and the smoke's TinyLlama hard check compares the first 24 tokens, the count its own header says the
+  region is measured to keep, still reporting the full 32 and the first token where they part. (b) Keep the smoke as
+  it is and make the region's RMS norms sum in the CPU's order (or the CPU's in the region's), so on equals off bit
+  for bit; kernel work on the decode hot path with its own gates, out of this tier, which stays open until it lands.
+  (c) Keep the smoke as it is, accept a red smoke and close the tier on the other criteria, the check failing until
+  (b) is done elsewhere.
+
+- **20. The kit criterion: `gpu.unit-tests` is on the Keep passing list and fails on this host** on two device tests
+  that are not this tier's (above): one fails the same way on the pre-tier build, the other passes alone and exercises
+  no file this tier changed. This is the first tier whose kit criterion asks the Keep list to pass, and every later tier
+  carries the same line, so the ruling sets the rule. (a) Recommended: a Keep probe whose only failures are tests shown
+  failing on the pre-tier build, or passing alone on code the tier did not change, counts as passing with the failures
+  recorded; the criterion is ticked on this record, and the upload race stays routed to Tier 02F/02G. (b) Keep the
+  criterion open until both tests pass in the suite here: the free-memory bound rewritten to allow for a desktop on the
+  GPU and the upload ordered before the first GEMV, out-of-tier work with its own tests. (c) Have a tester run
+  `gpu.unit-tests` on a GPU that drives no desktop and tick on that run; this clears the free-memory check only, not the
+  race.
+
+**Plan check.** `scripts/performance-tests/check-plan-thresholds.sh` after this entry: ok (26 tier files, milestone and end-of-plan tables checked).
+
+**Next for the executor:** decisions 19 and 20 as the owner takes them; then the tier closes on the owner's gate.
+The owner's: the standing throughput and allocation gate, pinned (`bash dist/kv-cache-close/wait-and-run.sh`).
+
+### 2026-11-20, later: owner decisions 19 (a) and 20 (a); the owner's gate read, one row unscored (decision 21)
+
+**Owner decisions (2026-11-20).**
+- **19 (a).** The residency smoke's TinyLlama difference is recorded as a rounding consequence of decision 5 (a): the
+  howto says 31 tokens for TinyLlama (done at step 8), and the smoke fails a TinyLlama difference only within the first
+  24 generated tokens, reporting the full 32. The owner asked whether (b), the region's norms summed in the CPU's order,
+  will be needed later. The executor's view: not for correctness, since each path is deterministic and the two were
+  never bit for bit equal; it becomes worth doing only if Juno promises greedy output that does not depend on how a
+  request runs (residency on or off, window width, batch size). That promise is the family of decision 17's window-width
+  invariance, a Tier 07 candidate, and (b) belongs with it there rather than alone.
+- **20 (a).** A Keep passing probe whose only failures are tests shown failing on the pre-tier build, or passing alone on
+  code the tier did not change, counts as passing, with the failures recorded. Recorded as a standing note under README
+  execution rule 10, which every later tier's kit criterion cites.
+
+**Decision 19 (a) applied.** `smoke-gpu-residency.sh`: a new `--hard-n-gen` (default 24, at most `--n-gen`); for
+TinyLlama each mode makes one more request of that many tokens after its memory readings (so they are unchanged), the
+reply must open request 1's, and the on and off replies must be equal; the 32-token comparison is reported as before,
+with the first word where it parts. The header says why. Other models are reported, never failed, as before.
+- `smoke-gpu-residency.sh`, every model and the cluster runs (`20261120T155448Z`): **13 of 13 pass**. TinyLlama on and off
+  equal over the first 24 tokens ("... who revolutionized"); over 32 they part at the last word ("technique" on,
+  "technology" off), reported. Mistral 7B and LLaMA-30B equal over 32 tokens, memory flat, both cluster runs equal local
+  mode.
+- Shown able to fail: `--models tinyllama-1.1b-chat-v1.0.Q4_K_M --no-cluster --hard-n-gen 32` (`20261120T161026Z`):
+  FAIL, "greedy output differs on vs off within the first 32 tokens, from word 21", exit 1. Both summaries in the step 8
+  folder, `residency-24/`.
+
+**Decision 20 (a) applied.** Step 8's kit run meets the kit criterion: every Keep passing probe passes but
+`gpu.unit-tests`, whose three failures are `PrefillReserveDeviceTest`'s free-memory bound (fails alone and on the
+pre-tier build `e16748ad`) and `DeviceUploadOrderingTest` 2 of 4 (4 of 4 alone, twice; no file it exercises changed in
+this tier). Criterion ticked.
+
+**The owner's gate, pinned** ([`20261120T134937Z-kv-cache-close-gate`](../perf-compare/20261120T134937Z-kv-cache-close-gate/INDEX.md);
+2026-11-20, 07:49 to 09:24 host time; jars `21109a3a8fd317c8` against `2ceed60ef9139b7a`, each checked against `READY`;
+CPU pinned on all 12 runs; GPU clock recorded, not fixed, the same loaded median on both jars per model):
+- GPU lane, `--n-prompt 512`: pp 1.007x to 1.067x, tg 1.020x to 1.094x, allocation per token 0.710x to 0.972x, no GC
+  pause in a token span. Met on every model.
+- CPU lane, `--n-prompt 128`: pp 0.995x to 1.017x on all four; tg 1.012x, 1.013x and 1.004x on TinyLlama, Qwen2.5-3B
+  and Phi-3.5-mini; allocation 0.970x to 1.016x; no GC pause. **Mistral 7B's generation is not scored**: the harness's
+  span check withheld `token_gen_tps` on all three baseline runs (the token span's residual -26.2, -29.8 and -26.7 ms
+  against a floor of -25 ms, in 34-second requests) and on candidate run 1, and `run-gate.sh` counts a side with no
+  reading as 0, so it printed `FAIL: mistral generation below 0.95x` and `GATES MISSED` with no ratio measured. From
+  the same six runs, neither withheld: request-timed rate 1.8601 against 1.8511 t/s (**0.995x**), decode rate from the
+  forward-pass totals 1.9877 against 1.9800 (**0.996x**). Decision 21.
+- Part M, pinned: `paged_vs_dense%` -3.43% (bar 2%); a reclaim pass at most 3.691 ms on an overlapping decode step (bar
+  5 ms). Both met.
+- Reported: greedy output differs from the pre-tier build on TinyLlama (both lanes) and Mistral 7B (GPU), as the
+  script's header expects (`f16` halves, the wide decode block); every candidate run equals its own run 1.
+
+**Finding (harness).** The span check's floor is a fixed -25 ms while its ceiling grows with the generated tokens; on
+the CPU lane's longest requests the JFR clock and the engine clock drift apart by about 0.08% of the request, enough to
+cross the floor. A floor that scales with the request's length would stop withholding valid readings there. A harness
+change outside this tier; noted for the owner.
+
+**Exit criteria:** 14 of 15. Ticked on this entry: the kit criterion (decision 20 (a)). Open: the standing gate, on
+decision 21.
+
+**Decision for the owner.**
+- **21. Score the gate's Mistral 7B CPU generation row.** Every other row of the gate meets every bar; this one has no
+  baseline reading of the scored kind. (a) Recommended, as Tier 02B's owner decision 5 (2026-10-09) on the same row:
+  score it on the request-timed rate, median of three, 0.995x, met (the decode-derived rate agrees at 0.996x); the gate
+  is met and the tier is complete. (b) Re-run the CPU lane on Mistral 7B alone, pinned (about 70 minutes, a one-model
+  copy of `run-gate.sh` the executor prepares), accepting that the span check may withhold again on runs this long.
+
+**Docs.** `docs/gap-closure-plan/README.md` (rule 10's note), `smoke-gpu-residency.sh`'s header, `CHANGELOG.md`
+(Session 153), `docs/perf-compare/README.md` (the gate's row).
+
+**Owner decision 21 (b), 2026-11-20:** re-run the CPU lane on Mistral 7B alone, pinned. Prepared in
+`dist/kv-cache-close-mistral-cpu/`: `run-gate.sh` is the standing gate's script cut to Part C and that one model, the same
+two jars (hashes checked against `READY`), A B A B A B, the same bars; when the span check withholds a run, it also prints
+the request-timed and decode-derived medians.
+
+**Next for the executor:** score the owner's one-model run; on a met row the standing gate is ticked and the tier is
+complete. The owner's: `bash dist/kv-cache-close-mistral-cpu/wait-and-run.sh` (about 30 minutes, pinned).
+
+### 2026-11-20, latest: the owner's re-run of the Mistral 7B CPU row (decision 21 (b)) meets every bar; the tier is complete
+
+**Run.** `dist/kv-cache-close-mistral-cpu/`, the owner's, 2026-11-20, 13:06 to about 13:35 host time; jars
+`21109a3a8fd317c8` against `2ceed60ef9139b7a`, each checked against `READY`, the candidate equal to the tree's jar; CPU pinned
+on all six runs. The waiter's first start refused to run, with nothing pinned or measured: it read each jar's hash as the
+second word of a `READY` line starting with the jar's name, and the note in `READY` has a line starting with "candidate".
+The executor fixed the read (the first such line whose second word is a 16-digit hex hash) and the owner started it again.
+
+**Readings** (Mistral 7B, CPU lane, `--n-prompt 128`, 64 generated, A B A B A B), scored as `run-gate.sh`'s header set
+before the run:
+- Generation, the harness's `token_gen_tps`: 2.0157 against 2.0234 t/s, **1.004x**, over 2 of 3 runs a side. The span check
+  withheld baseline run 1 and candidate run 2 (token span residual -29.0 and -31.6 ms against the -25 ms floor); the other
+  four read -8.6 to 63.4 ms. From all six runs: request-timed 1.8627 against 1.8669 (1.002x), decode-derived 1.9909
+  against 1.9913 (1.000x).
+- Prefill 5.1257 against 5.0495 t/s, **0.985x**; allocation per token 343,305 against 347,770, **1.013x**; no GC pause in a
+  token span on either side.
+- Reported: greedy output equal to the baseline in 3 of 3 runs; the same hot methods lead on both jars.
+
+Met on every bar. With the full gate's other rows, the standing gate is met on every row, and the exit criterion is
+ticked.
+
+**Exit criteria:** 15 of 15. The tier is complete.
+
+**Evidence.** [`20261120T190622Z-kv-cache-close-mistral-cpu`](../perf-compare/20261120T190622Z-kv-cache-close-mistral-cpu/INDEX.md);
+a pointer added to the full gate's index; both rows in `docs/perf-compare/README.md`. `CHANGELOG.md` (Session 153, the
+speed bullet).
+
+**Left open, outside this tier** (each recorded above): the harness's span-check floor, fixed while its ceiling scales
+(it withheld valid readings on the CPU lane's longest requests, in both gates); window-width invariance of GPU prefill
+(decision 17, a Tier 07 candidate), beside which residency-invariant greedy output would go if it is ever wanted
+(decision 19 (b), not taken); the Qwen2 LoRA handler's serial prefill (decision 18, Tier 12 item 6).
+
+**Next for the executor:** the next tier, as the README's order and the owner's decisions route it.

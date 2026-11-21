@@ -1,0 +1,50 @@
+{
+  "id" : "gpu.kv-prefill.phi-3.5-mini",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "prefill ms, f16 device KV, windows of 2048 tokens",
+    "unit" : "ms",
+    "values" : [ 3153.026257, 3166.561001, 3130.226051 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "prefill ms, q8_0 device KV, windows of 2048 tokens",
+    "unit" : "ms",
+    "values" : [ 2971.903972, 2965.383975, 2954.174529 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "q8_0 over f16 prefill time, windows of 2048 tokens",
+    "unit" : "x",
+    "values" : [ 0.940488195560244 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "prefill ms, f16 device KV, windows of 128 tokens",
+    "unit" : "ms",
+    "values" : [ 3912.518499, 3883.242951, 3882.674671 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "prefill ms, q8_0 device KV, windows of 128 tokens",
+    "unit" : "ms",
+    "values" : [ 3641.261941, 3646.133285, 3619.208218 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  }, {
+    "name" : "q8_0 over f16 prefill time, windows of 128 tokens",
+    "unit" : "x",
+    "values" : [ 0.9376858432363379 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "deviceKv" : "Phi-3: GPU attention's KV copy stored as K q8_0, V q8_0, 6528 bytes per position against 12288 for FP16",
+    "f16Kv" : "cache-type-k=f16 cache-type-v=f16",
+    "quantizedKv" : "cache-type-k=q8_0 cache-type-v=q8_0",
+    "reps" : 3,
+    "tokens" : 2048
+  }
+}

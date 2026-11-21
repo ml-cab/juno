@@ -1,0 +1,64 @@
+{
+  "id" : "mixed-prefill.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "mixed: every stream answered",
+    "passed" : true,
+    "detail" : "4 of 4 streams produced text"
+  }, {
+    "name" : "mixed: the long prompt was prefilled in chunks inside decode steps",
+    "passed" : true,
+    "detail" : "12 prefill chunks in 9 steps"
+  }, {
+    "name" : "admit: every stream answered",
+    "passed" : true,
+    "detail" : "4 of 4 streams produced text"
+  } ],
+  "readings" : [ {
+    "name" : "mixed: short-request TTFT",
+    "unit" : "ms",
+    "values" : [ 7639.301576000001 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mixed: short-request TPOT",
+    "unit" : "ms",
+    "values" : [ 1249.0692671666668 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mixed: long-request TTFT",
+    "unit" : "ms",
+    "values" : [ 16469.502989 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "admit: short-request TTFT",
+    "unit" : "ms",
+    "values" : [ 14441.018910333332 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "admit: short-request TPOT",
+    "unit" : "ms",
+    "values" : [ 361.999904388889 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "admit: long-request TTFT",
+    "unit" : "ms",
+    "values" : [ 14442.860889 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "mixed.prefillChunks" : 12,
+    "mixed.stepsWithPrefill" : 9,
+    "admit.stepsWithPrefill" : 0,
+    "backend" : "cpu",
+    "admit.prefillChunks" : 0,
+    "shortRequests" : 3,
+    "longPromptWords" : 256
+  }
+}

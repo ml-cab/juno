@@ -319,10 +319,10 @@ Module dependency (excerpt):
         to; not a port 1..65535 is refused)
         juno-player depends on coordinator (and transitively on node)
   juno-master — CoordinatorMain standalone executable (production coordinator); also carries
-                ModelLiveRunner (./juno test) over ModelLiveChecks, the ten real-model checks
+                ModelLiveRunner (./juno test) over ModelLiveChecks, the twelve real-model checks
                 ModelLiveRunnerIT runs too (one implementation for the command and the IT)
         ModelLiveChecks.run(modelPath, suites, Backend, progress): AUTO (the three-argument
-        run, unchanged: checks 9 and 10 take CUDA where present), CPU (every check and every
+        run, unchanged: checks 9, 10 and 12 take CUDA where present), CPU (every check and every
         forked node on the CPU), CUDA (all on the GPU; without a usable one each selected check
         fails with the reason). The cluster suites set JUNO_USE_GPU for their lifetime, and
         ClusterHarness forwards JUNO_USE_GPU to the nodes it forks (NodeMain reads it, default
@@ -671,7 +671,11 @@ Shared prompt prefixes (coordinator SharedPrefixPool, --prefix-cache-tokens / kv
   VisionAwareForwardPassHandler for any request with an image (the placeholder token ids are the
   same for every image). Tests: SessionKvLayoutShareTest, KvPrefixShareHandlerTest (every family,
   both schedules and host types, bit for bit), SharedPrefixPoolTest, PrefixCacheOwnerTest,
-  SharedPrefixOptionsTest, VisionAwareForwardPassHandlerShareTest.
+  SharedPrefixOptionsTest, VisionAwareForwardPassHandlerShareTest; ModelLiveChecks check 12
+  (SharedPrefixCheck: per schedule on one loaded model, a first request alone, then two that open
+  with the same system prompt submitted together, sharing off then on; two hits and every reply
+  equal token for token; one-position prefill windows on CUDA, where GPU prefill depends on the
+  window split).
 
 Session save and restore (coordinator SessionStore / SessionRoutes, --session-dir / kvcache
   SessionDirOptions, JUNO_SESSION_DIR): explicit REST calls only, nothing written otherwise.

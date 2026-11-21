@@ -1,0 +1,31 @@
+{
+  "id" : "gpu.unit-tests",
+  "kind" : "CHECK",
+  "passed" : false,
+  "checks" : [ {
+    "name" : "group gpu on node",
+    "passed" : false,
+    "detail" : "452 tests, 3 failures, 0 errors, 12 skipped; Maven exit 0"
+  }, {
+    "name" : "DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix(int, int, int)[1]",
+    "passed" : false,
+    "detail" : "failure: java.lang.AssertionError: type 13 512x2048 round 1: row 262 read -0.6700549 right after the upload, -13.552536 once the device was idle"
+  }, {
+    "name" : "DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix(int, int, int)[2]",
+    "passed" : false,
+    "detail" : "failure: java.lang.AssertionError: type 14 512x2048 round 1: row 183 read -21.113865 right after the upload, 17.758293 once the device was idle"
+  }, {
+    "name" : "PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance",
+    "passed" : false,
+    "detail" : "failure: java.lang.AssertionError: [free bytes reported with the device full] \nExpecting actual:\n  91029504L\nto be less than or equal to:\n  67108864L "
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "mavenExit" : 0,
+    "modules" : "node",
+    "tests" : 452,
+    "excludedGroups" : "",
+    "groups" : "gpu",
+    "skipped" : 12
+  }
+}

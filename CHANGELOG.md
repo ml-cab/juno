@@ -1,5 +1,27 @@
 ## Status 
 
+**Session 153** - A twelfth live check, prompts shared across requests; corrected docs
+
+- **Checks.** `./juno test` and the real-model integration test run a twelfth check, prompts shared across requests:
+  on one loaded model, per schedule, a request alone and then two that open with the same system prompt submitted
+  together, with shared prompts off and then on. Both later requests must start from the first one's kept prompt, and
+  every reply must equal the reply computed with sharing off, token for token. On CUDA the check prefills one position
+  at a time, so that it compares the sharing and not the window split. It runs in process in every `-DpType` mode.
+- **Corrected.** `docs/howto.md` listed a `q8_0` or `q4_0` host KV beside GPU attention as never shared. Since GPU
+  attention stores its copy in the host's type, such a KV is shared; only a model whose GPU copy stays FP16 (a head
+  width that is not a multiple of 32) is refused, and the startup refusal now says so. The README's KV section now
+  covers shared prompts and idle page reclaim. With the device-resident decode region, TinyLlama's reply to the
+  residency smoke prompt matches the op-at-a-time path for 31 tokens, not 32 as documented: attention's decode block
+  sums in a new order, and the region's norms already summed in a different order from the CPU's.
+- **Smoke.** `smoke-gpu-residency.sh` fails a TinyLlama difference between residency on and off only within the first
+  24 generated tokens (`--hard-n-gen`, one more request per mode), and still reports the 32-token comparison with the
+  first word where the replies part.
+- **Speed.** The KV cache work since `e16748ad` (in-place paged reads, shared prompts, idle page reclaim, `q4_0`,
+  quantized GPU KV, `f16` halves, saved sessions), measured against that build on the four test models, median of three,
+  CPU clocks pinned, both builds at the same loaded GPU clock: on CUDA prefill 1.01x to 1.07x, decode 1.02x to 1.09x,
+  allocation per token 0.71x to 0.97x; on the CPU prefill 0.99x to 1.02x, decode 1.00x to 1.01x, allocation per token
+  0.97x to 1.02x; no GC pause while generating.
+
 **Session 152** - Sessions saved to disk and restored in a later process, over REST
 
 - **Endpoints.** `POST /v1/sessions/{id}/save` writes a session's KV (the session `x_juno_session_id` names) under the

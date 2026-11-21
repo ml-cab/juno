@@ -87,7 +87,7 @@ public final class SharedPrefixPool {
 		String refusal = loraPlay ? "LoRA playback is on"
 				: pipeline.supportsKvPrefixSharing() ? null
 						: "this pipeline's KV cannot be shared (a cluster's remote nodes, the LoRA handlers, a"
-								+ " quantized host KV beside a GPU attention KV, or a node KV adapter)";
+								+ " quantized host KV beside an FP16 GPU attention KV, or a node KV adapter)";
 		if (refusal != null) {
 			if (options.explicit())
 				throw new IllegalArgumentException("--prefix-cache-tokens " + budget + " was given, but " + refusal

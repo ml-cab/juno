@@ -78,6 +78,16 @@ Features:
 
 - Dense KV under `static`; paged KV (`--kv-page-size`) under `continuous`.
   See `docs/howto.md`.
+- Shared prompts (`--prefix-cache-tokens`, local mode, default a quarter of
+  the heap and at most one context): finished requests' prompts are kept as KV,
+  and a later request whose prompt starts the same way (one system prompt across
+  many clients) starts from it instead of computing it, on both schedules (paged
+  pages shared and copied on first write; dense rows copied). Unchanged replies
+  on the CPU; on a GPU, unchanged with `--prefill-batch 1`. Requests with an
+  image, `--lora-play` and cluster nodes are never shared.
+- Paged KV pages left idle for a whole period give their memory back to the heap
+  from a background thread (`-Djuno.kv.reclaimPeriodMs`, default one minute);
+  pages in use or held by a session or a kept prompt are never moved.
 - Host KV stored as IEEE halves (`f16`, the default), float32 (`f32`), `q8_0`
   or `q4_0` (`--cache-type-k` / `--cache-type-v`; `q8_0` and `q4_0` about 1.9x
   and 3.6x smaller than `f16`); CPU attention reads the stored rows in place. For

@@ -52,9 +52,9 @@ class ModelLiveRunnerTest {
 	@Test
 	void ptype_filters_the_cluster_suite_and_keeps_the_in_process_prefill() {
 		assertThat(ModelLiveRunner.suitesFor("pipeline")).containsExactlyInAnyOrder(Suite.PIPELINE, Suite.PREFILL,
-				Suite.CONTEXT_SHIFT);
+				Suite.CONTEXT_SHIFT, Suite.SHARED_PREFIX);
 		assertThat(ModelLiveRunner.suitesFor("tensor")).containsExactlyInAnyOrder(Suite.TENSOR, Suite.PREFILL,
-				Suite.CONTEXT_SHIFT);
+				Suite.CONTEXT_SHIFT, Suite.SHARED_PREFIX);
 	}
 
 	@Test

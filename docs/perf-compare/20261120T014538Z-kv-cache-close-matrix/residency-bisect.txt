@@ -1,0 +1,27 @@
+TinyLlama 1.1B Chat Q4_K_M, GPU (GTX 1080), local mode, greedy, 32 generated tokens unless noted:
+  JUNO_JAR=<build>/juno-player-0.1.2-shaded.jar scripts/performance-tests/smoke-gpu-residency.sh \
+    --models tinyllama-1.1b-chat-v1.0.Q4_K_M --no-cluster
+Prompt: "Write three sentences about the history of the printing press."
+Each build: git archive <commit>, mvn package -DskipTests. One GPU run at a time.
+
+Shared opening of every reply below:
+  "1. The printing press was invented in the 15th century by Johannes Gutenberg, who revolutionized the publishing industry with his innovative ..."
+
+build                              off ends       on ends        smoke line
+e16748ad (pre-tier)                technique      technique      PASS: greedy output identical on vs off (32 tokens)
+1b90ca0c                           (identical)    (identical)    PASS: greedy output identical on vs off (32 tokens)
+79fa87b0                           (identical)    (identical)    PASS: greedy output identical on vs off (32 tokens)
+a4a91182                           (identical)    (identical)    PASS: greedy output identical on vs off (32 tokens)
+637751b0                           (identical)    (identical)    PASS: greedy output identical on vs off (32 tokens)
+9c33ab93                           technology     technique      FAIL: greedy output differs on vs off from word 21
+c607e926                           technology     technique      FAIL: greedy output differs on vs off from word 21
+d205ab67                           technology     technique      FAIL: greedy output differs on vs off from word 21
+71099a85 (HEAD), step-8 matrix     technology     technique      FAIL: greedy output differs on vs off from word 21
+71099a85 (HEAD), rerun             technology     technique      FAIL: greedy output differs on vs off from word 21
+71099a85 (HEAD), --n-gen 31        innovative     innovative     PASS: greedy output identical on vs off (31 tokens)
+
+"(identical)": the smoke compared the 32 tokens and found them equal; the reply text was not kept.
+The first build that parts is 9c33ab93 (the FP16 decode attention on the wide decode block); its parent 637751b0
+does not. Over 31 tokens HEAD's two replies are equal: they part at the 32nd and last token.
+71099a85 (HEAD), both servers with --prefill-batch 1 (a copy of the smoke passing the flag to the local servers):
+  off ends "technology", on ends "technique": the split does not come from how the prompt is cut into prefill windows.

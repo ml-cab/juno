@@ -183,6 +183,12 @@ before acting on it — both documents are snapshots, not ground truth that stay
    section exists and lists something; whether the named probes are the right ones is the tier's review, and
    whether the catalog and the coverage file agree is `CoverageTest`'s.
 
+   *(2026-11-20, owner decision 20 (a) in [Tier 03](TIER-03-kv-cache-maturity.md)'s step 8 entry.)* A **Keep passing**
+   probe counts as passing when every failure in it is a test shown, with readings in the tier's record, either
+   failing the same way on the pre-tier build or passing alone on code the tier did not change. Each such failure is
+   recorded in the tier's entry, and no test is loosened to make the probe pass. Any other failure keeps the probe
+   failing.
+
 ## Program target
 
 This plan's stated purpose is closing the gap with llama.cpp. That purpose needs a number, or no

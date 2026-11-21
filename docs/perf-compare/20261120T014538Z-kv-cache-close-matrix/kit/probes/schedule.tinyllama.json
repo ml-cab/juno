@@ -1,0 +1,104 @@
+{
+  "id" : "schedule.tinyllama",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "static: the server runs the static schedule",
+    "passed" : true,
+    "detail" : "the health endpoint reports 'static'"
+  }, {
+    "name" : "static: every request answered",
+    "passed" : true,
+    "detail" : "blocking all; streams 8/8; turns 8/8"
+  }, {
+    "name" : "continuous: the server runs the continuous schedule",
+    "passed" : true,
+    "detail" : "the health endpoint reports 'continuous'"
+  }, {
+    "name" : "continuous: every request answered",
+    "passed" : true,
+    "detail" : "blocking all; streams 8/8; turns 8/8"
+  }, {
+    "name" : "continuous: idle KV pages reclaimed, replies unchanged",
+    "passed" : true,
+    "detail" : "6336 pages reclaimed within 30 s, 704 still live (the session's); the greedy reply after the reclaim equals the one before"
+  }, {
+    "name" : "continuous: concurrent requests shared decode steps",
+    "passed" : true,
+    "detail" : "largest decode batch 8, shared steps 192"
+  } ],
+  "readings" : [ {
+    "name" : "static: aggregate t/s",
+    "unit" : "t/s",
+    "values" : [ 11.573380607849261 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "static: mean TTFT",
+    "unit" : "ms",
+    "values" : [ 7911.055617625 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "static: mean TPOT",
+    "unit" : "ms",
+    "values" : [ 692.8646654920635 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "static: first turn latency",
+    "unit" : "ms",
+    "values" : [ 1783.274499 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "static: mean later turn latency",
+    "unit" : "ms",
+    "values" : [ 1444.549522142857 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "continuous: aggregate t/s",
+    "unit" : "t/s",
+    "values" : [ 11.432982975204673 ],
+    "higherIsBetter" : true,
+    "scored" : true
+  }, {
+    "name" : "continuous: mean TTFT",
+    "unit" : "ms",
+    "values" : [ 7834.411006 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "continuous: mean TPOT",
+    "unit" : "ms",
+    "values" : [ 585.9302538511905 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "continuous: first turn latency",
+    "unit" : "ms",
+    "values" : [ 2096.443164 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "continuous: mean later turn latency",
+    "unit" : "ms",
+    "values" : [ 1583.790992 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "continuous.kvPagesLiveAfterReclaim" : 704,
+    "continuous.prefixHitRate" : 0.875,
+    "sessions" : 8,
+    "static.prefixHits" : 7,
+    "parallel" : 8,
+    "static.prefixLookups" : 8,
+    "continuous.kvPagesReclaimed" : 6336,
+    "continuous.prefixHits" : 7,
+    "continuous.prefixLookups" : 8,
+    "static.prefixHitRate" : 0.875,
+    "backend" : "cpu"
+  }
+}

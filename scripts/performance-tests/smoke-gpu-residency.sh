@@ -26,9 +26,13 @@
 #
 # Fails on: a crash or empty response, a missing activation notice where the region should
 # run, device memory that grows across requests, or a cluster run that does not answer.
-# A difference between on and off output is reported with the first token where it appears,
-# and fails only for the first model (tinyllama), where the region is measured to keep every
-# greedy token of a 24-position decode.
+# A difference between on and off output over N_GEN tokens is reported with the first word
+# where it appears. It fails only for TinyLlama, and only within the first HARD_N_GEN tokens
+# (--hard-n-gen, default 24): the region is measured to keep every greedy token of a 24-position
+# decode there. Each TinyLlama mode makes one more request of HARD_N_GEN tokens, after the memory
+# readings, and the two replies must be equal. Over 32 tokens TinyLlama's reply parts at its
+# 32nd token: the region's RMS norms sum in a different order from the op-at-a-time path's, and
+# the FP16 decode attention's wide block moved that difference across a near tie.
 #
 # Environment overrides: JUNO_JAR (shaded jar to run), MODELS_DIR.
 # Writes logs, responses and summary.md under target/gpu-residency-smoke/<timestamp>/.
@@ -36,7 +40,7 @@
 # Usage:
 #   ./scripts/performance-tests/smoke-gpu-residency.sh
 #   ./scripts/performance-tests/smoke-gpu-residency.sh --models tinyllama --requests 3
-#   ./scripts/performance-tests/smoke-gpu-residency.sh --no-cluster --n-gen 16
+#   ./scripts/performance-tests/smoke-gpu-residency.sh --no-cluster --n-gen 16 --hard-n-gen 16
 #   ./scripts/performance-tests/smoke-gpu-residency.sh --requests 8 --mem-n-gen 0   # every request full length
 set -uo pipefail
 shopt -s extglob
@@ -51,6 +55,7 @@ MODELS_DIR="${MODELS_DIR:-${ROOT}/models}"
 MODELS="tinyllama-1.1b-chat-v1.0.Q4_K_M,mistral-7b-instruct-v0.1-q4_k_m,llama-1-30b.Q4_K_M"
 API_PORT=18095
 N_GEN=32
+HARD_N_GEN=24
 MEM_N_GEN=8
 REQUESTS=4
 LEAK_MIB_PER_REQUEST=8
@@ -70,15 +75,17 @@ while [[ $# -gt 0 ]]; do
     --models) MODELS="$2"; shift 2 ;;
     --api-port) API_PORT="$2"; shift 2 ;;
     --n-gen) N_GEN="$2"; shift 2 ;;
+    --hard-n-gen) HARD_N_GEN="$2"; shift 2 ;;
     --mem-n-gen) MEM_N_GEN="$2"; shift 2 ;;
     --requests) REQUESTS="$2"; shift 2 ;;
     --no-cluster) RUN_CLUSTER=0; shift ;;
     --out) OUT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) die "unknown flag: $1" ;;
   esac
 done
 (( REQUESTS >= 1 )) || die "--requests must be at least 1"
+(( HARD_N_GEN >= 1 && HARD_N_GEN <= N_GEN )) || die "--hard-n-gen must be between 1 and --n-gen (${N_GEN})"
 WINDOW_START=$(( (REQUESTS + 1) / 2 )); (( WINDOW_START < 2 )) && WINDOW_START=2
 (( WINDOW_START > REQUESTS )) && WINDOW_START=$REQUESTS
 
@@ -190,10 +197,13 @@ first_diff() {
   echo -1
 }
 
-# run_local <stem> <model> <mode>  -> sets REPLY_TEXT, MEM_FIRST, MEM_LAST, MEM_SERIES
+# hard_checked <stem>  -> whether on and off must be equal (over the first HARD_N_GEN tokens)
+hard_checked() { [[ "$1" == tinyllama* ]]; }
+
+# run_local <stem> <model> <mode>  -> sets REPLY_TEXT, HARD_TEXT, MEM_FIRST, MEM_LAST, MEM_SERIES
 run_local() {
   local stem="$1" model="$2" mode="$3" r text first=""
-  REPLY_TEXT=""; MEM_FIRST=""; MEM_LAST=""; MEM_SERIES=""
+  REPLY_TEXT=""; HARD_TEXT=""; MEM_FIRST=""; MEM_LAST=""; MEM_SERIES=""
   start_server "${stem}-local-${mode}" "$model" --local --gpu-residency "$mode" || { fail "${stem} local ${mode}: server did not start"; return 1; }
   local n long
   for (( r = 1; r <= REQUESTS; r++ )); do
@@ -216,6 +226,14 @@ run_local() {
   done
   REPLY_TEXT="$first"
   printf '%s\n' "$first" >"${OUT}/${stem}-local-${mode}.txt"
+  if hard_checked "$stem"; then
+    # After the memory readings, so they are unchanged: the reply the on/off check compares.
+    HARD_TEXT="$(ask "${OUT}/${stem}-local-${mode}-hard.json" "$HARD_N_GEN")"
+    [[ -n "$HARD_TEXT" ]] || { fail "${stem} local ${mode}: the ${HARD_N_GEN}-token request returned no text"; stop_juno; return 1; }
+    [[ "$first" == "${HARD_TEXT%%+([[:space:]])}"* ]] \
+      || fail "${stem} local ${mode}: the ${HARD_N_GEN}-token reply is not the opening of request 1 (greedy)"
+    printf '%s\n' "$HARD_TEXT" >"${OUT}/${stem}-local-${mode}-hard.txt"
+  fi
   stop_juno
 }
 
@@ -227,7 +245,7 @@ check_model() {
 
   run_local "$stem" "$model" off || return
   off_text="$REPLY_TEXT"
-  local off_first="$MEM_FIRST" off_last="$MEM_LAST" off_series="$MEM_SERIES"
+  local off_hard="$HARD_TEXT" off_first="$MEM_FIRST" off_last="$MEM_LAST" off_series="$MEM_SERIES"
   note "${stem}: GPU MiB after each request, off: ${off_series}"
   run_local "$stem" "$model" on || return
   on_text="$REPLY_TEXT"
@@ -257,10 +275,18 @@ check_model() {
   fi
 
   d="$(first_diff "$off_text" "$on_text")"
-  if [[ "$d" == "-1" ]]; then
+  if hard_checked "$stem"; then
+    local hd
+    hd="$(first_diff "$off_hard" "$HARD_TEXT")"
+    if [[ "$hd" != "-1" ]]; then
+      fail "${stem}: greedy output differs on vs off within the first ${HARD_N_GEN} tokens, from word ${hd}"
+    elif [[ "$d" == "-1" ]]; then
+      pass "${stem}: greedy output identical on vs off (${N_GEN} tokens)"
+    else
+      pass "${stem}: greedy output identical on vs off over the first ${HARD_N_GEN} tokens; over ${N_GEN} it differs from word ${d} (reported, not failed; see ${stem}-local-on.txt / -off.txt)"
+    fi
+  elif [[ "$d" == "-1" ]]; then
     pass "${stem}: greedy output identical on vs off (${N_GEN} tokens)"
-  elif [[ "$stem" == tinyllama* ]]; then
-    fail "${stem}: greedy output differs on vs off from word ${d}"
   else
     note "${stem}: greedy output differs on vs off from word ${d} (reported, not failed; see ${stem}-local-on.txt / -off.txt)"
   fi

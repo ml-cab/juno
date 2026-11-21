@@ -1,0 +1,37 @@
+{
+  "id" : "kv-quality.phi-3.5-mini",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "q8_0/q4_0 KV NLL at most 1.02x the f16 KV NLL",
+    "passed" : true,
+    "detail" : "ratio 1.00219 (1.36385 over 1.36087)"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, f16 KV",
+    "unit" : "nats",
+    "values" : [ 1.3608675687289624 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0/q4_0 KV",
+    "unit" : "nats",
+    "values" : [ 1.3638495825169432 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 99.21875 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "tokens" : 2048,
+    "f16Seconds" : 1380.106667425,
+    "kernels" : "integer where the Vector API is present",
+    "f16RunKv" : "cache-type-k=f16 cache-type-v=f16",
+    "quantizedSeconds" : 1573.980916614,
+    "quantizedRunKv" : "cache-type-k=q8_0 cache-type-v=q4_0"
+  }
+}

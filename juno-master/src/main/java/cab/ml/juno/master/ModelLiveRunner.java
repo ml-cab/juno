@@ -39,8 +39,9 @@ import cab.ml.juno.node.ModelFileGate;
  *
  * {@code -DpType=pipeline|tensor|all} (default {@code all}) picks the cluster checks:
  * {@code pipeline} runs 1-6, {@code tensor} 7-8; checks 9 (in-process long-prompt
- * prefill) and 10 (in-process context shift) run in every mode. Forked nodes take {@code -Djuno.node.heap}, which the
- * launchers set from the model size.
+ * prefill), 10 (in-process context shift) and 12 (in-process prompts shared across requests) run in every mode; check
+ * 11 (a session restored across a cluster restart) only under {@code all}. Forked nodes take
+ * {@code -Djuno.node.heap}, which the launchers set from the model size.
  */
 public final class ModelLiveRunner {
 
@@ -89,13 +90,13 @@ public final class ModelLiveRunner {
 		}
 	}
 
-	/** The suites a {@code pType} value selects; checks 9 and 10 are in every one. */
+	/** The suites a {@code pType} value selects; checks 9, 10 and 12 are in every one. */
 	static Set<Suite> suitesFor(String pType) {
 		String p = pType == null || pType.isBlank() ? "all" : pType.strip().toLowerCase(Locale.ROOT);
 		return switch (p) {
 		case "all" -> EnumSet.allOf(Suite.class);
-		case "pipeline" -> EnumSet.of(Suite.PIPELINE, Suite.PREFILL, Suite.CONTEXT_SHIFT);
-		case "tensor" -> EnumSet.of(Suite.TENSOR, Suite.PREFILL, Suite.CONTEXT_SHIFT);
+		case "pipeline" -> EnumSet.of(Suite.PIPELINE, Suite.PREFILL, Suite.CONTEXT_SHIFT, Suite.SHARED_PREFIX);
+		case "tensor" -> EnumSet.of(Suite.TENSOR, Suite.PREFILL, Suite.CONTEXT_SHIFT, Suite.SHARED_PREFIX);
 		default -> throw new IllegalArgumentException("pType must be pipeline, tensor or all (got " + pType + ")");
 		};
 	}

@@ -1,0 +1,1 @@
+pinned: governor performance, no_turbo 1

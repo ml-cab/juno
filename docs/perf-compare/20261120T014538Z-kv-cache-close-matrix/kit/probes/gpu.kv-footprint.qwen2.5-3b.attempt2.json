@@ -1,0 +1,39 @@
+{
+  "id" : "gpu.kv-footprint.qwen2.5-3b",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "host KV of the request, 2112 positions",
+    "unit" : "MiB",
+    "values" : [ 74.25 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "host KV bytes per position",
+    "unit" : "bytes",
+    "values" : [ 36864.0 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "live heap after load",
+    "unit" : "MiB",
+    "values" : [ 3503.245574951172 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "live heap with the request held",
+    "unit" : "MiB",
+    "values" : [ 3578.500831604004 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  } ],
+  "facts" : {
+    "maxHeapMiB" : 12288,
+    "tokens" : 2048,
+    "generated" : 64,
+    "kv" : "cache-type-k=f16 cache-type-v=f16",
+    "backend" : "cuda",
+    "gpuAttention" : true
+  }
+}

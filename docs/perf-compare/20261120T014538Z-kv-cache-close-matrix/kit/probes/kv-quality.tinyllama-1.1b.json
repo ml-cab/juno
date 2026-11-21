@@ -1,0 +1,37 @@
+{
+  "id" : "kv-quality.tinyllama-1.1b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "q8_0/q4_0 KV NLL at most 1.02x the f16 KV NLL",
+    "passed" : true,
+    "detail" : "ratio 1.00051 (2.45655 over 2.45529)"
+  } ],
+  "readings" : [ {
+    "name" : "mean NLL, f16 KV",
+    "unit" : "nats",
+    "values" : [ 2.4552878734707466 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "mean NLL, q8_0/q4_0 KV",
+    "unit" : "nats",
+    "values" : [ 2.4565510711665337 ],
+    "higherIsBetter" : false,
+    "scored" : false
+  }, {
+    "name" : "argmax agreement, first 512 positions",
+    "unit" : "%",
+    "values" : [ 98.046875 ],
+    "higherIsBetter" : true,
+    "scored" : false
+  } ],
+  "facts" : {
+    "f16RunKv" : "cache-type-k=f16 cache-type-v=f16",
+    "kernels" : "integer where the Vector API is present",
+    "f16Seconds" : 90.74843399,
+    "tokens" : 2048,
+    "quantizedRunKv" : "cache-type-k=q8_0 cache-type-v=q4_0",
+    "quantizedSeconds" : 97.725999872
+  }
+}

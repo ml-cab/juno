@@ -1,0 +1,567 @@
+Juno hardware validation kit 0.1.2, Juno 71099a85a036522b187cad715237abda9b9b2c45 (modified tree)
+Suite custom, started 20261120T050001Z, finished 20261120T134215Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+JFR clock: the operating system's; kernel clock source hpet
+
+cpu.live.tinyllama             PASS     4:28
+    ok   1. hello greeting: "Hello, how are you doing today?
+
+Response: I'm doing great! How about"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "Sure, 2 plus 2 is equal to"
+    ok   4. greedy determinism: "I'm glad to hear that you" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "I'm glad to hear that you found my"
+    ok   8. tensor-parallel greedy determinism: "I'm glad to hear that you" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=573 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+gpu.live.tinyllama             PASS     1:33, GPU 2748 MiB
+    ok   1. hello greeting: "Dear user,
+I hope this email finds you well. I am thrilled to connect with"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "The answer is 4."
+    ok   4. greedy determinism: "I'm glad to hear that you" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "I'm glad to hear that you enjoyed the"
+    ok   8. tensor-parallel greedy determinism: "I'm glad to hear that you" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.kernel-timing              PASS     0:09, GPU 262 MiB
+    prefill attention, tinyllama-1.1b 32/4/64 heads, 2048 rows over up to 2048 keys median 12.68, min 12.59, max 13.69 ms (n=5)
+    prefill attention, qwen2.5-3b 16/2/128 heads, 2048 rows over up to 2048 keys median 17.34, min 17.24, max 18.04 ms (n=5)
+    prefill attention, phi-3.5-mini 32/32/96 heads, 2048 rows over up to 2048 keys median 31.29, min 31.23, max 32.40 ms (n=5)
+    prefill attention, mistral-7b 32/8/128 heads, 2048 rows over up to 2048 keys median 33.85, min 33.56, max 34.36 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 2048 rows median 21.19, min 20.57, max 21.67 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 2048 rows median 22.54, min 22.29, max 24.01 ms (n=5)
+    LM head GEMV, qwen2.5-3b output 151936x2048 Q6_K, 1 row median 1.9596, min 1.9384, max 1.9620 ms (n=5)
+    prefill attention, tinyllama-1.1b 32/4/64 heads, 32768 rows over up to 32768 keys, slowest of 98 launches (rows 7584 to 8320) median 37.66, min 36.87, max 41.06 ms (n=5)
+    prefill attention, qwen2.5-3b 16/2/128 heads, 32768 rows over up to 32768 keys, slowest of 98 launches (rows 7584 to 8320) median 51.91, min 51.41, max 52.57 ms (n=5)
+    prefill attention, phi-3.5-mini 32/32/96 heads, 32768 rows over up to 32768 keys, slowest of 212 launches (rows 5856 to 6336) median 46.65, min 45.56, max 46.72 ms (n=5)
+    prefill attention, mistral-7b 32/8/128 heads, 32768 rows over up to 32768 keys, slowest of 212 launches (rows 5856 to 6336) median 48.34, min 48.29, max 49.32 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_gate and ffn_up 14336x4096 Q4_K, 32768 rows, 3392 rows a launch, heaviest of 10 median 35.27, min 34.20, max 36.50 ms (n=5)
+    tiled K-quant GEMM, mistral-7b ffn_down 4096x14336 Q6_K, 32768 rows, 3392 rows a launch, heaviest of 10 median 37.22, min 36.84, max 37.74 ms (n=5)
+    ok   longest single kernel at a 2048-token window <= 500 ms (the 2 s display-driver watchdog / 4)
+    ok   longest single kernel at a 32768-token window, the longest prefill window, <= 500 ms (the 2 s display-driver watchdog / 4)
+cpu.live.qwen2.5-3b            PASS     8:48
+    ok   1. hello greeting: "Hello! How can I assist you today?"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "2 plus 2 is equal to 4."
+    ok   4. greedy determinism: "Hello! How can I assist you today" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! How can I assist you today?"
+    ok   8. tensor-parallel greedy determinism: "Hello! How can I assist you today" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=560 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+cpu.live.phi-3.5-mini          PASS     14:42
+    ok   1. hello greeting: "Hello! I'm Phi, an AI language model. How can I help you today"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "2 plus 2 is a basic arithmetic addition problem. The"
+    ok   4. greedy determinism: "Hello! I'm Phi," twice
+    ok   5. multi-turn context: 76 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! I'm Phi, an A"
+    ok   8. tensor-parallel greedy determinism: "Hello! I'm Phi," twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=583 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+cpu.live.mistral-7b            PASS     21:17
+    ok   1. hello greeting: "Hi! How can I assist you today?"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "2 plus 2 is equal to 4."
+    ok   4. greedy determinism: "Hi! How can I help you today" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hi! How can I help you today?"
+    ok   8. tensor-parallel greedy determinism: "Hi! How can I help you today" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=561 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+cpu.live.qwen3-1.7b            PASS     5:53
+    ok   1. hello greeting: "Okay, the user said "hello". I need to respond in a friendly and helpful way"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "Okay, the user is asking "What is"
+    ok   4. greedy determinism: "Okay, the user said "" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Okay, the user said "hello"."
+    ok   8. tensor-parallel greedy determinism: "Okay, the user said "" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=560 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules
+gpu.live.qwen2.5-3b            PASS     2:33, GPU 6640 MiB
+    ok   1. hello greeting: "Hello! How can I assist you today? Is there something specific you would like to talk about or"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "2 plus 2 equals 4."
+    ok   4. greedy determinism: "Hello! How can I assist you today" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! How can I assist you today?"
+    ok   8. tensor-parallel greedy determinism: "Hello! How can I assist you today" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.phi-3.5-mini          PASS     3:35, GPU 7442 MiB
+    ok   1. hello greeting: "Hello! I'm Phi, Microsoft's language model. How can I help you today"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "The sum of 2 and 2 is a basic arithmetic"
+    ok   4. greedy determinism: "Hello! I'm Phi," twice
+    ok   5. multi-turn context: 76 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hello! I'm Phi, an A"
+    ok   8. tensor-parallel greedy determinism: "Hello! I'm Phi," twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.mistral-7b            PASS     5:34, GPU 7058 MiB
+    ok   1. hello greeting: "Hi! How can I assist you today?"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "2 plus 2 is equal to 4."
+    ok   4. greedy determinism: "Hi! How can I help you today" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Hi! How can I help you today?"
+    ok   8. tensor-parallel greedy determinism: "Hi! How can I help you today" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+gpu.live.qwen3-1.7b            PASS     2:08, GPU 5328 MiB
+    ok   1. hello greeting: "Okay, the user said "hello". I need to respond in a friendly and helpful way"
+    ok   2. no raw SentencePiece markers: 9 pieces
+    ok   3. question response: "Okay, the user is asking "What is"
+    ok   4. greedy determinism: "Okay, the user said "" twice
+    ok   5. multi-turn context: 32 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "Okay, the user said "hello"."
+    ok   8. tensor-parallel greedy determinism: "Okay, the user said "" twice
+    ok   9. long-prompt prefill, both schedules
+    ok   10. context shift past the context limit, both schedules
+consistency.tinyllama          PASS     1:18
+    ok   local mode refuses architecture qwen35 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture qwen35, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture qwen35, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture gemma4 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture gemma4, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture gemma4, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture mistral3 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture mistral3, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture mistral3, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode refuses architecture minimax-m2 and names it: exit 1; names it
+    ok   pipeline cluster refuses architecture minimax-m2, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   tensor cluster refuses architecture minimax-m2, names it, leaves no node JVM: exit 1; names it; 0 node JVMs left
+    ok   local mode loads a supported model and exits cleanly: exit 0
+    ok   static batching, cpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: OpenAI round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: native round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: OpenAI round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: OpenAI round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, cpu: native round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, cpu: native round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, cpu: a session request after batched stateless traffic equals single-request output: single 'The capital of France is Paris.', session 'The capital of France is Paris.'
+    ok   static batching, cpu: no prefix-cache hit for stateless traffic: 0 hits, 1 lookups
+    ok   static batching, cpu: repeated prompts start from a kept prompt (shared-prefix hits counted; their answers equal the unshared first answer above): 19 shared-prefix hits, 817 positions not recomputed
+    ok   static batching, cpu: native streaming joins to the native blocking answer: blocking 'Red.', streamed 'Red.'
+    ok   continuous: a session request after the same stateless request equals it: stateless 'The capital of France is Paris.', session 'The capital of France is Paris.'
+gpu.consistency.tinyllama      PASS     0:33, GPU 932 MiB
+    ok   static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: OpenAI round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: OpenAI round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 1, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: native round 1, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: native round 1, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: OpenAI round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: OpenAI round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 2, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   static batching, gpu: native round 2, prompt 1 equals its single-request output: 'Red.'
+    ok   static batching, gpu: native round 2, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   static batching, gpu: a session request after batched stateless traffic equals single-request output: single 'The capital of France is Paris.', session 'The capital of France is Paris.'
+    ok   static batching, gpu: no prefix-cache hit for stateless traffic: 0 hits, 1 lookups
+    ok   static batching, gpu: repeated prompts start from a kept prompt (shared-prefix hits counted; their answers equal the unshared first answer above): 19 shared-prefix hits, 817 positions not recomputed
+    ok   static batching, gpu: native streaming joins to the native blocking answer: blocking 'Red.', streamed 'Red.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, f16 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 2 equals its single-request output: 'A spider has six legs.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 0 equals its single-request output: 'The capital of France is Paris.'
+    ok   decode batch of 8, gpu, q8_0/q4_0 KV, 64 tokens: concurrent, prompt 1 equals its single-request output: 'Red.'
+grammar.tinyllama              PASS     1:37, GPU 4066 MiB
+    ok   CLI: an unsupported JSON Schema keyword fails closed: exit 1
+    ok   CLI: --grammar-file and --json-schema-file together fail closed: exit 1
+    ok   OpenAI: json_schema answer is parseable JSON with a boolean ok: HTTP 200: {
+  "ok": true}
+    ok   OpenAI: json_object answer is a parseable JSON object: HTTP 200: {
+  "ok": true,
+  "message": "Successfully retrieved data from the API"}
+    ok   OpenAI: x_juno_grammar answers yes or no: HTTP 200: yes
+    ok   OpenAI: x_juno_grammar with response_format is HTTP 400 naming x_juno_grammar
+    ok   OpenAI: an unsupported JSON Schema keyword is HTTP 400 naming it
+    ok   JFR: at least 3 constrained requests, response_format server: 3 events in 1 recordings
+    ok   --grammar-file: an unconstrained request answers yes or no: HTTP 200: yes
+    ok   JFR: at least 1 constrained request, --grammar-file server: 1 events in 1 recordings
+    ok   --json-schema-file: an unconstrained request is parseable JSON with a boolean ok: HTTP 200: {
+  "ok": true}
+    ok   JFR: at least 1 constrained request, --json-schema-file server: 1 events in 1 recordings
+    ok   LoRA overlay with 2 parallel: both json_schema answers parseable: HTTP 200: {
+  "ok": true} / HTTP 200: {
+  "ok": true}
+    ok   JFR: at least 2 constrained requests, LoRA overlay with 2 parallel: 2 events in 1 recordings
+tools.qwen2.5-3b               PASS     3:29, GPU 4064 MiB
+    ok   ChatML: tool_choice required returns a get_weather call with JSON arguments: HTTP 200: ; call {"name":"get_weather","arguments":"{\"city\":\"Boston\"}"}
+    ok   ChatML: a named tool_choice returns a get_weather call: HTTP 200: ; call {"name":"get_weather","arguments":"{\"city\":\"Boston\"}"}
+    ok   ChatML: tool_choice none returns no tool call: HTTP 200: Hi
+    ok   ChatML: a role=tool turn continues with text: HTTP 200: The current temperature in Boston is 72 degrees Fahrenheit.
+    ok   ChatML: tools with response_format json_object is HTTP 400
+    ok   ChatML: tools with x_juno_grammar is HTTP 400
+    ok   ChatML: streamed tool_choice required carries the tool call: HTTP 200, 2 chunks, call streamed
+    ok   JFR: at least 2 constrained requests, ChatML server: 3 events
+    ok   TinyLlama template: tools are HTTP 400 naming the template
+    ok   TinyLlama template with a LoRA overlay: tools are HTTP 400 naming the template
+    ok   ChatML with 2 parallel: both required requests return a get_weather call
+context-policy.phi-3.5-mini    PASS     2:23:51
+    ok   static: with x_juno_context_shift every one of 3 turns answers: 3 turns
+    ok   static: a request held open past the limit shifts during decode: HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096
+    ok   static: without the opt-in a later turn fails at the limit, naming the original context length
+    ok   continuous: with x_juno_context_shift every one of 3 turns answers: 3 turns
+    ok   continuous: a request held open past the limit shifts during decode: HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096
+    ok   continuous: without the opt-in a later turn fails at the limit, naming the original context length
+    ok   static, --context-shift on: the crossing turn answers by default and fails with an explicit false: default HTTP 200, explicit false HTTP 500
+gpu.context-policy.phi-3.5-mini PASS     4:03, GPU 5036 MiB
+    ok   static: with x_juno_context_shift every one of 3 turns answers: 3 turns
+    ok   static: a request held open past the limit shifts during decode: HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096
+    ok   static: without the opt-in a later turn fails at the limit, naming the original context length
+    ok   continuous: with x_juno_context_shift every one of 3 turns answers: 3 turns
+    ok   continuous: a request held open past the limit shifts during decode: HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096
+    ok   continuous: without the opt-in a later turn fails at the limit, naming the original context length
+    ok   static, --context-shift on: the crossing turn answers by default and fails with an explicit false: default HTTP 200, explicit false HTTP 500
+long-prompt.tinyllama          PASS     11:53
+    ok   static 128: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   static 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   static 128: streamed text equals non-streamed: 58 characters
+    ok   static 512: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   static 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   static 512: streamed text equals non-streamed: 58 characters
+    ok   static 2048: HTTP 200, non-empty answer: HTTP 200: The orchard in district 14 was painted white.
+    ok   static 2048: prompt tokens within 10% of 2024: 2024 prompt tokens
+    ok   static 2048: streamed text equals non-streamed: 45 characters
+    ok   continuous 128: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   continuous 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   continuous 128: streamed text equals non-streamed: 58 characters
+    ok   continuous 512: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   continuous 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   continuous 512: streamed text equals non-streamed: 58 characters
+    ok   continuous 2048: HTTP 200, non-empty answer: HTTP 200: The orchard in district 14 was painted white.
+    ok   continuous 2048: prompt tokens within 10% of 2024: 2024 prompt tokens
+    ok   continuous 2048: streamed text equals non-streamed: 45 characters
+long-prompt.mistral-7b         PASS     1:04:11
+    ok   static 128: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   static 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   static 128: streamed text equals non-streamed: 59 characters
+    ok   static 512: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   static 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   static 512: streamed text equals non-streamed: 59 characters
+    ok   static 2048: HTTP 200, non-empty answer: HTTP 200:  The orchard in district 7 was painted white in the year 1
+    ok   static 2048: prompt tokens within 10% of 2048: 2044 prompt tokens
+    ok   static 2048: streamed text equals non-streamed: 58 characters
+    ok   continuous 128: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   continuous 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   continuous 128: streamed text equals non-streamed: 59 characters
+    ok   continuous 512: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   continuous 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   continuous 512: streamed text equals non-streamed: 59 characters
+    ok   continuous 2048: HTTP 200, non-empty answer: HTTP 200:  The orchard in district 7 was painted white in the year 1
+    ok   continuous 2048: prompt tokens within 10% of 2048: 2044 prompt tokens
+    ok   continuous 2048: streamed text equals non-streamed: 58 characters
+gpu.long-prompt.tinyllama      PASS     0:44, GPU 1160 MiB
+    ok   static 128: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   static 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   static 128: streamed text equals non-streamed: 58 characters
+    ok   static 512: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   static 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   static 512: streamed text equals non-streamed: 58 characters
+    ok   static 2048: HTTP 200, non-empty answer: HTTP 200: The orchard in district 14 was painted white.
+    ok   static 2048: prompt tokens within 10% of 2024: 2024 prompt tokens
+    ok   static 2048: streamed text equals non-streamed: 45 characters
+    ok   continuous 128: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   continuous 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   continuous 128: streamed text equals non-streamed: 58 characters
+    ok   continuous 512: HTTP 200, non-empty answer: HTTP 200: The orchard in district 7 was painted white in the year 18
+    ok   continuous 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   continuous 512: streamed text equals non-streamed: 58 characters
+    ok   continuous 2048: HTTP 200, non-empty answer: HTTP 200: The orchard in district 14 was painted white.
+    ok   continuous 2048: prompt tokens within 10% of 2024: 2024 prompt tokens
+    ok   continuous 2048: streamed text equals non-streamed: 45 characters
+gpu.long-prompt.mistral-7b     PASS     1:33, GPU 5550 MiB
+    ok   static 128: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   static 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   static 128: streamed text equals non-streamed: 59 characters
+    ok   static 512: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   static 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   static 512: streamed text equals non-streamed: 59 characters
+    ok   static 2048: HTTP 200, non-empty answer: HTTP 200:  The orchard in district 7 was painted white in the year 1
+    ok   static 2048: prompt tokens within 10% of 2048: 2044 prompt tokens
+    ok   static 2048: streamed text equals non-streamed: 58 characters
+    ok   continuous 128: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   continuous 128: prompt tokens within 10% of 128: 128 prompt tokens
+    ok   continuous 128: streamed text equals non-streamed: 59 characters
+    ok   continuous 512: HTTP 200, non-empty answer: HTTP 200:  According to note 1, the orchard in district 7 was painted
+    ok   continuous 512: prompt tokens within 10% of 512: 512 prompt tokens
+    ok   continuous 512: streamed text equals non-streamed: 59 characters
+    ok   continuous 2048: HTTP 200, non-empty answer: HTTP 200:  The orchard in district 7 was painted white in the year 1
+    ok   continuous 2048: prompt tokens within 10% of 2048: 2044 prompt tokens
+    ok   continuous 2048: streamed text equals non-streamed: 58 characters
+kv-quality.tinyllama-1.1b      PASS     3:20
+    mean NLL, f16 KV                                     median 2.4553, min 2.4553, max 2.4553 nats (n=1)
+    mean NLL, q8_0/q4_0 KV                               median 2.4566, min 2.4566, max 2.4566 nats (n=1)
+    argmax agreement, first 512 positions                median 98.05, min 98.05, max 98.05 % (n=1)
+    ok   q8_0/q4_0 KV NLL at most 1.02x the f16 KV NLL: ratio 1.00051 (2.45655 over 2.45529)
+kv-quality.qwen2.5-3b          PASS     8:38
+    mean NLL, f16 KV                                     median 1.6975, min 1.6975, max 1.6975 nats (n=1)
+    mean NLL, q8_0/q4_0 KV                               median 1.7069, min 1.7069, max 1.7069 nats (n=1)
+    argmax agreement, first 512 positions                median 98.05, min 98.05, max 98.05 % (n=1)
+    ok   q8_0/q4_0 KV NLL at most 1.02x the f16 KV NLL: ratio 1.00553 (1.70685 over 1.69746)
+kv-quality.phi-3.5-mini        PASS     49:32
+    mean NLL, f16 KV                                     median 1.3609, min 1.3609, max 1.3609 nats (n=1)
+    mean NLL, q8_0/q4_0 KV                               median 1.3638, min 1.3638, max 1.3638 nats (n=1)
+    argmax agreement, first 512 positions                median 99.22, min 99.22, max 99.22 % (n=1)
+    ok   q8_0/q4_0 KV NLL at most 1.02x the f16 KV NLL: ratio 1.00219 (1.36385 over 1.36087)
+kv-quality.mistral-7b          PASS     15:18
+    mean NLL, f16 KV                                     median 1.5298, min 1.5298, max 1.5298 nats (n=1)
+    mean NLL, q8_0/q4_0 KV                               median 1.5260, min 1.5260, max 1.5260 nats (n=1)
+    argmax agreement, first 512 positions                median 98.44, min 98.44, max 98.44 % (n=1)
+    ok   q8_0/q4_0 KV NLL at most 1.02x the f16 KV NLL: ratio 0.99748 (1.52598 over 1.52983)
+gpu.kv-quality.tinyllama-1.1b  PASS     0:27, GPU 992 MiB
+    mean NLL, f16 device KV                              median 2.4566, min 2.4566, max 2.4566 nats (n=1)
+    mean NLL, q8_0 device KV                             median 2.4577, min 2.4577, max 2.4577 nats (n=1)
+    q8_0 argmax agreement, first 512 positions           median 98.63, min 98.63, max 98.63 % (n=1)
+    mean NLL, q8_0/q4_0 device KV                        median 2.4585, min 2.4585, max 2.4585 nats (n=1)
+    q8_0/q4_0 argmax agreement, first 512 positions      median 96.48, min 96.48, max 96.48 % (n=1)
+    ok   q8_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00047 (2.45773 over 2.45657)
+    ok   q8_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 544 bytes per position against 1024 for FP16
+    ok   q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00077 (2.45846 over 2.45657)
+    ok   q8_0/q4_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 416 bytes per position against 1024 for FP16
+gpu.kv-quality.qwen2.5-3b      PASS     0:48, GPU 2488 MiB
+    mean NLL, f16 device KV                              median 1.6962, min 1.6962, max 1.6962 nats (n=1)
+    mean NLL, q8_0 device KV                             median 1.6981, min 1.6981, max 1.6981 nats (n=1)
+    q8_0 argmax agreement, first 512 positions           median 99.41, min 99.41, max 99.41 % (n=1)
+    mean NLL, q8_0/q4_0 device KV                        median 1.7029, min 1.7029, max 1.7029 nats (n=1)
+    q8_0/q4_0 argmax agreement, first 512 positions      median 99.02, min 99.02, max 99.02 % (n=1)
+    ok   q8_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00112 (1.69806 over 1.69616)
+    ok   q8_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 544 bytes per position against 1024 for FP16
+    ok   q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00398 (1.70292 over 1.69616)
+    ok   q8_0/q4_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 416 bytes per position against 1024 for FP16
+gpu.kv-quality.phi-3.5-mini    PASS     2:32, GPU 3384 MiB
+    mean NLL, f16 device KV                              median 1.3593, min 1.3593, max 1.3593 nats (n=1)
+    mean NLL, q8_0 device KV                             median 1.3607, min 1.3607, max 1.3607 nats (n=1)
+    q8_0 argmax agreement, first 512 positions           median 99.80, min 99.80, max 99.80 % (n=1)
+    mean NLL, q8_0/q4_0 device KV                        median 1.3642, min 1.3642, max 1.3642 nats (n=1)
+    q8_0/q4_0 argmax agreement, first 512 positions      median 99.22, min 99.22, max 99.22 % (n=1)
+    ok   q8_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00105 (1.36070 over 1.35928)
+    ok   q8_0 device KV stored in the selected formats: Phi-3: GPU attention's KV copy stored as K q8_0, V q8_0, 6528 bytes per position against 12288 for FP16
+    ok   q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 1.00364 (1.36423 over 1.35928)
+    ok   q8_0/q4_0 device KV stored in the selected formats: Phi-3: GPU attention's KV copy stored as K q8_0, V q4_0, 4992 bytes per position against 12288 for FP16
+gpu.kv-quality.mistral-7b      PASS     1:01, GPU 4796 MiB
+    mean NLL, f16 device KV                              median 1.5294, min 1.5294, max 1.5294 nats (n=1)
+    mean NLL, q8_0 device KV                             median 1.5281, min 1.5281, max 1.5281 nats (n=1)
+    q8_0 argmax agreement, first 512 positions           median 99.22, min 99.22, max 99.22 % (n=1)
+    mean NLL, q8_0/q4_0 device KV                        median 1.5254, min 1.5254, max 1.5254 nats (n=1)
+    q8_0/q4_0 argmax agreement, first 512 positions      median 99.02, min 99.02, max 99.02 % (n=1)
+    ok   q8_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 0.99914 (1.52810 over 1.52942)
+    ok   q8_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q8_0, 2176 bytes per position against 4096 for FP16
+    ok   q8_0/q4_0 device KV NLL at most 1.02x the f16 device KV NLL: ratio 0.99735 (1.52536 over 1.52942)
+    ok   q8_0/q4_0 device KV stored in the selected formats: Llama: GPU attention's KV copy stored as K q8_0, V q4_0, 1664 bytes per position against 4096 for FP16
+gpu.kv-prefill.tinyllama-1.1b  NOISY    1:36, 3 attempts, GPU 1180 MiB, attempt 1 re-run: other processes used 6% of the CPU. attempt 2 re-run: other processes used 6% of the CPU. still: other processes used 6% of the CPU
+    prefill ms, f16 device KV, windows of 2048 tokens    median 876.59, min 875.52, max 964.62 ms (n=3, spread 10.2%)
+    prefill ms, q8_0 device KV, windows of 2048 tokens   median 901.25, min 859.47, max 938.31 ms (n=3, spread 8.7%)
+    q8_0 over f16 prefill time, windows of 2048 tokens   median 1.0281, min 1.0281, max 1.0281 x (n=1)
+    prefill ms, f16 device KV, windows of 128 tokens     median 1199, min 1194, max 1291 ms (n=3, spread 8.1%)
+    prefill ms, q8_0 device KV, windows of 128 tokens    median 1151, min 1151, max 1268 ms (n=3, spread 10.2%)
+    q8_0 over f16 prefill time, windows of 128 tokens    median 0.9603, min 0.9603, max 0.9603 x (n=1)
+gpu.kv-prefill.qwen2.5-3b      NOISY    2:57, 3 attempts, GPU 2730 MiB, attempt 1 re-run: other processes used 6% of the CPU. attempt 2 re-run: other processes used 6% of the CPU. still: other processes used 6% of the CPU
+    prefill ms, f16 device KV, windows of 2048 tokens    median 2193, min 2173, max 2195 ms (n=3, spread 1.0%)
+    prefill ms, q8_0 device KV, windows of 2048 tokens   median 2080, min 2079, max 2118 ms (n=3, spread 1.9%)
+    q8_0 over f16 prefill time, windows of 2048 tokens   median 0.9481, min 0.9481, max 0.9481 x (n=1)
+    prefill ms, f16 device KV, windows of 128 tokens     median 2831, min 2827, max 2844 ms (n=3, spread 0.6%)
+    prefill ms, q8_0 device KV, windows of 128 tokens    median 2681, min 2679, max 2773 ms (n=3, spread 3.5%)
+    q8_0 over f16 prefill time, windows of 128 tokens    median 0.9468, min 0.9468, max 0.9468 x (n=1)
+gpu.kv-prefill.phi-3.5-mini    NOISY    3:57, 3 attempts, GPU 3824 MiB, attempt 1 re-run: other processes used 6% of the CPU. attempt 2 re-run: other processes used 6% of the CPU. still: other processes used 6% of the CPU
+    prefill ms, f16 device KV, windows of 2048 tokens    median 3157, min 3135, max 3165 ms (n=3, spread 1.0%)
+    prefill ms, q8_0 device KV, windows of 2048 tokens   median 2969, min 2952, max 2972 ms (n=3, spread 0.7%)
+    q8_0 over f16 prefill time, windows of 2048 tokens   median 0.9404, min 0.9404, max 0.9404 x (n=1)
+    prefill ms, f16 device KV, windows of 128 tokens     median 3882, min 3879, max 3909 ms (n=3, spread 0.8%)
+    prefill ms, q8_0 device KV, windows of 128 tokens    median 3643, min 3618, max 3644 ms (n=3, spread 0.7%)
+    q8_0 over f16 prefill time, windows of 128 tokens    median 0.9385, min 0.9385, max 0.9385 x (n=1)
+gpu.kv-prefill.mistral-7b      NOISY    5:43, 3 attempts, GPU 5266 MiB, attempt 1 re-run: other processes used 6% of the CPU. attempt 2 re-run: other processes used 7% of the CPU. still: other processes used 7% of the CPU
+    prefill ms, f16 device KV, windows of 2048 tokens    median 5345, min 5208, max 5375 ms (n=3, spread 3.1%)
+    prefill ms, q8_0 device KV, windows of 2048 tokens   median 5004, min 4965, max 5284 ms (n=3, spread 6.4%)
+    q8_0 over f16 prefill time, windows of 2048 tokens   median 0.9362, min 0.9362, max 0.9362 x (n=1)
+    prefill ms, f16 device KV, windows of 128 tokens     median 5874, min 5868, max 5987 ms (n=3, spread 2.0%)
+    prefill ms, q8_0 device KV, windows of 128 tokens    median 5688, min 5682, max 5781 ms (n=3, spread 1.7%)
+    q8_0 over f16 prefill time, windows of 128 tokens    median 0.9683, min 0.9683, max 0.9683 x (n=1)
+gpu.kv-footprint.tinyllama-1.1b DONE     0:21, 2 attempts, GPU 1226 MiB, attempt 1 re-run: other processes used 6% of the CPU.
+    host KV of the request, 2112 positions               median 45.38, min 45.38, max 45.38 MiB (n=1)
+    host KV bytes per position                           median 22528, min 22528, max 22528 bytes (n=1)
+    live heap after load                                 median 1039, min 1039, max 1039 MiB (n=1)
+    live heap with the request held                      median 1085, min 1085, max 1085 MiB (n=1)
+gpu.kv-footprint.qwen2.5-3b    NOISY    0:44, 3 attempts, GPU 2800 MiB, attempt 1 re-run: other processes used 6% of the CPU. attempt 2 re-run: other processes used 7% of the CPU. still: other processes used 6% of the CPU
+    host KV of the request, 2112 positions               median 74.25, min 74.25, max 74.25 MiB (n=1)
+    host KV bytes per position                           median 36864, min 36864, max 36864 bytes (n=1)
+    live heap after load                                 median 3503, min 3503, max 3503 MiB (n=1)
+    live heap with the request held                      median 3579, min 3579, max 3579 MiB (n=1)
+gpu.kv-footprint.phi-3.5-mini  NOISY    0:55, 3 attempts, GPU 4592 MiB, attempt 1 re-run: other processes used 6% of the CPU. attempt 2 re-run: other processes used 6% of the CPU. still: other processes used 6% of the CPU
+    host KV of the request, 2112 positions               median 792.00, min 792.00, max 792.00 MiB (n=1)
+    host KV bytes per position                           median 393216, min 393216, max 393216 bytes (n=1)
+    live heap after load                                 median 3446, min 3446, max 3446 MiB (n=1)
+    live heap with the request held                      median 4544, min 4544, max 4544 MiB (n=1)
+gpu.kv-footprint.mistral-7b    NOISY    1:06, 3 attempts, GPU 5518 MiB, attempt 1 re-run: other processes used 6% of the CPU. attempt 2 re-run: other processes used 6% of the CPU. still: other processes used 6% of the CPU
+    host KV of the request, 2112 positions               median 264.00, min 264.00, max 264.00 MiB (n=1)
+    host KV bytes per position                           median 131072, min 131072, max 131072 bytes (n=1)
+    live heap after load                                 median 5128, min 5128, max 5128 MiB (n=1)
+    live heap with the request held                      median 5641, min 5641, max 5641 MiB (n=1)
+session.save-restore.tinyllama-1.1b PASS     0:51
+    ok   f16: the restore reads back the saved session: saved 63 tokens, 1421645 bytes; restored 63 tokens, 1421645 bytes
+    ok   f16: the second turn starts from the restored KV: prefix hit
+    ok   f16: the second turn after the restart equals the uninterrupted one
+    ok   q8_0: the restore reads back the saved session: saved 63 tokens, 756372 bytes; restored 63 tokens, 756372 bytes
+    ok   q8_0: the second turn starts from the restored KV: prefix hit
+    ok   q8_0: the second turn after the restart equals the uninterrupted one
+gpu.session.save-restore.tinyllama-1.1b PASS     0:23, GPU 942 MiB
+    ok   f16: the restore reads back the saved session: saved 63 tokens, 1421645 bytes; restored 63 tokens, 1421645 bytes
+    ok   f16: the second turn starts from the restored KV: prefix hit
+    ok   f16: the second turn after the restart equals the uninterrupted one
+    ok   q8_0: the restore reads back the saved session: saved 63 tokens, 756372 bytes; restored 63 tokens, 756372 bytes
+    ok   q8_0: the second turn starts from the restored KV: prefix hit
+    ok   q8_0: the second turn after the restart equals the uninterrupted one
+schedule.tinyllama             PASS     5:44
+    static: aggregate t/s                                median 11.57, min 11.57, max 11.57 t/s (n=1, spread 0.0%)
+    static: mean TTFT                                    median 7911, min 7911, max 7911 ms (n=1)
+    static: mean TPOT                                    median 692.86, min 692.86, max 692.86 ms (n=1)
+    static: first turn latency                           median 1783, min 1783, max 1783 ms (n=1)
+    static: mean later turn latency                      median 1445, min 1445, max 1445 ms (n=1)
+    continuous: aggregate t/s                            median 11.43, min 11.43, max 11.43 t/s (n=1, spread 0.0%)
+    continuous: mean TTFT                                median 7834, min 7834, max 7834 ms (n=1)
+    continuous: mean TPOT                                median 585.93, min 585.93, max 585.93 ms (n=1)
+    continuous: first turn latency                       median 2096, min 2096, max 2096 ms (n=1)
+    continuous: mean later turn latency                  median 1584, min 1584, max 1584 ms (n=1)
+    ok   static: the server runs the static schedule: the health endpoint reports 'static'
+    ok   static: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: the server runs the continuous schedule: the health endpoint reports 'continuous'
+    ok   continuous: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: idle KV pages reclaimed, replies unchanged
+    ok   continuous: concurrent requests shared decode steps: largest decode batch 8, shared steps 192
+gpu.schedule.tinyllama         PASS     0:46, GPU 1002 MiB
+    static: aggregate t/s                                median 297.18, min 297.18, max 297.18 t/s (n=1, spread 0.0%)
+    static: mean TTFT                                    median 247.27, min 247.27, max 247.27 ms (n=1)
+    static: mean TPOT                                    median 59.98, min 59.98, max 59.98 ms (n=1)
+    static: first turn latency                           median 117.04, min 117.04, max 117.04 ms (n=1)
+    static: mean later turn latency                      median 129.30, min 129.30, max 129.30 ms (n=1)
+    continuous: aggregate t/s                            median 312.82, min 312.82, max 312.82 t/s (n=1, spread 0.0%)
+    continuous: mean TTFT                                median 191.18, min 191.18, max 191.18 ms (n=1)
+    continuous: mean TPOT                                median 24.66, min 24.66, max 24.66 ms (n=1)
+    continuous: first turn latency                       median 315.46, min 315.46, max 315.46 ms (n=1)
+    continuous: mean later turn latency                  median 316.40, min 316.40, max 316.40 ms (n=1)
+    ok   static: the server runs the static schedule: the health endpoint reports 'static'
+    ok   static: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: the server runs the continuous schedule: the health endpoint reports 'continuous'
+    ok   continuous: every request answered: blocking all; streams 8/8; turns 8/8
+    ok   continuous: idle KV pages reclaimed, replies unchanged
+    ok   continuous: concurrent requests shared decode steps: largest decode batch 8, shared steps 192
+mixed-prefill.tinyllama        PASS     0:55
+    mixed: short-request TTFT                            median 7639, min 7639, max 7639 ms (n=1)
+    mixed: short-request TPOT                            median 1249, min 1249, max 1249 ms (n=1)
+    mixed: long-request TTFT                             median 16470, min 16470, max 16470 ms (n=1)
+    admit: short-request TTFT                            median 14441, min 14441, max 14441 ms (n=1)
+    admit: short-request TPOT                            median 362.00, min 362.00, max 362.00 ms (n=1)
+    admit: long-request TTFT                             median 14443, min 14443, max 14443 ms (n=1)
+    ok   mixed: every stream answered: 4 of 4 streams produced text
+    ok   mixed: the long prompt was prefilled in chunks inside decode steps: 12 prefill chunks in 9 steps
+    ok   admit: every stream answered: 4 of 4 streams produced text
+gpu.mixed-prefill.tinyllama    PASS     0:25, GPU 932 MiB
+    mixed: short-request TTFT                            median 521.53, min 521.53, max 521.53 ms (n=1)
+    mixed: short-request TPOT                            median 96.24, min 96.24, max 96.24 ms (n=1)
+    mixed: long-request TTFT                             median 1310, min 1310, max 1310 ms (n=1)
+    admit: short-request TTFT                            median 605.65, min 605.65, max 605.65 ms (n=1)
+    admit: short-request TPOT                            median 72.56, min 72.56, max 72.56 ms (n=1)
+    admit: long-request TTFT                             median 609.34, min 609.34, max 609.34 ms (n=1)
+    ok   mixed: every stream answered: 4 of 4 streams produced text
+    ok   mixed: the long prompt was prefilled in chunks inside decode steps: 12 prefill chunks in 9 steps
+    ok   admit: every stream answered: 4 of 4 streams produced text
+lora.tinyllama                 PASS     13:49
+    training time per pass                               median 52615, min 52615, max 52615 ms (n=1)
+    playback t/s, --lora-play                            median 0.8451, min 0.8451, max 0.8451 t/s (n=1)
+    playback t/s, merged model                           median 3.9329, min 3.9329, max 3.9329 t/s (n=1)
+    ok   training reaches the loss target: TARGET_REACHED after 15 passes, loss 1.1795 (target 1.20)
+    ok   --lora-play: the adapter answers with the trained reply: reply 'My name is Juno'
+    ok   the merged model loads and answers: HTTP 200, 15 characters
+    ok   the merged model answers with the trained reply: reply 'My name is Juno'
+gpu.lora.tinyllama             PASS     1:10, GPU 4066 MiB
+    training time per pass                               median 2879, min 2879, max 2879 ms (n=1)
+    playback t/s, --lora-play                            median 11.06, min 11.06, max 11.06 t/s (n=1)
+    playback t/s, merged model                           median 32.64, min 32.64, max 32.64 t/s (n=1)
+    ok   training reaches the loss target: TARGET_REACHED after 15 passes, loss 1.1797 (target 1.20)
+    ok   --lora-play: the adapter answers with the trained reply: reply 'My name is Juno'
+    ok   the merged model loads and answers: HTTP 200, 15 characters
+    ok   the merged model answers with the trained reply: reply 'My name is Juno'
+vision.moondream2              PASS     18:57
+    threads 4: latency                                   median 332969, min 332969, max 332969 ms (n=1)
+    threads 4: decode t/s                                median 3.6525, min 3.6525, max 3.6525 t/s (n=1)
+    threads 12: latency                                  median 223595, min 223595, max 223595 ms (n=1)
+    threads 12: decode t/s                               median 4.9583, min 4.9583, max 4.9583 t/s (n=1)
+    ok   threads 4: a caption for the benchmark prompt
+    ok   threads 4: prompt tokens between 700 and 800: 741 prompt tokens
+    ok   threads 4: a one-sentence caption within 600 s
+    ok   threads 12: a caption for the benchmark prompt
+    ok   threads 12: prompt tokens between 700 and 800: 741 prompt tokens
+    ok   threads 12: a one-sentence caption within 600 s
+    ok   captions identical at 4 and 12 threads: identical
+gpu.vision.moondream2          PASS     7:35, GPU 118 MiB
+    ok   GPU: a caption for the benchmark prompt
+    ok   GPU: prompt tokens between 700 and 800: 741 prompt tokens
+    ok   GPU: a one-sentence caption within 600 s
+launcher.tinyllama             PASS     0:14
+    ok   local mode with --api-port answers a chat request: HTTP 200: 1. Red
+2. Blue
+
+    ok   the launcher exits cleanly on exit: exit code 0, 0 of its processes still running
+    ok   lora with --grammar-file warns that constrained decoding is a no-op for LoRA training: warned (exit code 0)
+    ok   the launcher prints no [DBG] lines: none in its output
+cpu.unit-tests                 PASS     39:35, GPU 108 MiB
+    ok   tests outside gpu,rocm on tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player: 2888 tests, 0 failures, 0 errors, 33 skipped; Maven exit 0
+gpu.unit-tests                 FAIL     28:37, GPU 4736 MiB, failed: group gpu on node; DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix(int, int, int)[1]; DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix(int, int, int)[2]; PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance
+    FAIL group gpu on node: 452 tests, 3 failures, 0 errors, 12 skipped; Maven exit 0
+    FAIL DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix(int, int, int)[1]: failure: java.lang.AssertionError: type 13 512x2048 round 1: row 262 read -0.6700549 right after the upload, -13.552536 once the device was idle
+    FAIL DeviceUploadOrderingTest.theFirstGemvAfterAnUploadReadsTheWholeMatrix(int, int, int)[2]: failure: java.lang.AssertionError: type 14 512x2048 round 1: row 183 read -21.113865 right after the upload, 17.758293 once the device was idle
+    FAIL PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance: failure: java.lang.AssertionError: [free bytes reported with the device full] 
+Expecting actual:
+  91029504L
+to be less than or equal to:
+  67108864L 

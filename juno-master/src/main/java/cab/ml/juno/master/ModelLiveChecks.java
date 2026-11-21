@@ -94,7 +94,9 @@ public final class ModelLiveChecks {
 		/** Check 10, in-process context shift past the context limit. */
 		CONTEXT_SHIFT,
 		/** Check 11, a session saved on a cluster and restored after the cluster restarts, both parallel modes. */
-		SESSION
+		SESSION,
+		/** Check 12, in-process: later requests start from a finished request's kept prompt, both schedules. */
+		SHARED_PREFIX
 	}
 
 	/** One check's outcome. */
@@ -119,6 +121,7 @@ public final class ModelLiveChecks {
 	private static final String PREFILL_NAME = "long-prompt prefill, both schedules";
 	private static final String CONTEXT_SHIFT_NAME = "context shift past the context limit, both schedules";
 	private static final String SESSION_NAME = "session save and restore across a cluster restart, pipeline and tensor";
+	private static final String SHARED_PREFIX_NAME = "prompts shared across requests, both schedules";
 
 	private static final Set<String> GREETING_WORDS = Set.of("how", "are", "you", "hello", "hi", "help", "doing",
 			"today", "there", "welcome", "assist", "can", "i", "what", "do", "hola", "hey", "greetings", "good",
@@ -201,10 +204,13 @@ public final class ModelLiveChecks {
 					System.setProperty(NODE_USE_GPU, savedGpu);
 			}
 		}
+		if (suites.contains(Suite.SHARED_PREFIX))
+			record(results, progress, 12, SHARED_PREFIX_NAME,
+					() -> SharedPrefixCheck.run(modelPath, cfg, tokenizer, cuda));
 		return results;
 	}
 
-	/** Whether the in-process checks (9, 10) run on CUDA. */
+	/** Whether the in-process checks (9, 10, 12) run on CUDA. */
 	static boolean useCuda(Backend backend, boolean cudaPresent) {
 		return switch (backend) {
 		case AUTO, CUDA -> cudaPresent;
@@ -236,6 +242,8 @@ public final class ModelLiveChecks {
 			out.add(new LiveCheck(10, CONTEXT_SHIFT_NAME, false, reason));
 		if (suites.contains(Suite.SESSION))
 			out.add(new LiveCheck(11, SESSION_NAME, false, reason));
+		if (suites.contains(Suite.SHARED_PREFIX))
+			out.add(new LiveCheck(12, SHARED_PREFIX_NAME, false, reason));
 		return out;
 	}
 

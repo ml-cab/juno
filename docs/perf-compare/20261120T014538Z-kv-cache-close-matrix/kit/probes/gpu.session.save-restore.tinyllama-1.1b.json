@@ -1,0 +1,38 @@
+{
+  "id" : "gpu.session.save-restore.tinyllama-1.1b",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "f16: the restore reads back the saved session",
+    "passed" : true,
+    "detail" : "saved 63 tokens, 1421645 bytes; restored 63 tokens, 1421645 bytes"
+  }, {
+    "name" : "f16: the second turn starts from the restored KV",
+    "passed" : true,
+    "detail" : "prefix hit"
+  }, {
+    "name" : "f16: the second turn after the restart equals the uninterrupted one",
+    "passed" : true,
+    "detail" : "uninterrupted \"Green, violet, purple, pink, orange, yellow, white, black.\"; after the restart \"Green, violet, purple, pink, orange, yellow, white, black.\""
+  }, {
+    "name" : "q8_0: the restore reads back the saved session",
+    "passed" : true,
+    "detail" : "saved 63 tokens, 756372 bytes; restored 63 tokens, 756372 bytes"
+  }, {
+    "name" : "q8_0: the second turn starts from the restored KV",
+    "passed" : true,
+    "detail" : "prefix hit"
+  }, {
+    "name" : "q8_0: the second turn after the restart equals the uninterrupted one",
+    "passed" : true,
+    "detail" : "uninterrupted \"Green, violet, purple, pink, orange, yellow, white, black.\"; after the restart \"Green, violet, purple, pink, orange, yellow, white, black.\""
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "f16.tokens" : 63,
+    "q8_0.bytes" : 756372,
+    "f16.bytes" : 1421645,
+    "q8_0.tokens" : 63,
+    "backend" : "cuda"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "id" : "context-policy.phi-3.5-mini",
+  "kind" : "CHECK",
+  "passed" : true,
+  "checks" : [ {
+    "name" : "static: with x_juno_context_shift every one of 3 turns answers",
+    "passed" : true,
+    "detail" : "3 turns"
+  }, {
+    "name" : "static: a request held open past the limit shifts during decode",
+    "passed" : true,
+    "detail" : "HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096"
+  }, {
+    "name" : "static: without the opt-in a later turn fails at the limit, naming the original context length",
+    "passed" : true,
+    "detail" : "turn 2: HTTP 500: {\"error\":{\"message\":\"java.lang.IllegalStateException: Phi-3 position 4096 reaches the model's original context length of 4096 tokens. Positions beyond it need the long-context RoPE factors, which Juno does not use; keep the prompt and generated tokens within 4096.\",\"type\":\"internal_error\",\"code\":\"in; prompt tokens per turn [2176, 0]"
+  }, {
+    "name" : "continuous: with x_juno_context_shift every one of 3 turns answers",
+    "passed" : true,
+    "detail" : "3 turns"
+  }, {
+    "name" : "continuous: a request held open past the limit shifts during decode",
+    "passed" : true,
+    "detail" : "HTTP 200, 200 of 200 tokens, 4239 positions against a limit of 4096"
+  }, {
+    "name" : "continuous: without the opt-in a later turn fails at the limit, naming the original context length",
+    "passed" : true,
+    "detail" : "turn 2: HTTP 500: {\"error\":{\"message\":\"java.lang.IllegalStateException: Phi-3 position 4096 reaches the model's original context length of 4096 tokens. Positions beyond it need the long-context RoPE factors, which Juno does not use; keep the prompt and generated tokens within 4096.\",\"type\":\"internal_error\",\"code\":\"in; prompt tokens per turn [2176, 0]"
+  }, {
+    "name" : "static, --context-shift on: the crossing turn answers by default and fails with an explicit false",
+    "passed" : true,
+    "detail" : "default HTTP 200, explicit false HTTP 500"
+  } ],
+  "readings" : [ ],
+  "facts" : {
+    "continuous.crossingTurn" : 2,
+    "static.crossingTurn" : 2,
+    "limit" : 4096,
+    "gpu" : false
+  }
+}

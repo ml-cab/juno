@@ -1,0 +1,17 @@
+{
+  "id" : "calibration",
+  "kind" : "READING",
+  "passed" : null,
+  "checks" : [ ],
+  "readings" : [ {
+    "name" : "q4k_decode_ms_per_call",
+    "unit" : "ms",
+    "values" : [ 0.9464995358649789, 0.9456454303797468, 0.9986580116033755, 1.0635800116033756, 1.0072704567510549 ],
+    "higherIsBetter" : false,
+    "scored" : true
+  } ],
+  "facts" : {
+    "shape" : "Q4_K 4096x4096",
+    "threads" : 12
+  }
+}
